@@ -1,0 +1,32 @@
+# Data collection
+feedparser>=6.0
+praw>=7.7
+yfinance>=0.2
+
+# Sentiment analysis
+vaderSentiment>=3.3
+anthropic>=0.25
+
+# Scheduling
+APScheduler>=3.10
+
+# Dashboard
+dash>=2.16
+dash-bootstrap-components>=1.5
+plotly>=5.20
+
+# Config
+python-dotenv>=1.0
+pyyaml>=6.0
+
+# Data processing
+pandas>=2.1
+numpy>=1.26
+
+# CLI
+click>=8.1
+rich>=13.0
+
+# Dev
+pytest>=8.0
+pytest-mock>=3.12

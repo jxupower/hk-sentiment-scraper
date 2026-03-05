@@ -1,0 +1,123 @@
+settings:
+  default_scrape_interval_minutes: 30
+  max_articles_per_source: 50
+  sentiment_history_days: 90
+
+# Each entry has a ticker (for yfinance price data), a name, and aliases used to
+# match articles that mention the company without the ticker symbol.
+sectors:
+  Technology:
+    - ticker: "0700.HK"
+      name: "Tencent"
+      aliases: ["WeChat", "Tencent Holdings", "Tencent Music", "WeCom"]
+    - ticker: "9988.HK"
+      name: "Alibaba"
+      aliases: ["Taobao", "Tmall", "Alipay", "Alibaba Group", "AliCloud"]
+    - ticker: "3690.HK"
+      name: "Meituan"
+      aliases: ["Meituan Dianping", "Meituan Waimai"]
+    - ticker: "9618.HK"
+      name: "JD.com"
+      aliases: ["JD", "Jingdong", "JD Logistics"]
+    - ticker: "9999.HK"
+      name: "NetEase"
+      aliases: ["NetEase Games", "163.com"]
+    - ticker: "9888.HK"
+      name: "Baidu"
+      aliases: ["Baidu AI", "Apollo", "ERNIE Bot"]
+
+  Finance:
+    - ticker: "1398.HK"
+      name: "ICBC"
+      aliases: ["Industrial and Commercial Bank of China", "ICBC Bank"]
+    - ticker: "0939.HK"
+      name: "CCB"
+      aliases: ["China Construction Bank", "CCB Bank"]
+    - ticker: "3988.HK"
+      name: "Bank of China"
+      aliases: ["BOC", "Bank of China Group"]
+    - ticker: "2318.HK"
+      name: "Ping An"
+      aliases: ["Ping An Insurance", "Ping An Group", "Lufax"]
+    - ticker: "1299.HK"
+      name: "AIA"
+      aliases: ["AIA Group", "American International Assurance"]
+    - ticker: "0005.HK"
+      name: "HSBC"
+      aliases: ["HSBC Holdings", "Hongkong and Shanghai Banking"]
+
+  Real Estate:
+    - ticker: "1109.HK"
+      name: "CR Land"
+      aliases: ["China Resources Land", "CR Mixc"]
+    - ticker: "0960.HK"
+      name: "Longfor"
+      aliases: ["Longfor Group", "Longfor Properties"]
+    - ticker: "0016.HK"
+      name: "Sun Hung Kai"
+      aliases: ["Sun Hung Kai Properties", "SHKP"]
+    - ticker: "1997.HK"
+      name: "Wharf REIC"
+      aliases: ["Wharf Real Estate", "Harbour City", "Times Square HK"]
+    - ticker: "0012.HK"
+      name: "Henderson Land"
+      aliases: ["Henderson Land Development"]
+
+  Consumer:
+    - ticker: "0291.HK"
+      name: "CR Beer"
+      aliases: ["China Resources Beer", "Snow Beer", "Snowflake Beer"]
+    - ticker: "6862.HK"
+      name: "Haidilao"
+      aliases: ["Haidilao International", "Haidilao Hot Pot"]
+    - ticker: "0027.HK"
+      name: "Galaxy Entertainment"
+      aliases: ["Galaxy Casino", "Galaxy Macau", "StarWorld"]
+    - ticker: "1929.HK"
+      name: "Chow Tai Fook"
+      aliases: ["Chow Tai Fook Jewellery", "CTF"]
+    - ticker: "0669.HK"
+      name: "Techtronic"
+      aliases: ["Techtronic Industries", "TTI", "Milwaukee Tool", "Ryobi", "AEG"]
+
+  Energy:
+    - ticker: "0857.HK"
+      name: "PetroChina"
+      aliases: ["PetroChina Company", "CNPC"]
+    - ticker: "0883.HK"
+      name: "CNOOC"
+      aliases: ["CNOOC Limited", "China National Offshore Oil"]
+    - ticker: "0386.HK"
+      name: "Sinopec"
+      aliases: ["China Petroleum", "Sinopec Corp", "China Petrochemical"]
+    - ticker: "0002.HK"
+      name: "CLP Holdings"
+      aliases: ["CLP Power", "China Light and Power"]
+
+  Healthcare:
+    - ticker: "1177.HK"
+      name: "Sino Biopharmaceutical"
+      aliases: ["Sino Biopharma", "Sino Pharma"]
+    - ticker: "2269.HK"
+      name: "Wuxi Biologics"
+      aliases: ["WuXi Biologics", "Wuxi Bio"]
+    - ticker: "1093.HK"
+      name: "CSPC Pharmaceutical"
+      aliases: ["CSPC Pharma", "CSPC"]
+    - ticker: "6160.HK"
+      name: "BeiGene"
+      aliases: ["BeiGene Ltd", "Zanubrutinib", "Brukinsa"]
+
+  Industrials:
+    - ticker: "0066.HK"
+      name: "MTR"
+      aliases: ["MTR Corporation", "Hong Kong MTR", "Mass Transit Railway"]
+    - ticker: "0003.HK"
+      name: "HK China Gas"
+      aliases: ["Hong Kong and China Gas", "Towngas"]
+    - ticker: "0019.HK"
+      name: "Swire Pacific"
+      aliases: ["Swire Properties", "Cathay Pacific", "Swire Group"]
+    - ticker: "1816.HK"
+      name: "CGN Power"
+      aliases: ["China General Nuclear Power", "CGN"]

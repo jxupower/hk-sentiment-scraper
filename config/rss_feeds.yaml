@@ -1,0 +1,21 @@
+feeds:
+  - name: Reuters China
+    url: https://feeds.reuters.com/reuters/CNTopNews
+  - name: Reuters Business
+    url: https://feeds.reuters.com/reuters/businessNews
+  - name: South China Morning Post Business
+    url: https://www.scmp.com/rss/91/feed
+  - name: Caixin Global
+    url: https://www.caixinglobal.com/rss/
+  - name: China Daily Business
+    url: http://www.chinadaily.com.cn/rss/business_rss.xml
+  - name: Nikkei Asia China
+    url: https://asia.nikkei.com/rss/feed/section/china
+  - name: Financial Times Asia
+    url: https://www.ft.com/rss/home/asia-pacific
+  - name: Bloomberg Markets
+    url: https://feeds.bloomberg.com/markets/news.rss
+  - name: Yahoo Finance
+    url: https://finance.yahoo.com/news/rssindex
+  - name: CNBC Asia
+    url: https://www.cnbc.com/id/100727362/device/rss/rss.html
