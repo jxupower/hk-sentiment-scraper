@@ -1,21 +1,24 @@
 feeds:
-  - name: Reuters China
-    url: https://feeds.reuters.com/reuters/CNTopNews
-  - name: Reuters Business
-    url: https://feeds.reuters.com/reuters/businessNews
+  # General Asia/China news — broad coverage
   - name: South China Morning Post Business
     url: https://www.scmp.com/rss/91/feed
-  - name: Caixin Global
-    url: https://www.caixinglobal.com/rss/
-  - name: China Daily Business
-    url: http://www.chinadaily.com.cn/rss/business_rss.xml
-  - name: Nikkei Asia China
-    url: https://asia.nikkei.com/rss/feed/section/china
-  - name: Financial Times Asia
-    url: https://www.ft.com/rss/home/asia-pacific
   - name: Bloomberg Markets
     url: https://feeds.bloomberg.com/markets/news.rss
-  - name: Yahoo Finance
-    url: https://finance.yahoo.com/news/rssindex
   - name: CNBC Asia
     url: https://www.cnbc.com/id/100727362/device/rss/rss.html
+
+  # Google News RSS — sector-specific company searches (100 fresh articles each)
+  - name: Google News - Technology
+    url: https://news.google.com/rss/search?q=Tencent+OR+Alibaba+OR+Meituan+OR+Baidu+OR+NetEase+OR+%22JD.com%22+stock&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Finance
+    url: https://news.google.com/rss/search?q=HSBC+OR+AIA+OR+%22Bank+of+China%22+OR+ICBC+OR+%22Ping+An%22+OR+%22China+Construction+Bank%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Real Estate
+    url: https://news.google.com/rss/search?q=%22China+Resources+Land%22+OR+Longfor+OR+%22Sun+Hung+Kai%22+OR+%22Henderson+Land%22+OR+%22Kerry+Properties%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Consumer
+    url: https://news.google.com/rss/search?q=Haidilao+OR+%22Li+Ning%22+OR+%22Sands+China%22+OR+%22CR+Beer%22+OR+%22China+Resources+Beer%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Energy
+    url: https://news.google.com/rss/search?q=CNOOC+OR+SINOPEC+OR+%22China+Petroleum%22+OR+%22CGN+Power%22+OR+%22China+Resources+Power%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Healthcare
+    url: https://news.google.com/rss/search?q=BeiGene+OR+%22WuXi+Biologics%22+OR+%22Sino+Biopharmaceutical%22+OR+CSPC+OR+%22Zai+Lab%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Industrials
+    url: https://news.google.com/rss/search?q=%22Kerry+Logistics%22+OR+%22MTR+Corporation%22+OR+%22CLP+Holdings%22+OR+%22China+Railway%22+OR+%22CRRC%22&hl=en-US&gl=US&ceid=US:en

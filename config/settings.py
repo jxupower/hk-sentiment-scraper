@@ -80,12 +80,41 @@ def get_tickers_for_sector(sector: str, watchlist: dict) -> list[str]:
     return [e["ticker"] for e in watchlist["sectors"].get(sector, [])]
 
 
+_SECTOR_BROAD_TERMS: dict[str, list[str]] = {
+    "Technology": ["China tech", "Chinese tech", "Hang Seng Tech", "China internet",
+                   "Chinese internet", "China AI", "China software", "China semiconductor"],
+    "Finance": ["China bank", "HK bank", "Hong Kong bank", "China insurance",
+                "China financial", "HK financial", "China fintech", "China debt",
+                "China bond", "Hang Seng Index"],
+    "Real Estate": ["China property", "Hong Kong property", "HK property",
+                    "China real estate", "China developer", "China housing",
+                    "China land", "property market"],
+    "Consumer": ["China consumer", "China retail", "HK retail",
+                 "China dining", "China leisure", "China gaming",
+                 "China spending", "Chinese consumer"],
+    "Energy": ["China energy", "China oil", "China gas", "China power",
+               "China renewable", "China electricity", "China refin",
+               "China steel", "iron ore", "China coal"],
+    "Healthcare": ["China healthcare", "China pharma", "China biotech",
+                   "China drug", "China medicine", "China biologic",
+                   "China clinical", "China oncology"],
+    "Industrials": ["China industrial", "Hong Kong infrastructure",
+                    "China infrastructure", "China logistics", "China transport",
+                    "China manufacturing", "China supply chain"],
+}
+
+
 def build_search_terms(watchlist: dict) -> dict[str, list[str]]:
-    """Returns {ticker: [name, alias1, alias2, ...]} for article text matching."""
+    """Returns {ticker: [name, alias1, alias2, ...]} for article text matching.
+
+    Each ticker also inherits broad sector-level keywords so general China/HK
+    market articles are captured even when no specific company name is mentioned.
+    """
     result = {}
-    for entries in watchlist["sectors"].values():
+    for sector, entries in watchlist["sectors"].items():
+        broad = _SECTOR_BROAD_TERMS.get(sector, [])
         for e in entries:
-            terms = [e["name"]] + e["aliases"]
+            terms = [e["name"]] + e["aliases"] + broad
             result[e["ticker"]] = terms
     return result
 
