@@ -6,27 +6,54 @@ settings:
 # Each entry has a ticker (for yfinance price data), a name, and aliases used to
 # match articles that mention the company without the ticker symbol.
 sectors:
-  Technology:
-    - ticker: "0700.HK"
-      name: "Tencent"
-      aliases: ["WeChat", "Tencent Holdings", "Tencent Music", "WeCom"]
+  Software Development:
     - ticker: "9988.HK"
       name: "Alibaba"
-      aliases: ["Taobao", "Tmall", "Alipay", "Alibaba Group", "AliCloud"]
-    - ticker: "3690.HK"
-      name: "Meituan"
-      aliases: ["Meituan Dianping", "Meituan Waimai"]
+      aliases: ["Taobao", "Tmall", "Alipay", "Alibaba Group", "AliCloud", "Alibaba Cloud"]
     - ticker: "9618.HK"
       name: "JD.com"
-      aliases: ["JD", "Jingdong", "JD Logistics"]
+      aliases: ["JD", "Jingdong", "JD Logistics", "JD Health"]
+    - ticker: "3690.HK"
+      name: "Meituan"
+      aliases: ["Meituan Dianping", "Meituan Waimai", "Keeta"]
+    - ticker: "0700.HK"
+      name: "Tencent"
+      aliases: ["WeChat", "Tencent Holdings", "Tencent Music", "WeCom", "Tencent Games"]
     - ticker: "9999.HK"
       name: "NetEase"
-      aliases: ["NetEase Games", "163.com"]
+      aliases: ["NetEase Games", "163.com", "NetEase Music"]
     - ticker: "9888.HK"
       name: "Baidu"
-      aliases: ["Baidu AI", "Apollo", "ERNIE Bot"]
+      aliases: ["Baidu AI", "ERNIE Bot", "Apollo autonomous", "Baidu Cloud", "Baidu search"]
 
-  Finance:
+  Communications:
+    - ticker: "0941.HK"
+      name: "China Mobile"
+      aliases: ["China Mobile Communications", "China Mobile Limited", "ChinaMobile"]
+    - ticker: "0728.HK"
+      name: "China Telecom"
+      aliases: ["China Telecommunications", "China Telecom Corp", "ChinaTelecom"]
+    - ticker: "0762.HK"
+      name: "China Unicom"
+      aliases: ["China United Network", "China Unicom HK", "ChinaUnicom"]
+
+  IT Hardware:
+    - ticker: "0992.HK"
+      name: "Lenovo"
+      aliases: ["Lenovo Group", "ThinkPad", "IdeaPad", "Motorola Mobility"]
+    - ticker: "1810.HK"
+      name: "Xiaomi"
+      aliases: ["Xiaomi Corporation", "Redmi", "MIUI", "Poco", "Mi phone"]
+
+  Computer Transistors:
+    - ticker: "0981.HK"
+      name: "SMIC"
+      aliases: ["Semiconductor Manufacturing International", "SMIC semiconductor", "China foundry"]
+    - ticker: "1347.HK"
+      name: "Hua Hong Semiconductor"
+      aliases: ["Hua Hong", "HHGrace", "Hua Hong Semiconductor International"]
+
+  Banking:
     - ticker: "1398.HK"
       name: "ICBC"
       aliases: ["Industrial and Commercial Bank of China", "ICBC Bank"]
@@ -36,51 +63,96 @@ sectors:
     - ticker: "3988.HK"
       name: "Bank of China"
       aliases: ["BOC", "Bank of China Group"]
+    - ticker: "0005.HK"
+      name: "HSBC"
+      aliases: ["HSBC Holdings", "Hongkong and Shanghai Banking", "HSBC Bank"]
+
+  Finance:
+    - ticker: "0388.HK"
+      name: "HKEX"
+      aliases: ["Hong Kong Exchanges", "Hong Kong Stock Exchange", "Stock Exchange of Hong Kong"]
+    - ticker: "2070.HK"
+      name: "Futu Holdings"
+      aliases: ["Futu", "Moomoo", "Futu Securities", "Futu Online"]
+
+  Insurance:
     - ticker: "2318.HK"
       name: "Ping An"
-      aliases: ["Ping An Insurance", "Ping An Group", "Lufax"]
+      aliases: ["Ping An Insurance", "Ping An Group", "Lufax", "OneConnect"]
     - ticker: "1299.HK"
       name: "AIA"
       aliases: ["AIA Group", "American International Assurance"]
-    - ticker: "0005.HK"
-      name: "HSBC"
-      aliases: ["HSBC Holdings", "Hongkong and Shanghai Banking"]
 
   Real Estate:
     - ticker: "1109.HK"
       name: "CR Land"
-      aliases: ["China Resources Land", "CR Mixc"]
+      aliases: ["China Resources Land", "CR Mixc", "China Resources Property"]
     - ticker: "0960.HK"
       name: "Longfor"
       aliases: ["Longfor Group", "Longfor Properties"]
     - ticker: "0016.HK"
       name: "Sun Hung Kai"
       aliases: ["Sun Hung Kai Properties", "SHKP"]
-    - ticker: "1997.HK"
-      name: "Wharf REIC"
-      aliases: ["Wharf Real Estate", "Harbour City", "Times Square HK"]
     - ticker: "0012.HK"
       name: "Henderson Land"
       aliases: ["Henderson Land Development"]
 
-  Consumer:
-    - ticker: "0291.HK"
-      name: "CR Beer"
-      aliases: ["China Resources Beer", "Snow Beer", "Snowflake Beer"]
+  Property Management:
+    - ticker: "1997.HK"
+      name: "Wharf REIC"
+      aliases: ["Wharf Real Estate", "Harbour City", "Times Square HK"]
+
+  Healthcare:
+    - ticker: "1099.HK"
+      name: "Sinopharm"
+      aliases: ["Sinopharm Group", "China National Pharmaceutical", "Sinopharm distribution"]
+    - ticker: "2196.HK"
+      name: "Fosun Pharma"
+      aliases: ["Fosun Pharmaceutical", "Shanghai Fosun Pharma", "Fosun Health"]
+
+  Pharmaceuticals:
+    - ticker: "1177.HK"
+      name: "Sino Biopharmaceutical"
+      aliases: ["Sino Biopharma", "Sino Pharma"]
+    - ticker: "1093.HK"
+      name: "CSPC Pharmaceutical"
+      aliases: ["CSPC Pharma", "CSPC"]
+
+  Biotech:
+    - ticker: "2269.HK"
+      name: "Wuxi Biologics"
+      aliases: ["WuXi Biologics", "Wuxi Bio", "WuXi AppTec"]
+    - ticker: "6160.HK"
+      name: "BeiGene"
+      aliases: ["BeiGene Ltd", "Zanubrutinib", "Brukinsa", "Tislelizumab"]
+
+  Industrial Machinery:
+    - ticker: "0669.HK"
+      name: "Techtronic"
+      aliases: ["Techtronic Industries", "TTI", "Milwaukee Tool", "Ryobi", "AEG tools"]
+
+  Textiles:
+    - ticker: "2313.HK"
+      name: "Shenzhou International"
+      aliases: ["Shenzhou International Group", "Shenzhou knitting", "China knitwear"]
+
+  Education & Support Services:
+    - ticker: "1797.HK"
+      name: "New Oriental"
+      aliases: ["New Oriental Education", "New Oriental China", "EDU China"]
+
+  Leisure & Luxury:
+    - ticker: "0027.HK"
+      name: "Galaxy Entertainment"
+      aliases: ["Galaxy Casino", "Galaxy Macau", "StarWorld Hotel"]
+    - ticker: "1929.HK"
+      name: "Chow Tai Fook"
+      aliases: ["Chow Tai Fook Jewellery", "CTF", "Chow Tai Fook jewelry"]
     - ticker: "6862.HK"
       name: "Haidilao"
       aliases: ["Haidilao International", "Haidilao Hot Pot"]
-    - ticker: "0027.HK"
-      name: "Galaxy Entertainment"
-      aliases: ["Galaxy Casino", "Galaxy Macau", "StarWorld"]
-    - ticker: "1929.HK"
-      name: "Chow Tai Fook"
-      aliases: ["Chow Tai Fook Jewellery", "CTF"]
-    - ticker: "0669.HK"
-      name: "Techtronic"
-      aliases: ["Techtronic Industries", "TTI", "Milwaukee Tool", "Ryobi", "AEG"]
 
-  Energy:
+  Oil & Gas:
     - ticker: "0857.HK"
       name: "PetroChina"
       aliases: ["PetroChina Company", "CNPC"]
@@ -90,34 +162,52 @@ sectors:
     - ticker: "0386.HK"
       name: "Sinopec"
       aliases: ["China Petroleum", "Sinopec Corp", "China Petrochemical"]
+
+  Coal:
+    - ticker: "1088.HK"
+      name: "China Shenhua Energy"
+      aliases: ["Shenhua Energy", "China Shenhua", "Shenhua coal"]
+    - ticker: "1898.HK"
+      name: "China Coal Energy"
+      aliases: ["China Coal", "Zhongmei Energy", "China Coal Group"]
+
+  Chemicals:
+    - ticker: "3983.HK"
+      name: "China BlueChemical"
+      aliases: ["China Blue Chemical", "CNOOC Blue Chemical", "Blue Chemical"]
+    - ticker: "0297.HK"
+      name: "Sinofert"
+      aliases: ["Sinofert Holdings", "Sinochem fertilizer", "China fertilizer Sinofert"]
+
+  Construction Materials:
+    - ticker: "0914.HK"
+      name: "Anhui Conch Cement"
+      aliases: ["Conch Cement", "Anhui Conch", "Conch Group"]
+    - ticker: "3323.HK"
+      name: "CNBM"
+      aliases: ["China National Building Material", "CNBM Group", "China building material"]
+
+  Mining:
+    - ticker: "2899.HK"
+      name: "Zijin Mining"
+      aliases: ["Zijin Mining Group", "Zijin Gold", "Zijin copper"]
+    - ticker: "1772.HK"
+      name: "Ganfeng Lithium"
+      aliases: ["Ganfeng Lithium Group", "GFL", "China lithium", "Ganfeng"]
+    - ticker: "3993.HK"
+      name: "China Molybdenum"
+      aliases: ["China Moly", "CMOC Group", "CMOC"]
+
+  Utilities:
     - ticker: "0002.HK"
       name: "CLP Holdings"
       aliases: ["CLP Power", "China Light and Power"]
-
-  Healthcare:
-    - ticker: "1177.HK"
-      name: "Sino Biopharmaceutical"
-      aliases: ["Sino Biopharma", "Sino Pharma"]
-    - ticker: "2269.HK"
-      name: "Wuxi Biologics"
-      aliases: ["WuXi Biologics", "Wuxi Bio"]
-    - ticker: "1093.HK"
-      name: "CSPC Pharmaceutical"
-      aliases: ["CSPC Pharma", "CSPC"]
-    - ticker: "6160.HK"
-      name: "BeiGene"
-      aliases: ["BeiGene Ltd", "Zanubrutinib", "Brukinsa"]
-
-  Industrials:
-    - ticker: "0066.HK"
-      name: "MTR"
-      aliases: ["MTR Corporation", "Hong Kong MTR", "Mass Transit Railway"]
     - ticker: "0003.HK"
       name: "HK China Gas"
       aliases: ["Hong Kong and China Gas", "Towngas"]
-    - ticker: "0019.HK"
-      name: "Swire Pacific"
-      aliases: ["Swire Properties", "Cathay Pacific", "Swire Group"]
     - ticker: "1816.HK"
       name: "CGN Power"
-      aliases: ["China General Nuclear Power", "CGN"]
+      aliases: ["China General Nuclear Power", "CGN", "China nuclear power"]
+    - ticker: "0066.HK"
+      name: "MTR"
+      aliases: ["MTR Corporation", "Hong Kong MTR", "Mass Transit Railway"]

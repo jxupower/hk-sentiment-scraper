@@ -7,18 +7,48 @@ feeds:
   - name: CNBC Asia
     url: https://www.cnbc.com/id/100727362/device/rss/rss.html
 
-  # Google News RSS — sector-specific company searches (100 fresh articles each)
-  - name: Google News - Technology
-    url: https://news.google.com/rss/search?q=Tencent+OR+Alibaba+OR+Meituan+OR+Baidu+OR+NetEase+OR+%22JD.com%22+stock&hl=en-US&gl=US&ceid=US:en
+  # Google News RSS — one feed per sector with company-specific search queries
+  - name: Google News - Software Development
+    url: https://news.google.com/rss/search?q=Alibaba+OR+Tencent+OR+Baidu+OR+Meituan+OR+%22JD.com%22+stock&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Communications
+    url: https://news.google.com/rss/search?q=%22China+Mobile%22+OR+%22China+Telecom%22+OR+%22China+Unicom%22+stock&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - IT Hardware
+    url: https://news.google.com/rss/search?q=Lenovo+OR+Xiaomi+OR+%22China+smartphone%22+OR+%22China+PC%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Computer Transistors
+    url: https://news.google.com/rss/search?q=SMIC+OR+%22Hua+Hong%22+OR+%22China+semiconductor%22+OR+%22China+chip%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Banking
+    url: https://news.google.com/rss/search?q=HSBC+OR+ICBC+OR+%22Bank+of+China%22+OR+%22China+Construction+Bank%22&hl=en-US&gl=US&ceid=US:en
   - name: Google News - Finance
-    url: https://news.google.com/rss/search?q=HSBC+OR+AIA+OR+%22Bank+of+China%22+OR+ICBC+OR+%22Ping+An%22+OR+%22China+Construction+Bank%22&hl=en-US&gl=US&ceid=US:en
+    url: https://news.google.com/rss/search?q=HKEX+OR+%22Hong+Kong+exchange%22+OR+Futu+OR+%22China+fintech%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Insurance
+    url: https://news.google.com/rss/search?q=%22Ping+An%22+OR+AIA+insurance+OR+%22China+life+insurance%22&hl=en-US&gl=US&ceid=US:en
   - name: Google News - Real Estate
-    url: https://news.google.com/rss/search?q=%22China+Resources+Land%22+OR+Longfor+OR+%22Sun+Hung+Kai%22+OR+%22Henderson+Land%22+OR+%22Kerry+Properties%22&hl=en-US&gl=US&ceid=US:en
-  - name: Google News - Consumer
-    url: https://news.google.com/rss/search?q=Haidilao+OR+%22Li+Ning%22+OR+%22Sands+China%22+OR+%22CR+Beer%22+OR+%22China+Resources+Beer%22&hl=en-US&gl=US&ceid=US:en
-  - name: Google News - Energy
-    url: https://news.google.com/rss/search?q=CNOOC+OR+SINOPEC+OR+%22China+Petroleum%22+OR+%22CGN+Power%22+OR+%22China+Resources+Power%22&hl=en-US&gl=US&ceid=US:en
+    url: https://news.google.com/rss/search?q=%22China+Resources+Land%22+OR+Longfor+OR+%22Sun+Hung+Kai%22+OR+%22Henderson+Land%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Property Management
+    url: https://news.google.com/rss/search?q=%22Wharf+REIC%22+OR+%22Harbour+City%22+OR+%22Hong+Kong+REIT%22+OR+%22China+property+management%22&hl=en-US&gl=US&ceid=US:en
   - name: Google News - Healthcare
-    url: https://news.google.com/rss/search?q=BeiGene+OR+%22WuXi+Biologics%22+OR+%22Sino+Biopharmaceutical%22+OR+CSPC+OR+%22Zai+Lab%22&hl=en-US&gl=US&ceid=US:en
-  - name: Google News - Industrials
-    url: https://news.google.com/rss/search?q=%22Kerry+Logistics%22+OR+%22MTR+Corporation%22+OR+%22CLP+Holdings%22+OR+%22China+Railway%22+OR+%22CRRC%22&hl=en-US&gl=US&ceid=US:en
+    url: https://news.google.com/rss/search?q=Sinopharm+OR+%22Fosun+Pharma%22+OR+%22China+healthcare%22+OR+%22China+hospital%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Pharmaceuticals
+    url: https://news.google.com/rss/search?q=%22Sino+Biopharmaceutical%22+OR+%22CSPC+Pharmaceutical%22+OR+%22China+pharma%22+stock&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Biotech
+    url: https://news.google.com/rss/search?q=BeiGene+OR+%22WuXi+Biologics%22+OR+%22WuXi+AppTec%22+OR+%22China+biotech%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Industrial Machinery
+    url: https://news.google.com/rss/search?q=Techtronic+OR+%22Milwaukee+Tool%22+OR+Ryobi+OR+%22TTI+stock%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Textiles
+    url: https://news.google.com/rss/search?q=%22Shenzhou+International%22+OR+%22China+textile%22+OR+%22China+apparel%22+OR+%22China+knitwear%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Education & Support Services
+    url: https://news.google.com/rss/search?q=%22New+Oriental%22+OR+%22China+education%22+OR+%22China+tutoring%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Leisure & Luxury
+    url: https://news.google.com/rss/search?q=%22Galaxy+Entertainment%22+OR+%22Chow+Tai+Fook%22+OR+%22Macau+casino%22+OR+Haidilao&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Oil & Gas
+    url: https://news.google.com/rss/search?q=CNOOC+OR+SINOPEC+OR+PetroChina+OR+%22China+offshore+oil%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Coal
+    url: https://news.google.com/rss/search?q=%22China+Shenhua%22+OR+%22China+Coal+Energy%22+OR+%22China+coal+mining%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Chemicals
+    url: https://news.google.com/rss/search?q=%22China+BlueChemical%22+OR+Sinofert+OR+%22China+fertilizer%22+OR+%22China+chemical%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Construction Materials
+    url: https://news.google.com/rss/search?q=%22Conch+Cement%22+OR+CNBM+OR+%22China+cement%22+OR+%22China+building+material%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Mining
+    url: https://news.google.com/rss/search?q=%22Zijin+Mining%22+OR+Ganfeng+OR+%22China+Molybdenum%22+OR+%22China+mining%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Utilities
+    url: https://news.google.com/rss/search?q=%22CLP+Holdings%22+OR+%22CGN+Power%22+OR+Towngas+OR+%22MTR+Corporation%22+OR+%22China+nuclear+power%22&hl=en-US&gl=US&ceid=US:en
