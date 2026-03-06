@@ -1,6 +1,5 @@
-import json
 from datetime import datetime
-from dash import Input, Output, callback_context, html, dcc
+from dash import Input, Output, ALL, html, dcc
 import dash_bootstrap_components as dbc
 
 from dashboard.charts import (
@@ -8,7 +7,6 @@ from dashboard.charts import (
     sector_heatmap, direction_gauge, source_breakdown_pie,
     DIRECTION_COLORS,
 )
-from dashboard.layout import build_sector_detail
 
 DIRECTION_BADGE_COLOR = {"UP": "success", "DOWN": "danger", "MIXED": "warning", "NEUTRAL": "secondary"}
 
@@ -49,49 +47,61 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
             dbc.CardBody(dcc.Graph(figure=fig, config={"displayModeBar": False})),
         ], style={"background": "#1a1a2e", "border": "1px solid #37474f"})
 
-    @app.callback(Output("selected-sector", "data"),
-                  Input({"type": "sector-card", "index": "__all_ids__"}, "n_clicks"),
-                  prevent_initial_call=True)
-    def select_sector(n_clicks):
-        ctx = callback_context
-        if not ctx.triggered:
-            return None
-        try:
-            return json.loads(ctx.triggered[0]["prop_id"].split(".")[0])["index"]
-        except Exception:
-            return None
+    app.clientside_callback(
+        """
+        function(n_clicks_list) {
+            var ctx = dash_clientside.callback_context;
+            if (!ctx.triggered || !ctx.triggered.length) return dash_clientside.no_update;
+            var t = ctx.triggered[0];
+            if (!t.value) return dash_clientside.no_update;
+            try {
+                return JSON.parse(t.prop_id.split('.')[0]).index;
+            } catch(e) {
+                return dash_clientside.no_update;
+            }
+        }
+        """,
+        Output("selected-sector", "data"),
+        Input({"type": "sector-card", "index": ALL}, "n_clicks"),
+        prevent_initial_call=True,
+    )
 
-    @app.callback(Output("sector-detail-panel", "children"),
+    @app.callback(Output("debug-selected", "children"),
                   Input("selected-sector", "data"))
-    def render_sector_detail(sector):
-        if not sector:
-            return html.Div(
-                html.P("Click a sector card above to see detailed analysis.",
-                       className="text-muted text-center py-4")
-            )
-        return build_sector_detail(sector)
+    def debug_show_selected(sector):
+        return sector if sector else "(none)"
 
     @app.callback(
+        Output("sector-detail-title", "children"),
+        Output("sector-detail-placeholder", "style"),
+        Output("sector-detail-content", "style"),
         Output("sector-gauge", "figure"),
         Output("sector-source-pie", "figure"),
         Output("sector-sentiment-ts", "figure"),
         Output("ticker-breakdown-bar", "figure"),
         Output("ticker-rows", "children"),
+        Output("sector-ai-analysis", "children"),
         Output("sector-article-feed", "children"),
         Output("sector-direction-badge", "children"),
         Output("sector-direction-badge", "color"),
         Output("sector-confidence-text", "children"),
+        Output("sector-signal-updated", "children"),
         Input("selected-sector", "data"),
         Input("auto-refresh", "n_intervals"),
-        prevent_initial_call=True,
     )
     def update_sector_detail(sector, _):
         if not sector:
-            return [{}, {}, {}, {}, [], None, "", "secondary", ""]
+            return (
+                "Sector Detail",
+                {"display": "block"},    # show placeholder
+                {"display": "none"},     # hide content
+                {}, {}, {}, {},
+                [], None, None,
+                "--", "secondary", "", "",
+            )
 
         tickers = settings.get_tickers_for_sector(sector, watchlist)
         scores_24h = sentiment_repo.get_scores_for_sector(tickers, hours=24)
-        scores_7d = sentiment_repo.get_scores_for_sector(tickers, hours=168)
         sentiment_ts = sentiment_repo.get_sector_timeseries(tickers, hours=168)
 
         sector_signals = sector_signal_repo.get_latest_signals()
@@ -100,23 +110,30 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         confidence = sig["confidence"] if sig else 0.0
         avg_sent = sig["avg_sentiment_24h"] if sig else 0.0
         momentum = sig["avg_price_momentum"] if sig else 0.0
+        computed_at = sig["computed_at"] if sig else None
 
         ticker_signals = signal_repo.get_latest_signals()
         sector_ticker_sigs = [s for s in ticker_signals if s.get("sector") == sector]
-
-        price_df = _get_representative_price(tickers, yahoo_scraper)
 
         gauge = direction_gauge(direction, confidence, avg_sent or 0)
         pie = source_breakdown_pie(scores_24h)
         ts_chart = sector_sentiment_timeseries(sentiment_ts, sector)
         breakdown = ticker_breakdown_bar(sector_ticker_sigs)
         ticker_rows = _build_ticker_rows(sector_ticker_sigs)
+        ai_analysis = _generate_sector_analysis(sector, scores_24h, sig)
         feed = _build_article_feed(scores_24h)
         badge_color = DIRECTION_BADGE_COLOR.get(direction, "secondary")
         confidence_text = f"Confidence: {confidence:.0%} | Momentum: {momentum:+.2f}%"
+        updated_text = f"Signal computed: {computed_at[:16]} UTC" if computed_at else ""
 
-        return (gauge, pie, ts_chart, breakdown, ticker_rows,
-                feed, direction, badge_color, confidence_text)
+        return (
+            sector,
+            {"display": "none"},      # hide placeholder
+            {"display": "block"},     # show content
+            gauge, pie, ts_chart, breakdown,
+            ticker_rows, ai_analysis, feed,
+            direction, badge_color, confidence_text, updated_text,
+        )
 
     @app.callback(Output("scraper-status", "children"),
                   Input("auto-refresh", "n_intervals"))
@@ -148,6 +165,65 @@ def _get_representative_price(tickers, yahoo_scraper):
         except Exception:
             pass
     return pd.DataFrame()
+
+
+def _generate_sector_analysis(sector: str, scores: list, sig) -> html.Div:
+    from config.settings import CLAUDE_API_KEY
+
+    if not scores:
+        return html.P("No recent articles available to generate analysis.",
+                      className="text-muted small")
+
+    if not CLAUDE_API_KEY:
+        return html.P(
+            "Add CLAUDE_API_KEY to .env to enable AI sector analysis.",
+            className="text-muted small fst-italic",
+        )
+
+    article_lines = []
+    for s in scores[:30]:
+        score = s.get("final_score", 0) or 0
+        label = "bullish" if score >= 0.05 else ("bearish" if score <= -0.05 else "neutral")
+        title = s.get("title", "").replace(chr(10), " ")
+        article_lines.append(f"- [{label:8s} {score:+.2f}] {title}")
+
+    direction = sig["direction"] if sig else "NEUTRAL"
+    avg_sent = sig["avg_sentiment_24h"] if sig else 0.0
+    momentum = sig["avg_price_momentum"] if sig else 0.0
+    article_count = sig["article_count_24h"] if sig else len(scores)
+
+    articles_text = chr(10).join(article_lines)
+    prompt = (
+        f"You are a financial analyst specializing in Hong Kong and China equity markets. "
+        f"Provide a concise but comprehensive analysis of the {sector} sector based on the "
+        f"following recent news sentiment data." + chr(10) + chr(10) +
+        f"Sector signal: {direction} (avg sentiment 24h: {avg_sent:+.3f}, "
+        f"price momentum: {momentum:+.2f}%, articles: {article_count})" + chr(10) + chr(10) +
+        f"Recent article headlines with sentiment scores:" + chr(10) +
+        articles_text + chr(10) + chr(10) +
+        "Provide:" + chr(10) +
+        "1. A 2-3 sentence overview of the current market sentiment for this sector" + chr(10) +
+        "2. Key themes or catalysts driving sentiment (positive and negative)" + chr(10) +
+        "3. A brief outlook based on the signal and momentum" + chr(10) + chr(10) +
+        "Keep the analysis factual and grounded in the headlines provided. "
+        "Format as plain text paragraphs with numbered labels. No markdown."
+    )
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        analysis_text = response.content[0].text.strip()
+        paragraphs = [p.strip() for p in analysis_text.split(chr(10)) if p.strip()]
+        return html.Div([
+            html.P(para, className="text-light small mb-2") for para in paragraphs
+        ])
+    except Exception as e:
+        return html.P(f"Analysis unavailable: {e}", className="text-muted small fst-italic")
 
 
 def _build_ticker_rows(ticker_signals):

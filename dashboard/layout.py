@@ -9,8 +9,14 @@ def build_layout(sectors: list[str]) -> html.Div:
             dcc.Interval(id="auto-refresh", interval=60_000, n_intervals=0),
             dcc.Store(id="selected-sector", data=None),
 
-            # Sector direction cards — primary view
+            # Sector direction cards
             dbc.Row(id="sector-cards", className="mb-3 g-3"),
+
+            # Debug indicator — shows selected sector on click
+            html.Div([
+                html.Span("Selected: ", className="text-muted small me-1"),
+                html.Span(id="debug-selected", children="(none)", className="text-warning small fw-bold"),
+            ], className="mb-2 ms-1"),
 
             # Main content row
             dbc.Row([
@@ -20,13 +26,9 @@ def build_layout(sectors: list[str]) -> html.Div:
                     html.Div(id="sector-heatmap-container", className="mt-3"),
                 ], width=3),
 
-                # Right: sector detail panel
+                # Right: sector detail (always in DOM)
                 dbc.Col([
-                    html.Div(
-                        html.P("Click a sector card above to see detailed analysis.",
-                               className="text-muted text-center py-4"),
-                        id="sector-detail-panel",
-                    ),
+                    _sector_detail_panel(),
                 ], width=9),
             ]),
         ], fluid=True, className="py-3"),
@@ -63,46 +65,78 @@ def _controls_panel():
     ], style={"background": "#1a1a2e", "border": "1px solid #37474f"})
 
 
-def build_sector_detail(sector: str) -> dbc.Card:
+def _sector_detail_panel():
+    """Sector detail panel -- all components always in the DOM."""
+    placeholder = html.P("Click a sector card above to see detailed analysis.",
+                         className="text-muted text-center py-4")
     return dbc.Card([
         dbc.CardHeader([
             dbc.Row([
-                dbc.Col(html.Span(sector, className="fw-bold fs-5 text-light")),
+                dbc.Col(html.Span(id="sector-detail-title",
+                                  children="Sector Detail",
+                                  className="fw-bold fs-5 text-light")),
                 dbc.Col([
-                    dbc.Badge(id="sector-direction-badge", className="fs-6 me-2"),
+                    dbc.Badge(id="sector-direction-badge", children="--",
+                              color="secondary", className="fs-6 me-2"),
                     html.Span(id="sector-confidence-text", className="text-muted small"),
+                    html.Br(),
+                    html.Span(id="sector-signal-updated", className="text-muted",
+                              style={"fontSize": "0.7rem"}),
                 ], className="text-end"),
             ], align="center"),
         ]),
         dbc.CardBody([
-            # Top row: gauge + source pie
-            dbc.Row([
-                dbc.Col(dcc.Graph(id="sector-gauge", config={"displayModeBar": False}), width=5),
-                dbc.Col(dcc.Graph(id="sector-source-pie", config={"displayModeBar": False}), width=7),
-            ], className="mb-3"),
+            # Placeholder shown before any sector is selected
+            html.Div(id="sector-detail-placeholder", children=placeholder),
 
-            # Sector sentiment timeseries
-            dcc.Graph(id="sector-sentiment-ts", config={"displayModeBar": False}),
+            # All detail content (hidden until a sector is selected)
+            html.Div(id="sector-detail-content", style={"display": "none"}, children=[
+                # Top row: gauge + source pie
+                dbc.Row([
+                    dbc.Col(dcc.Graph(id="sector-gauge",
+                                     config={"displayModeBar": False},
+                                     figure={}), width=5),
+                    dbc.Col(dcc.Graph(id="sector-source-pie",
+                                     config={"displayModeBar": False},
+                                     figure={}), width=7),
+                ], className="mb-3"),
 
-            # Ticker breakdown within sector
-            dbc.Card([
-                dbc.CardHeader("Ticker Breakdown (within sector)", className="fw-bold small"),
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col(dcc.Graph(id="ticker-breakdown-bar",
-                                         config={"displayModeBar": False}), width=5),
-                        dbc.Col([
-                            dbc.Row(id="ticker-rows"),
-                        ], width=7),
+                # Sector sentiment timeseries
+                dcc.Graph(id="sector-sentiment-ts",
+                          config={"displayModeBar": False}, figure={}),
+
+                # Ticker breakdown within sector
+                dbc.Card([
+                    dbc.CardHeader("Ticker Breakdown (within sector)",
+                                  className="fw-bold small"),
+                    dbc.CardBody([
+                        dbc.Row([
+                            dbc.Col(dcc.Graph(id="ticker-breakdown-bar",
+                                             config={"displayModeBar": False},
+                                             figure={}), width=5),
+                            dbc.Col(html.Div(id="ticker-rows"), width=7),
+                        ]),
                     ]),
-                ]),
-            ], className="mb-3",
-               style={"background": "#16213e", "border": "1px solid #37474f"}),
+                ], className="mb-3",
+                   style={"background": "#16213e", "border": "1px solid #37474f"}),
 
-            # Article feed for this sector
-            dbc.Card([
-                dbc.CardHeader("Recent Articles", className="fw-bold small"),
-                dbc.CardBody(html.Div(id="sector-article-feed")),
-            ], style={"background": "#16213e", "border": "1px solid #37474f"}),
+                # AI-generated sector analysis
+                dbc.Card([
+                    dbc.CardHeader("AI Sector Analysis", className="fw-bold small"),
+                    dbc.CardBody(
+                        dcc.Loading(
+                            html.Div(id="sector-ai-analysis"),
+                            type="dot", color="#00c853",
+                        )
+                    ),
+                ], className="mb-3",
+                   style={"background": "#16213e", "border": "1px solid #37474f"}),
+
+                # Article feed for this sector
+                dbc.Card([
+                    dbc.CardHeader("Recent Articles", className="fw-bold small"),
+                    dbc.CardBody(html.Div(id="sector-article-feed")),
+                ], style={"background": "#16213e", "border": "1px solid #37474f"}),
+            ]),
         ]),
     ], style={"background": "#1a1a2e", "border": "1px solid #37474f"})

@@ -33,6 +33,6 @@ def create_app(db_path: str, settings) -> dash.Dash:
     yahoo = YahooScraper()
 
     app.layout = build_layout(sectors)
-    register_callbacks(app, db_path, settings, watchlist, yahoo)
+    register_callbacks(app, db_path, cfg, watchlist, yahoo)
 
     return app

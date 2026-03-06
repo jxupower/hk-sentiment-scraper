@@ -24,36 +24,39 @@ def sector_direction_cards(sector_signals: list[dict]) -> list:
         articles = s.get("article_count_24h") or 0
 
         cards.append(dbc.Col(
-            dbc.Card([
-                dbc.CardBody([
-                    html.Div(icon, style={"fontSize": "2rem", "color": color, "lineHeight": "1"}),
-                    html.H5(s["sector"], className="mb-1 mt-1 text-light fw-bold"),
-                    html.Div(direction, style={"color": color, "fontWeight": "bold", "fontSize": "1rem"}),
-                    html.Hr(style={"borderColor": "#37474f", "margin": "8px 0"}),
-                    html.Div([
-                        html.Span("Sentiment: ", className="text-muted small"),
-                        html.Span(f"{sent:+.3f}", style={"color": color, "fontWeight": "bold"}),
-                    ]),
-                    html.Div([
-                        html.Span("Momentum: ", className="text-muted small"),
-                        html.Span(f"{momentum:+.2f}%",
-                                  style={"color": "#00c853" if momentum >= 0 else "#d50000"}),
-                    ]),
-                    html.Div([
-                        html.Span("Articles 24h: ", className="text-muted small"),
-                        html.Span(str(articles), className="text-light"),
-                    ]),
-                    dbc.Progress(value=int(confidence * 100), color="info",
-                                 style={"height": "4px", "marginTop": "8px"},
-                                 className="bg-dark"),
-                    html.Div(f"Confidence: {confidence:.0%}",
-                             className="text-muted", style={"fontSize": "0.7rem"}),
-                ], style={"padding": "12px"}),
-            ], style={
-                "background": "#1a1a2e",
-                "border": f"2px solid {color}",
-                "cursor": "pointer",
-            }, id={"type": "sector-card", "index": s["sector"]}),
+            html.Div([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.Div(icon, style={"fontSize": "2rem", "color": color, "lineHeight": "1"}),
+                        html.H5(s["sector"], className="mb-1 mt-1 text-light fw-bold"),
+                        html.Div(direction, style={"color": color, "fontWeight": "bold", "fontSize": "1rem"}),
+                        html.Hr(style={"borderColor": "#37474f", "margin": "8px 0"}),
+                        html.Div([
+                            html.Span("Sentiment: ", className="text-muted small"),
+                            html.Span(f"{sent:+.3f}", style={"color": color, "fontWeight": "bold"}),
+                        ]),
+                        html.Div([
+                            html.Span("Momentum: ", className="text-muted small"),
+                            html.Span(f"{momentum:+.2f}%",
+                                      style={"color": "#00c853" if momentum >= 0 else "#d50000"}),
+                        ]),
+                        html.Div([
+                            html.Span("Articles 24h: ", className="text-muted small"),
+                            html.Span(str(articles), className="text-light"),
+                        ]),
+                        dbc.Progress(value=int(confidence * 100), color="info",
+                                     style={"height": "4px", "marginTop": "8px"},
+                                     className="bg-dark"),
+                        html.Div(f"Confidence: {confidence:.0%}",
+                                 className="text-muted", style={"fontSize": "0.7rem"}),
+                    ], style={"padding": "12px"}),
+                ], style={
+                    "background": "#1a1a2e",
+                    "border": f"2px solid {color}",
+                }),
+            ], id={"type": "sector-card", "index": s["sector"]},
+               n_clicks=0,
+               style={"cursor": "pointer"}),
             width=12, md=6, lg=4, xl=3, className="mb-3",
         ))
     return cards
