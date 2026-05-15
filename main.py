@@ -1,4 +1,6 @@
 import sys
+from datetime import datetime
+
 import click
 from rich.console import Console
 from rich.table import Table
@@ -11,7 +13,8 @@ def _build_components():
     import config.settings as settings
     from storage.database import Database
     from storage.repository import (ArticleRepository, SentimentRepository,
-                                     SignalRepository, SectorSignalRepository)
+                                     SignalRepository, SectorSignalRepository,
+                                     SecuritiesRepository, FundamentalsRepository)
     from scrapers.rss_scraper import RssScraper
     from scrapers.yahoo_scraper import YahooScraper
     from scrapers.reddit_scraper import RedditScraper
@@ -31,6 +34,10 @@ def _build_components():
     sentiment_repo = SentimentRepository(db)
     signal_repo = SignalRepository(db)
     sector_signal_repo = SectorSignalRepository(db)
+    securities_repo = SecuritiesRepository(db)
+    fundamentals_repo = FundamentalsRepository(db)
+
+    _reconcile_universe_at_startup(securities_repo, watchlist, settings)
 
     yahoo = YahooScraper()
     scrapers = [
@@ -54,6 +61,8 @@ def _build_components():
         sentiment_repo=sentiment_repo,
         signal_repo=signal_repo,
         sector_signal_repo=sector_signal_repo,
+        securities_repo=securities_repo,
+        fundamentals_repo=fundamentals_repo,
         yahoo_scraper=yahoo,
         search_terms=search_terms,
         all_tickers=all_tickers,
@@ -68,10 +77,36 @@ def _build_components():
         "sentiment_repo": sentiment_repo,
         "signal_repo": signal_repo,
         "sector_signal_repo": sector_signal_repo,
+        "securities_repo": securities_repo,
+        "fundamentals_repo": fundamentals_repo,
         "runner": runner,
         "all_tickers": all_tickers,
         "watchlist": watchlist,
     }
+
+
+def _reconcile_universe_at_startup(securities_repo, watchlist, settings):
+    """Pull HKEX list (from cache if available) and reconcile into the securities table.
+
+    Failure to reach HKEX (offline, network error) is non-fatal — we only need
+    the watchlist subset for the existing scrape pipeline to keep working.
+    """
+    from universe import hkex_loader, reconciler
+    cache_dir = settings.HKEX_CACHE_DIR
+    today_cache = cache_dir / f"hkex_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    try:
+        if today_cache.exists():
+            records = hkex_loader.parse(today_cache)
+        else:
+            records = hkex_loader.download_and_parse(cache_dir)
+        reconciler.reconcile(securities_repo, records, watchlist)
+    except Exception as e:
+        console.print(f"[yellow]Universe reconcile skipped (HKEX fetch failed: {e}).[/yellow]")
+        console.print("[yellow]Falling back to watchlist-only mode.[/yellow]")
+        try:
+            reconciler.reconcile(securities_repo, [], watchlist)
+        except Exception as e2:
+            console.print(f"[red]Watchlist-only reconcile also failed: {e2}[/red]")
 
 
 @click.group()
@@ -156,6 +191,94 @@ def dashboard(port: int, debug: bool):
     except KeyboardInterrupt:
         runner.stop()
         console.print("\n[yellow]Dashboard stopped.[/yellow]")
+
+
+@cli.group()
+def universe():
+    """Manage the HKEX-wide securities universe."""
+
+
+@universe.command("refresh")
+def universe_refresh():
+    """Download the latest HKEX securities list and reconcile with watchlist.yaml."""
+    import config.settings as settings
+    from storage.database import Database
+    from storage.repository import SecuritiesRepository
+    from universe import hkex_loader, reconciler
+
+    console.print("[bold cyan]Refreshing HKEX universe...[/bold cyan]")
+    db = Database(settings.DB_PATH)
+    db.initialize()
+    securities_repo = SecuritiesRepository(db)
+
+    watchlist = settings.load_watchlist()
+    records = hkex_loader.download_and_parse(settings.HKEX_CACHE_DIR)
+    summary = reconciler.reconcile(securities_repo, records, watchlist)
+
+    table = Table(title="Universe Reconcile Summary", show_lines=False)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("Total securities (active)", str(summary["total"]))
+    table.add_row("Watchlist tickers", str(summary["watchlist"]))
+    table.add_row("HKEX rows ingested", str(summary["hkex_ingested"]))
+    table.add_row("Watchlist tickers in YAML", str(summary["watchlist_in_yaml"]))
+    table.add_row("Watchlist tickers missing from HKEX",
+                  str(len(summary["missing_from_hkex"])))
+    console.print(table)
+    if summary["missing_from_hkex"]:
+        console.print(f"[yellow]Missing from HKEX (kept as overrides): "
+                      f"{summary['missing_from_hkex']}[/yellow]")
+
+
+@cli.group()
+def fundamentals():
+    """Manage the per-ticker fundamentals snapshot pipeline."""
+
+
+@fundamentals.command("refresh")
+@click.option("--tickers", default="WATCHLIST", show_default=True,
+              help="ALL (full universe) | WATCHLIST | comma-separated tickers (e.g. '0700.HK,0005.HK')")
+@click.option("--throttle", default=1.5, show_default=True, type=float,
+              help="Seconds to sleep between yfinance requests.")
+def fundamentals_refresh(tickers: str, throttle: float):
+    """Pull yfinance .info ratios and write a daily snapshot per ticker."""
+    import config.settings as settings
+    from storage.database import Database
+    from storage.repository import SecuritiesRepository, FundamentalsRepository
+    from scrapers.fundamentals_scraper import FundamentalsScraper
+
+    db = Database(settings.DB_PATH)
+    db.initialize()
+    securities_repo = SecuritiesRepository(db)
+    fundamentals_repo = FundamentalsRepository(db)
+
+    selector = tickers.strip().upper()
+    if selector == "ALL":
+        target = [s["ticker"] for s in securities_repo.get_universe()]
+        console.print(f"[bold cyan]Refreshing fundamentals for ALL {len(target)} universe tickers...[/bold cyan]")
+        console.print("[yellow]This will take ~1-2 hours. Press Ctrl+C to abort (already-fetched rows persist).[/yellow]")
+    elif selector == "WATCHLIST":
+        target = [s["ticker"] for s in securities_repo.get_watchlist()]
+        console.print(f"[bold cyan]Refreshing fundamentals for {len(target)} watchlist tickers...[/bold cyan]")
+    else:
+        target = [t.strip() for t in tickers.split(",") if t.strip()]
+        console.print(f"[bold cyan]Refreshing fundamentals for {len(target)} ticker(s): {target}[/bold cyan]")
+
+    if not target:
+        console.print("[red]No tickers to refresh. Did you run 'universe refresh' first?[/red]")
+        return
+
+    scraper = FundamentalsScraper(throttle_seconds=throttle)
+    summary = scraper.fetch_many(target, fundamentals_repo)
+
+    table = Table(title="Fundamentals Refresh Summary")
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("Attempted", str(summary["attempted"]))
+    table.add_row("Written (new snapshot)", str(summary["written"]))
+    table.add_row("Skipped (already had today's)", str(summary["skipped"]))
+    table.add_row("Failed (yfinance error)", str(summary["failed"]))
+    console.print(table)
 
 
 def _print_sector_signals(sector_signal_repo):

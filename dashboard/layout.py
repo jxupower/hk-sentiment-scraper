@@ -1,38 +1,60 @@
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
+from dashboard.screener_layout import build_screener_tab
+from dashboard.recommendations_layout import build_recommendations_tab
+
 
 def build_layout(sectors: list[str]) -> html.Div:
     return html.Div([
         _header_bar(),
         dbc.Container([
-            dcc.Interval(id="auto-refresh", interval=60_000, n_intervals=0),
-            dcc.Store(id="selected-sector", data=None),
-
-            # Sector direction cards
-            dbc.Row(id="sector-cards", className="mb-3 g-3"),
-
-            # Debug indicator — shows selected sector on click
-            html.Div([
-                html.Span("Selected: ", className="text-muted small me-1"),
-                html.Span(id="debug-selected", children="(none)", className="text-warning small fw-bold"),
-            ], className="mb-2 ms-1"),
-
-            # Main content row
-            dbc.Row([
-                # Left sidebar: controls + heatmap
-                dbc.Col([
-                    _controls_panel(),
-                    html.Div(id="sector-heatmap-container", className="mt-3"),
-                ], width=3),
-
-                # Right: sector detail (always in DOM)
-                dbc.Col([
-                    _sector_detail_panel(),
-                ], width=9),
-            ]),
+            dbc.Tabs([
+                dbc.Tab(label="Sentiment", tab_id="tab-sentiment",
+                        children=_sentiment_tab(sectors),
+                        labelClassName="text-light",
+                        active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
+                dbc.Tab(label="Screener", tab_id="tab-screener",
+                        children=build_screener_tab(),
+                        labelClassName="text-light",
+                        active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
+                dbc.Tab(label="Recommendations", tab_id="tab-recommendations",
+                        children=build_recommendations_tab(),
+                        labelClassName="text-light",
+                        active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
+            ], id="main-tabs", active_tab="tab-sentiment", className="mb-3"),
         ], fluid=True, className="py-3"),
     ], style={"background": "#0f0f23", "minHeight": "100vh"})
+
+
+def _sentiment_tab(sectors: list[str]) -> html.Div:
+    return html.Div([
+        dcc.Interval(id="auto-refresh", interval=60_000, n_intervals=0),
+        dcc.Store(id="selected-sector", data=None),
+
+        # Sector direction cards
+        dbc.Row(id="sector-cards", className="mb-3 g-3"),
+
+        # Debug indicator — shows selected sector on click
+        html.Div([
+            html.Span("Selected: ", className="text-muted small me-1"),
+            html.Span(id="debug-selected", children="(none)", className="text-warning small fw-bold"),
+        ], className="mb-2 ms-1"),
+
+        # Main content row
+        dbc.Row([
+            # Left sidebar: controls + heatmap
+            dbc.Col([
+                _controls_panel(),
+                html.Div(id="sector-heatmap-container", className="mt-3"),
+            ], width=3),
+
+            # Right: sector detail (always in DOM)
+            dbc.Col([
+                _sector_detail_panel(),
+            ], width=9),
+        ]),
+    ])
 
 
 def _header_bar():

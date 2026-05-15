@@ -1,7 +1,8 @@
 import time
 from typing import Optional
-from utils.helpers import clean_text, extract_ticker_hints, normalize_datetime
+from utils.helpers import clean_text, normalize_datetime
 from utils.logger import get_logger
+from utils.ticker_matcher import TickerMatcher
 from scrapers.base_scraper import BaseScraper, RawArticle
 
 logger = get_logger(__name__)
@@ -43,11 +44,12 @@ class RedditScraper(BaseScraper):
             if terms:
                 company_names.append(terms[0])  # primary name
 
+        matcher = TickerMatcher(search_terms, set(search_terms.keys()))
         articles = []
         reddit = self._get_reddit()
         for sub_name in SUBREDDITS:
             try:
-                sub_articles = self._fetch_subreddit(reddit, sub_name, search_terms, company_names)
+                sub_articles = self._fetch_subreddit(reddit, sub_name, matcher, company_names)
                 articles.extend(sub_articles)
                 logger.info("Reddit [r/%s]: %d relevant posts", sub_name, len(sub_articles))
                 time.sleep(1)
@@ -56,7 +58,7 @@ class RedditScraper(BaseScraper):
         return articles
 
     def _fetch_subreddit(self, reddit, sub_name: str,
-                         search_terms: dict[str, list[str]],
+                         matcher: TickerMatcher,
                          company_names: list[str]) -> list[RawArticle]:
         subreddit = reddit.subreddit(sub_name)
         articles = []
@@ -64,7 +66,7 @@ class RedditScraper(BaseScraper):
 
         # Hot posts — filter by name/alias matching
         for post in subreddit.hot(limit=50):
-            article = self._post_to_article(post, search_terms)
+            article = self._post_to_article(post, matcher)
             if article and article.url not in seen_urls and article.ticker_hints:
                 articles.append(article)
                 seen_urls.add(article.url)
@@ -73,7 +75,7 @@ class RedditScraper(BaseScraper):
         for name in company_names[:15]:  # cap to avoid rate limits
             try:
                 for post in subreddit.search(name, limit=10, sort="new"):
-                    article = self._post_to_article(post, search_terms)
+                    article = self._post_to_article(post, matcher)
                     if article and article.url not in seen_urls and article.ticker_hints:
                         articles.append(article)
                         seen_urls.add(article.url)
@@ -84,7 +86,7 @@ class RedditScraper(BaseScraper):
         return articles
 
     def _post_to_article(self, post,
-                         search_terms: dict[str, list[str]]) -> Optional[RawArticle]:
+                         matcher: TickerMatcher) -> Optional[RawArticle]:
         try:
             title = clean_text(post.title or "")
             body = clean_text(post.selftext or "")
@@ -92,7 +94,7 @@ class RedditScraper(BaseScraper):
             if not title:
                 return None
 
-            hints = extract_ticker_hints(f"{title} {body}", search_terms)
+            hints = matcher.match(f"{title} {body}", max_tags=5)
 
             return RawArticle(
                 source="reddit",

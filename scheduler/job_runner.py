@@ -8,7 +8,9 @@ logger = get_logger(__name__)
 class JobRunner:
     def __init__(self, config, scrapers, analyzer, signal_gen, sector_signal_gen,
                  article_repo, sentiment_repo, signal_repo, sector_signal_repo,
-                 yahoo_scraper, search_terms, all_tickers, watchlist, interval_minutes=30):
+                 yahoo_scraper, search_terms, all_tickers, watchlist,
+                 securities_repo=None, fundamentals_repo=None,
+                 interval_minutes=30):
         self._config = config
         self._scrapers = scrapers
         self._analyzer = analyzer
@@ -18,6 +20,8 @@ class JobRunner:
         self._sentiment_repo = sentiment_repo
         self._signal_repo = signal_repo
         self._sector_signal_repo = sector_signal_repo
+        self._securities_repo = securities_repo
+        self._fundamentals_repo = fundamentals_repo
         self._yahoo = yahoo_scraper
         self._search_terms = search_terms
         self._all_tickers = all_tickers
@@ -41,6 +45,23 @@ class JobRunner:
             hour=3,
             id="db_prune",
         )
+        if self._securities_repo is not None:
+            self._scheduler.add_job(
+                func=self._refresh_universe,
+                trigger="cron",
+                day_of_week="sun",
+                hour=2,
+                id="universe_refresh",
+            )
+        if self._securities_repo is not None and self._fundamentals_repo is not None:
+            self._scheduler.add_job(
+                func=self._refresh_fundamentals,
+                trigger="cron",
+                hour=3,
+                minute=15,  # offset from db_prune at 03:00
+                id="fundamentals_refresh",
+                max_instances=1,
+            )
         self._scheduler.start()
         logger.info("Scheduler started. Scraping every %d minutes.", self._interval)
 
@@ -51,14 +72,39 @@ class JobRunner:
     def run_once(self):
         self._scrape_and_analyze()
 
+    def _build_dynamic_terms(self):
+        """Pull fresh search terms from the securities table each cycle.
+
+        Returns (full_terms, watchlist_terms, watchlist_tickers).
+        Falls back to the static YAML-derived terms if no securities_repo is wired.
+        """
+        if self._securities_repo is None:
+            return self._search_terms, self._search_terms, set(self._search_terms.keys())
+        rows = self._securities_repo.get_all_active()
+        full_terms = self._config.build_search_terms_from_db(rows, watchlist_only=False)
+        watchlist_terms = self._config.build_search_terms_from_db(rows, watchlist_only=True)
+        return full_terms, watchlist_terms, set(watchlist_terms.keys())
+
     def _scrape_and_analyze(self):
+        from scrapers.rss_scraper import RssScraper
+
         logger.info("=== Scrape cycle started at %s ===", datetime.utcnow().isoformat())
+        full_terms, watchlist_terms, watchlist_tickers = self._build_dynamic_terms()
+        logger.info("Search terms: %d total, %d watchlist", len(full_terms), len(watchlist_terms))
+
         all_articles = []
         for scraper in self._scrapers:
             if not scraper.is_available():
                 continue
             try:
-                articles = scraper.fetch(self._search_terms)
+                scraper_name = type(scraper).__name__
+                if scraper_name in ("YahooScraper", "RedditScraper"):
+                    terms = watchlist_terms  # per-ticker scrapers don't scale to universe
+                else:
+                    terms = full_terms
+                if isinstance(scraper, RssScraper):
+                    scraper.watchlist_tickers = watchlist_tickers  # for matcher tie-breaking
+                articles = scraper.fetch(terms)
                 all_articles.extend(articles)
             except Exception as e:
                 logger.error("Scraper %s failed: %s", type(scraper).__name__, e)
@@ -152,3 +198,22 @@ class JobRunner:
 
     def _prune_old_data(self):
         self._article_repo.prune_old_articles(days=90)
+
+    def _refresh_universe(self):
+        from universe import hkex_loader, reconciler
+        try:
+            records = hkex_loader.download_and_parse(self._config.HKEX_CACHE_DIR)
+            reconciler.reconcile(self._securities_repo, records, self._watchlist)
+        except Exception as e:
+            logger.error("Weekly universe refresh failed: %s", e)
+
+    def _refresh_fundamentals(self):
+        """Daily yfinance .info pull for the universe. Skips tickers that already have
+        a snapshot for today, so a partial overnight run resumes naturally."""
+        from scrapers.fundamentals_scraper import FundamentalsScraper
+        try:
+            tickers = [s["ticker"] for s in self._securities_repo.get_universe()]
+            scraper = FundamentalsScraper(throttle_seconds=1.5)
+            scraper.fetch_many(tickers, self._fundamentals_repo)
+        except Exception as e:
+            logger.error("Daily fundamentals refresh failed: %s", e)

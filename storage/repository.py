@@ -200,6 +200,172 @@ class SignalRepository:
         return df
 
 
+class SecuritiesRepository:
+    def __init__(self, db: Database):
+        self.db = db
+
+    def upsert_security(self, ticker: str, hkex_code: str, name: str,
+                        listing_category: Optional[str], lot_size: Optional[int]):
+        """Insert a security or update its name/category/lot_size if it already exists.
+        Watchlist flags and yfinance fields are NOT touched here — they have their own setters."""
+        with self.db.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO securities (ticker, hkex_code, name, listing_category, lot_size,
+                                        is_active, last_refreshed)
+                VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    name = excluded.name,
+                    listing_category = excluded.listing_category,
+                    lot_size = excluded.lot_size,
+                    is_active = 1,
+                    last_refreshed = CURRENT_TIMESTAMP
+            """, (ticker, hkex_code, name, listing_category, lot_size))
+            conn.commit()
+
+    def clear_watchlist_flags(self):
+        with self.db.get_connection() as conn:
+            conn.execute("""
+                UPDATE securities
+                SET is_watchlist = 0, watchlist_sector = NULL, aliases_json = NULL
+            """)
+            conn.commit()
+
+    def set_watchlist(self, ticker: str, sector: str, aliases_json: str,
+                      hkex_code: Optional[str] = None, name: Optional[str] = None):
+        """Mark a ticker as watchlist. If the ticker is not yet in `securities`
+        (e.g. listed in YAML but missing from HKEX), insert it as a manual override row
+        and require hkex_code + name to be provided so the row is well-formed."""
+        with self.db.get_connection() as conn:
+            row = conn.execute("SELECT 1 FROM securities WHERE ticker = ?", (ticker,)).fetchone()
+            if row:
+                conn.execute("""
+                    UPDATE securities
+                    SET is_watchlist = 1, watchlist_sector = ?, aliases_json = ?
+                    WHERE ticker = ?
+                """, (sector, aliases_json, ticker))
+            else:
+                conn.execute("""
+                    INSERT INTO securities (ticker, hkex_code, name, is_watchlist,
+                                            watchlist_sector, aliases_json, is_active)
+                    VALUES (?, ?, ?, 1, ?, ?, 1)
+                """, (ticker, hkex_code or "", name or ticker, sector, aliases_json))
+            conn.commit()
+
+    def get_all_active(self) -> list[dict]:
+        with self.db.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM securities WHERE is_active = 1 ORDER BY ticker
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_watchlist(self) -> list[dict]:
+        with self.db.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM securities WHERE is_watchlist = 1 ORDER BY ticker
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_universe(self) -> list[dict]:
+        """All active securities. The HKEX parser already filters to equities at ingest time,
+        so no further category filtering is needed here."""
+        with self.db.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM securities
+                WHERE is_active = 1
+                ORDER BY ticker
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_by_ticker(self, ticker: str) -> Optional[dict]:
+        with self.db.get_connection() as conn:
+            row = conn.execute("SELECT * FROM securities WHERE ticker = ?", (ticker,)).fetchone()
+            return dict(row) if row else None
+
+    def count_all(self) -> int:
+        with self.db.get_connection() as conn:
+            return conn.execute("SELECT COUNT(*) FROM securities").fetchone()[0]
+
+    def count_watchlist(self) -> int:
+        with self.db.get_connection() as conn:
+            return conn.execute("SELECT COUNT(*) FROM securities WHERE is_watchlist = 1").fetchone()[0]
+
+
+class FundamentalsRepository:
+    def __init__(self, db: Database):
+        self.db = db
+
+    def upsert_snapshot(self, ticker: str, snapshot_date: str, fields: dict):
+        """Insert or replace today's snapshot for a ticker.
+
+        `fields` is a dict containing any subset of: trailing_pe, forward_pe,
+        price_to_book, ev_to_ebitda, dividend_yield, market_cap, beta,
+        return_on_equity, debt_to_equity, last_price, currency, data_completeness.
+        Missing keys → NULL in the row.
+        """
+        cols = ["trailing_pe", "forward_pe", "price_to_book", "ev_to_ebitda",
+                "dividend_yield", "market_cap", "beta", "return_on_equity",
+                "debt_to_equity", "last_price", "currency", "data_completeness"]
+        values = [fields.get(c) for c in cols]
+        with self.db.get_connection() as conn:
+            conn.execute(f"""
+                INSERT INTO fundamentals_snapshots
+                    (ticker, snapshot_date, {", ".join(cols)})
+                VALUES (?, ?, {", ".join("?" * len(cols))})
+                ON CONFLICT(ticker, snapshot_date) DO UPDATE SET
+                    {", ".join(f"{c} = excluded.{c}" for c in cols)},
+                    captured_at = CURRENT_TIMESTAMP
+            """, (ticker, snapshot_date, *values))
+            conn.commit()
+
+    def has_snapshot_for_date(self, ticker: str, snapshot_date: str) -> bool:
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM fundamentals_snapshots WHERE ticker = ? AND snapshot_date = ?",
+                (ticker, snapshot_date)
+            ).fetchone()
+            return row is not None
+
+    def get_latest(self, ticker: str) -> Optional[dict]:
+        with self.db.get_connection() as conn:
+            row = conn.execute("""
+                SELECT * FROM fundamentals_snapshots
+                WHERE ticker = ?
+                ORDER BY snapshot_date DESC
+                LIMIT 1
+            """, (ticker,)).fetchone()
+            return dict(row) if row else None
+
+    def get_latest_for_universe(self) -> list[dict]:
+        """Latest snapshot per ticker, joined with securities for name + sector."""
+        with self.db.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT f.*, s.name, s.is_watchlist, s.watchlist_sector,
+                       s.yf_sector, s.yf_industry, s.listing_category
+                FROM fundamentals_snapshots f
+                INNER JOIN (
+                    SELECT ticker, MAX(snapshot_date) AS max_date
+                    FROM fundamentals_snapshots
+                    GROUP BY ticker
+                ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
+                LEFT JOIN securities s ON f.ticker = s.ticker
+                ORDER BY f.ticker
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    def update_security_yf_metadata(self, ticker: str, yf_sector: Optional[str],
+                                    yf_industry: Optional[str]):
+        """Backfill the yf_sector / yf_industry columns on the securities table
+        once we've seen them via .info. Runs alongside snapshot upsert."""
+        with self.db.get_connection() as conn:
+            conn.execute("""
+                UPDATE securities
+                SET yf_sector = COALESCE(?, yf_sector),
+                    yf_industry = COALESCE(?, yf_industry)
+                WHERE ticker = ?
+            """, (yf_sector, yf_industry, ticker))
+            conn.commit()
+
+
 class SectorSignalRepository:
     def __init__(self, db: Database):
         self.db = db

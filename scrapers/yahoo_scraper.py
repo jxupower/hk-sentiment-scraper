@@ -1,8 +1,9 @@
 import time
 import yfinance as yf
 import pandas as pd
-from utils.helpers import clean_text, extract_ticker_hints, normalize_datetime
+from utils.helpers import clean_text, normalize_datetime
 from utils.logger import get_logger
+from utils.ticker_matcher import TickerMatcher
 from scrapers.base_scraper import BaseScraper, RawArticle
 
 logger = get_logger(__name__)
@@ -10,11 +11,16 @@ logger = get_logger(__name__)
 
 class YahooScraper(BaseScraper):
     def fetch(self, search_terms: dict[str, list[str]]) -> list[RawArticle]:
-        """search_terms: {ticker: [name, alias1, ...]}"""
+        """search_terms: {ticker: [name, alias1, ...]}.
+
+        Per Phase 3, this is called with watchlist-only terms — Yahoo per-ticker news
+        does not scale to the full HKEX universe.
+        """
+        matcher = TickerMatcher(search_terms, set(search_terms.keys()))
         articles = []
         for ticker in list(search_terms.keys()):
             try:
-                news_items = self._get_news(ticker, search_terms)
+                news_items = self._get_news(ticker, matcher)
                 articles.extend(news_items)
                 logger.info("Yahoo [%s]: %d articles", ticker, len(news_items))
             except Exception as e:
@@ -22,8 +28,7 @@ class YahooScraper(BaseScraper):
             time.sleep(0.5)
         return articles
 
-    def _get_news(self, ticker: str,
-                  search_terms: dict[str, list[str]]) -> list[RawArticle]:
+    def _get_news(self, ticker: str, matcher: TickerMatcher) -> list[RawArticle]:
         t = yf.Ticker(ticker)
         articles = []
         try:
@@ -40,7 +45,7 @@ class YahooScraper(BaseScraper):
                 continue
 
             summary = clean_text(content.get("summary", "") or "")
-            hints = extract_ticker_hints(f"{title} {summary}", search_terms)
+            hints = matcher.match(f"{title} {summary}", max_tags=5)
             # Always tag the queried ticker since Yahoo returned this article for it
             if ticker not in hints:
                 hints.append(ticker)

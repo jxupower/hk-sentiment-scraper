@@ -1,17 +1,22 @@
 import time
 import feedparser
-from utils.helpers import clean_text, extract_ticker_hints, normalize_datetime
+from utils.helpers import clean_text, normalize_datetime
 from utils.logger import get_logger
+from utils.ticker_matcher import TickerMatcher
 from scrapers.base_scraper import BaseScraper, RawArticle
 
 logger = get_logger(__name__)
 
 
 class RssScraper(BaseScraper):
-    def __init__(self, feed_configs: list[dict]):
+    def __init__(self, feed_configs: list[dict], watchlist_tickers: set[str] = None):
         self.feed_configs = feed_configs
+        self.watchlist_tickers = watchlist_tickers or set()
 
     def fetch(self, search_terms: dict[str, list[str]]) -> list[RawArticle]:
+        # Build the matcher once per fetch — compiling 3,000+ terms takes ~10ms
+        # and per-article match becomes fast.
+        matcher = TickerMatcher(search_terms, self.watchlist_tickers)
         articles = []
         for feed_cfg in self.feed_configs:
             name = feed_cfg.get("name", feed_cfg["url"])
@@ -20,7 +25,7 @@ class RssScraper(BaseScraper):
                 parsed = feedparser.parse(url)
                 count = 0
                 for entry in parsed.entries:
-                    article = self._parse_entry(entry, name, search_terms)
+                    article = self._parse_entry(entry, name, matcher)
                     if article and article.ticker_hints:
                         articles.append(article)
                         count += 1
@@ -31,7 +36,7 @@ class RssScraper(BaseScraper):
         return articles
 
     def _parse_entry(self, entry, feed_name: str,
-                     search_terms: dict[str, list[str]]) -> RawArticle | None:
+                     matcher: TickerMatcher) -> RawArticle | None:
         url = getattr(entry, "link", None)
         title = clean_text(getattr(entry, "title", ""))
         if not url or not title:
@@ -44,7 +49,7 @@ class RssScraper(BaseScraper):
             body_raw = entry.content[0].get("value", "") if entry.content else ""
         body = clean_text(body_raw)
 
-        hints = extract_ticker_hints(f"{title} {body}", search_terms)
+        hints = matcher.match(f"{title} {body}", max_tags=5)
         published_at = normalize_datetime(getattr(entry, "published_parsed", None))
         author = getattr(entry, "author", None)
 

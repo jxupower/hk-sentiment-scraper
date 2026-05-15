@@ -67,11 +67,51 @@ class Database:
                     computed_at          DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS securities (
+                    ticker            TEXT PRIMARY KEY,
+                    hkex_code         TEXT NOT NULL,
+                    name              TEXT NOT NULL,
+                    listing_category  TEXT,
+                    lot_size          INTEGER,
+                    is_watchlist      INTEGER NOT NULL DEFAULT 0,
+                    watchlist_sector  TEXT,
+                    aliases_json      TEXT,
+                    yf_sector         TEXT,
+                    yf_industry       TEXT,
+                    is_active         INTEGER NOT NULL DEFAULT 1,
+                    first_seen        DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_refreshed    DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS fundamentals_snapshots (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker            TEXT NOT NULL,
+                    snapshot_date     DATE NOT NULL,
+                    trailing_pe       REAL,
+                    forward_pe        REAL,
+                    price_to_book     REAL,
+                    ev_to_ebitda      REAL,
+                    dividend_yield    REAL,
+                    market_cap        REAL,
+                    beta              REAL,
+                    return_on_equity  REAL,
+                    debt_to_equity    REAL,
+                    last_price        REAL,
+                    currency          TEXT,
+                    data_completeness REAL,
+                    captured_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(ticker, snapshot_date)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published_at);
                 CREATE INDEX IF NOT EXISTS idx_article_tickers_ticker ON article_tickers(ticker);
                 CREATE INDEX IF NOT EXISTS idx_sentiment_ticker ON sentiment_scores(ticker, scored_at);
                 CREATE INDEX IF NOT EXISTS idx_signals_ticker ON ticker_signals(ticker, computed_at);
                 CREATE INDEX IF NOT EXISTS idx_sector_signals ON sector_signals(sector, computed_at);
+                CREATE INDEX IF NOT EXISTS idx_securities_watchlist ON securities(is_watchlist);
+                CREATE INDEX IF NOT EXISTS idx_securities_category ON securities(listing_category);
+                CREATE INDEX IF NOT EXISTS idx_fundamentals_ticker_date ON fundamentals_snapshots(ticker, snapshot_date);
+                CREATE INDEX IF NOT EXISTS idx_fundamentals_date ON fundamentals_snapshots(snapshot_date);
             """)
         logger.info("Database initialized at %s", self.db_path)
 

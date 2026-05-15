@@ -1,4 +1,6 @@
+import json
 import os
+import re
 import yaml
 from pathlib import Path
 from dotenv import load_dotenv
@@ -11,6 +13,10 @@ BASE_DIR = Path(__file__).parent.parent
 DB_PATH = str(BASE_DIR / "data" / "sentiment.db")
 WATCHLIST_PATH = str(BASE_DIR / "config" / "watchlist.yaml")
 RSS_FEEDS_PATH = str(BASE_DIR / "config" / "rss_feeds.yaml")
+HKEX_CACHE_DIR = BASE_DIR / "data" / "cache"
+
+# External data sources
+HKEX_LIST_URL = "https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx"
 
 # Scraping
 SCRAPE_INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "30"))
@@ -153,6 +159,48 @@ def load_rss_feeds() -> list[dict]:
     with open(RSS_FEEDS_PATH) as f:
         data = yaml.safe_load(f)
     return data.get("feeds", [])
+
+
+# HKEX names often have suffixes that won't match real news (BABA-W, JD-SW, MEITUAN-W, etc.).
+# Strip common share-class / RMB-counter / weighted-listing suffixes for matching.
+_HKEX_NAME_SUFFIX_RE = re.compile(r"[\s\-]+(?:S?W[BR]?|R|S|H|A|N|U|P|Z)\s*$", re.IGNORECASE)
+
+
+def clean_hkex_name(name: str) -> str:
+    """Strip HKEX trailing share-class / counter suffixes so the name matches news copy."""
+    if not name:
+        return ""
+    cleaned = _HKEX_NAME_SUFFIX_RE.sub("", name).strip()
+    return cleaned
+
+
+def build_search_terms_from_db(securities_rows: list[dict],
+                               watchlist_only: bool = False) -> dict[str, list[str]]:
+    """Build {ticker: [terms]} from the securities table.
+
+    For watchlist tickers, terms = aliases_json + sector broad terms.
+    For universe tickers, terms = [cleaned_hkex_name].
+    """
+    result: dict[str, list[str]] = {}
+    for row in securities_rows:
+        ticker = row["ticker"]
+        if row.get("is_watchlist"):
+            try:
+                aliases = json.loads(row.get("aliases_json") or "[]")
+            except json.JSONDecodeError:
+                aliases = []
+            sector = row.get("watchlist_sector") or ""
+            broad = _SECTOR_BROAD_TERMS.get(sector, [])
+            # Aliases already start with the YAML name (set by reconciler in Phase 3 migration);
+            # for older rows that don't, fall back to cleaned HKEX name.
+            terms = list(aliases) if aliases else [clean_hkex_name(row["name"])]
+            terms.extend(broad)
+            result[ticker] = [t for t in terms if t]
+        elif not watchlist_only:
+            cleaned = clean_hkex_name(row["name"])
+            if cleaned:
+                result[ticker] = [cleaned]
+    return result
 
 
 def reddit_configured() -> bool:
