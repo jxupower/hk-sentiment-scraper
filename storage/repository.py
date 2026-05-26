@@ -238,9 +238,12 @@ class SecuritiesRepository:
         with self.db.get_connection() as conn:
             row = conn.execute("SELECT 1 FROM securities WHERE ticker = ?", (ticker,)).fetchone()
             if row:
+                # Force is_active=1: being in the YAML watchlist is an explicit user
+                # signal that the ticker is wanted, even if it's not in HKEX anymore.
                 conn.execute("""
                     UPDATE securities
-                    SET is_watchlist = 1, watchlist_sector = ?, aliases_json = ?
+                    SET is_watchlist = 1, watchlist_sector = ?, aliases_json = ?,
+                        is_active = 1
                     WHERE ticker = ?
                 """, (sector, aliases_json, ticker))
             else:
@@ -288,6 +291,25 @@ class SecuritiesRepository:
     def count_watchlist(self) -> int:
         with self.db.get_connection() as conn:
             return conn.execute("SELECT COUNT(*) FROM securities WHERE is_watchlist = 1").fetchone()[0]
+
+    def deactivate_missing(self, current_tickers: set[str]) -> int:
+        """Mark active rows as inactive if their ticker is NOT in current_tickers.
+
+        Returns the number of rows deactivated. Caller MUST guarantee current_tickers
+        is the authoritative present-day universe — passing an incomplete set would
+        wrongly deactivate live tickers. The reconciler guards against empty input.
+        """
+        if not current_tickers:
+            return 0
+        placeholders = ",".join("?" * len(current_tickers))
+        with self.db.get_connection() as conn:
+            cur = conn.execute(
+                f"UPDATE securities SET is_active = 0 "
+                f"WHERE is_active = 1 AND ticker NOT IN ({placeholders})",
+                tuple(current_tickers),
+            )
+            conn.commit()
+            return cur.rowcount
 
 
 class FundamentalsRepository:

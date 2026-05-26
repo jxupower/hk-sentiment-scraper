@@ -11,11 +11,16 @@ def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
     """Sync HKEX records and watchlist YAML into the `securities` table.
 
     Order matters:
-      1. Upsert all HKEX rows (creates/updates name, listing_category, lot_size).
+      1. Upsert all HKEX rows (creates/updates name, listing_category, lot_size,
+         force-sets is_active=1).
       2. Clear watchlist flags on every row (so removals from YAML take effect).
       3. Walk watchlist YAML and set is_watchlist + watchlist_sector + aliases_json.
          If a watchlist ticker is not in HKEX, insert it as a manual override row
          and log a warning.
+      4. Deactivate any active row whose ticker isn't in the current HKEX list or
+         the YAML watchlist (i.e. delisted equities that the upserts didn't touch).
+         Skipped when hkex_records is empty (offline-fallback path) so we don't
+         wrongly deactivate everything.
 
     Returns a summary dict for the CLI to print.
     """
@@ -61,12 +66,23 @@ def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
         logger.warning("Watchlist tickers not present in HKEX list (inserted as overrides): %s",
                        missing_from_hkex)
 
+    deactivated = 0
+    if hkex_records:
+        yaml_tickers = {entry["ticker"]
+                        for entries in watchlist.get("sectors", {}).values()
+                        for entry in entries}
+        current_set = hkex_tickers | yaml_tickers
+        deactivated = securities_repo.deactivate_missing(current_set)
+        if deactivated:
+            logger.warning("Deactivated %d delisted ticker(s) no longer in HKEX list", deactivated)
+
     summary = {
         "total": securities_repo.count_all(),
         "watchlist": securities_repo.count_watchlist(),
         "hkex_ingested": len(hkex_records),
         "watchlist_in_yaml": watchlist_count,
         "missing_from_hkex": missing_from_hkex,
+        "deactivated": deactivated,
     }
     logger.info("Reconcile summary: %s", summary)
     return summary

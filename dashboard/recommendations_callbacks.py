@@ -62,8 +62,17 @@ def register_recommendations_callbacks(app, db_path: str):
 
 
 def _format_row(r) -> dict:
+    import math
     def rnd(v, n=2):
-        return round(v, n) if v is not None else None
+        if v is None:
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return round(f, n)
     return {
         "ticker": r.ticker,
         "name": (r.name or "")[:30],

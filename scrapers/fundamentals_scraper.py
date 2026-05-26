@@ -1,3 +1,4 @@
+import math
 import time
 from datetime import date
 from typing import Optional
@@ -7,6 +8,24 @@ import yfinance as yf
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _coerce_finite(v):
+    """Return v as a finite float, or None for None / NaN / Infinity / non-numeric.
+
+    yfinance occasionally returns math.inf or the string 'Infinity' for tickers
+    with extreme P/E (tiny positive earnings denominator). Storing those values
+    poisons downstream consumers (round(), comparisons in composite scoring).
+    """
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
 
 # yfinance .info field name → our column name. Order matters for completeness scoring.
 RATIO_FIELDS = {
@@ -46,12 +65,12 @@ class FundamentalsScraper:
         snapshot = {}
         non_null_count = 0
         for src_key, col in RATIO_FIELDS.items():
-            value = info.get(src_key)
+            value = _coerce_finite(info.get(src_key))
             if value is not None:
                 non_null_count += 1
             snapshot[col] = value
 
-        snapshot["last_price"] = (
+        snapshot["last_price"] = _coerce_finite(
             info.get("currentPrice")
             or info.get("regularMarketPrice")
             or info.get("previousClose")

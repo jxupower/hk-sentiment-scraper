@@ -15,28 +15,6 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def extract_ticker_hints(text: str, search_terms: dict[str, list[str]]) -> list[str]:
-    """
-    Find which tickers are mentioned in text by matching company names and aliases.
-
-    search_terms: {ticker: [name, alias1, alias2, ...]}
-    Returns list of matched tickers.
-    """
-    if not text or not search_terms:
-        return []
-
-    found = set()
-    for ticker, terms in search_terms.items():
-        for term in terms:
-            if not term:
-                continue
-            pattern = rf'(?<![A-Za-z]){re.escape(term)}(?![A-Za-z])'
-            if re.search(pattern, text, re.IGNORECASE):
-                found.add(ticker)
-                break  # one match is enough for this ticker
-    return list(found)
-
-
 def normalize_datetime(dt) -> Optional[datetime]:
     """Normalize various datetime types to UTC datetime."""
     if dt is None:

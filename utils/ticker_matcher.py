@@ -42,9 +42,8 @@ class TickerMatcher:
         # Sort longest-first so longer matches "win" in regex alternation
         sorted_terms = sorted(term_to_tickers.keys(), key=len, reverse=True)
         escaped = [re.escape(t) for t in sorted_terms]
-        # Pre/post negative lookaround on letters — same boundary semantics as the
-        # original extract_ticker_hints regex, which deliberately allows matches
-        # adjacent to digits and punctuation.
+        # Pre/post negative lookaround on letters — deliberately allows matches
+        # adjacent to digits and punctuation (e.g. "Tencent." or "(Tencent)").
         self._pattern = re.compile(
             r"(?<![A-Za-z])(?:" + "|".join(escaped) + r")(?![A-Za-z])",
             re.IGNORECASE,

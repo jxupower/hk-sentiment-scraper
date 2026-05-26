@@ -218,12 +218,13 @@ def universe_refresh():
     table = Table(title="Universe Reconcile Summary", show_lines=False)
     table.add_column("Metric", style="bold")
     table.add_column("Value", justify="right")
-    table.add_row("Total securities (active)", str(summary["total"]))
+    table.add_row("Total securities (rows)", str(summary["total"]))
     table.add_row("Watchlist tickers", str(summary["watchlist"]))
     table.add_row("HKEX rows ingested", str(summary["hkex_ingested"]))
     table.add_row("Watchlist tickers in YAML", str(summary["watchlist_in_yaml"]))
     table.add_row("Watchlist tickers missing from HKEX",
                   str(len(summary["missing_from_hkex"])))
+    table.add_row("Deactivated (delisted)", str(summary.get("deactivated", 0)))
     console.print(table)
     if summary["missing_from_hkex"]:
         console.print(f"[yellow]Missing from HKEX (kept as overrides): "

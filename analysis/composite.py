@@ -4,11 +4,26 @@ universe-relative sentiment z-scores into a single recommendation per ticker.
 Computed on-demand (no storage table) so the dashboard's weight slider can
 re-blend the inputs in real time without touching the DB.
 """
+import math
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
 from statistics import mean, median, stdev
 from typing import Optional
+
+
+def _as_finite(v) -> Optional[float]:
+    """Coerce a SQLite-stored value to a finite float, or None.
+    Defends against legacy rows where yfinance Infinity got serialized as text."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
 
 # Outlier clipping bounds — values outside these are treated as data errors and
 # excluded from sector stats. Same bounds used for individual ticker scoring.
@@ -146,10 +161,10 @@ class ScoreEngine:
             sector = f.get("yf_sector") or f.get("watchlist_sector")
             if not sector:
                 continue
-            pe = f.get("trailing_pe")
+            pe = _as_finite(f.get("trailing_pe"))
             if pe is not None and PE_BOUNDS[0] < pe < PE_BOUNDS[1]:
                 pe_by[sector].append(pe)
-            pb = f.get("price_to_book")
+            pb = _as_finite(f.get("price_to_book"))
             if pb is not None and PB_BOUNDS[0] < pb < PB_BOUNDS[1]:
                 pb_by[sector].append(pb)
 
@@ -176,11 +191,11 @@ class ScoreEngine:
         if not sector:
             return None
         zs = []
-        pe = f.get("trailing_pe")
+        pe = _as_finite(f.get("trailing_pe"))
         if pe is not None and PE_BOUNDS[0] < pe < PE_BOUNDS[1] and sector in sector_stats["pe"]:
             m, s = sector_stats["pe"][sector]
             zs.append(-(pe - m) / s)
-        pb = f.get("price_to_book")
+        pb = _as_finite(f.get("price_to_book"))
         if pb is not None and PB_BOUNDS[0] < pb < PB_BOUNDS[1] and sector in sector_stats["pb"]:
             m, s = sector_stats["pb"][sector]
             zs.append(-(pb - m) / s)

@@ -87,8 +87,17 @@ def _count_universe(db_path: str) -> int:
 
 def _format_row(r: dict) -> dict:
     """Apply display formatting (rounding, ROE→%, market cap→billions, watchlist star)."""
+    import math
     def rnd(v, digits=2):
-        return round(v, digits) if v is not None else None
+        if v is None:
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None  # defensive against stale string values like 'Infinity' in old rows
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return round(f, digits)
 
     market_cap = r.get("market_cap")
     roe = r.get("return_on_equity")
