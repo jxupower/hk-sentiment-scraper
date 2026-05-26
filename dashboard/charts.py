@@ -1,6 +1,5 @@
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 DIRECTION_COLORS = {"UP": "#00c853", "DOWN": "#d50000", "MIXED": "#ffd600", "NEUTRAL": "#90a4ae"}
 DIRECTION_ICONS  = {"UP": "▲", "DOWN": "▼", "MIXED": "◆", "NEUTRAL": "●"}
@@ -129,36 +128,6 @@ def sector_heatmap(sector_signals: list[dict]) -> go.Figure:
     ))
     fig.update_layout(_dark_layout("Sector Sentiment Heatmap"),
                       height=max(250, len(sectors) * 40 + 60))
-    return fig
-
-
-def price_with_sentiment_overlay(price_df: pd.DataFrame, sentiment_df: pd.DataFrame,
-                                 label: str) -> go.Figure:
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        subplot_titles=("Price (30 days)", "Avg Sentiment"),
-                        row_heights=[0.65, 0.35], vertical_spacing=0.06)
-
-    if not price_df.empty:
-        fig.add_trace(go.Candlestick(
-            x=price_df.index, open=price_df["Open"], high=price_df["High"],
-            low=price_df["Low"], close=price_df["Close"], name="Price",
-            increasing_line_color=DIRECTION_COLORS["UP"],
-            decreasing_line_color=DIRECTION_COLORS["DOWN"],
-        ), row=1, col=1)
-
-    if not sentiment_df.empty and "scored_at" in sentiment_df.columns:
-        ts = sentiment_df.copy()
-        ts["scored_at"] = pd.to_datetime(ts["scored_at"])
-        ts = ts.set_index("scored_at")["final_score"].resample("2h").mean().dropna().reset_index()
-        fig.add_trace(go.Bar(
-            x=ts["scored_at"], y=ts["final_score"], name="Sentiment",
-            marker_color=[DIRECTION_COLORS["UP"] if v >= 0 else DIRECTION_COLORS["DOWN"]
-                          for v in ts["final_score"]],
-        ), row=2, col=1)
-
-    layout = _dark_layout(f"{label} — Price & Sentiment")
-    layout.update(showlegend=False, xaxis_rangeslider_visible=False)
-    fig.update_layout(layout)
     return fig
 
 

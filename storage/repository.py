@@ -358,7 +358,8 @@ class FundamentalsRepository:
             return dict(row) if row else None
 
     def get_latest_for_universe(self) -> list[dict]:
-        """Latest snapshot per ticker, joined with securities for name + sector."""
+        """Latest snapshot per active ticker, joined with securities for name + sector.
+        Inactive (delisted) tickers are excluded so dashboards don't leak ghost rows."""
         with self.db.get_connection() as conn:
             rows = conn.execute("""
                 SELECT f.*, s.name, s.is_watchlist, s.watchlist_sector,
@@ -369,7 +370,8 @@ class FundamentalsRepository:
                     FROM fundamentals_snapshots
                     GROUP BY ticker
                 ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
-                LEFT JOIN securities s ON f.ticker = s.ticker
+                INNER JOIN securities s ON f.ticker = s.ticker
+                WHERE s.is_active = 1
                 ORDER BY f.ticker
             """).fetchall()
             return [dict(r) for r in rows]

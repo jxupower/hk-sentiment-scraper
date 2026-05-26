@@ -143,7 +143,8 @@ class ScoreEngine:
                     FROM fundamentals_snapshots
                     GROUP BY ticker
                 ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
-                LEFT JOIN securities s ON f.ticker = s.ticker
+                INNER JOIN securities s ON f.ticker = s.ticker
+                WHERE s.is_active = 1
             """).fetchall()
             sent = conn.execute(f"""
                 SELECT ticker,
