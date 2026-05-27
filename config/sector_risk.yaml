@@ -1,0 +1,51 @@
+# Sector / theme risk overrides — informational flags only, NOT disqualifiers.
+# Stocks listed here keep their factor percentile ranks but the Discovery tab
+# surfaces a warning badge so the user knows a known macro / regulatory issue
+# may be distorting valuation. Add new flags by appending to `flags:`.
+#
+# Schema:
+#   id        — short slug for log/debug
+#   label     — short user-visible warning text
+#   tickers   — list of ".HK" tickers covered
+#   severity  — "high" | "medium" | "low" — controls badge color
+#
+# Update this file freely. Reloaded on every Discovery callback (no restart needed).
+
+flags:
+  - id: china_edu_regulatory
+    label: "China for-profit education (post-2021 regulatory crackdown)"
+    severity: high
+    tickers:
+      - "1756.HK"   # CHI SCI&EDU IND
+      - "0382.HK"   # EDVANTAGE GROUP
+      - "2001.HK"   # NEW HIGHER EDU
+      - "2779.HK"   # CH XINHUA EDU
+      - "6169.HK"   # YUHUA EDU
+      - "1969.HK"   # CHINA CHUNLAI
+      - "1317.HK"   # MAPLELEAF EDU
+      - "1598.HK"   # 21CENTURY EDU
+      - "1890.HK"   # CHINA KEPEI
+      - "1525.HK"   # GENCH EDU
+      - "6068.HK"   # WISDOM EDU INTL
+      - "1797.HK"   # New Oriental (watchlist)
+      - "9901.HK"   # NEW ORIENTAL-S
+      - "1119.HK"   # CREATIVE CHN
+
+  - id: china_property_workout
+    label: "China property developer workout/restructuring"
+    severity: high
+    tickers:
+      - "3333.HK"   # China Evergrande
+      - "2007.HK"   # Country Garden
+      - "1918.HK"   # Sunac
+      - "0813.HK"   # Shimao
+      - "1238.HK"   # Powerlong
+      - "1996.HK"   # Redsun Properties
+      - "0119.HK"   # Poly Property
+
+  - id: micro_cap_low_liquidity
+    label: "Very low market cap (<HK$200M) — low liquidity, wide spreads"
+    severity: medium
+    # Populated dynamically by the engine based on market_cap threshold,
+    # but can be augmented manually here if desired.
+    tickers: []

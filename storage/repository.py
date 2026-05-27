@@ -326,7 +326,11 @@ class FundamentalsRepository:
         """
         cols = ["trailing_pe", "forward_pe", "price_to_book", "ev_to_ebitda",
                 "dividend_yield", "market_cap", "beta", "return_on_equity",
-                "debt_to_equity", "last_price", "currency", "data_completeness"]
+                "debt_to_equity", "last_price", "currency", "data_completeness",
+                # Direction C extended fields
+                "earnings_growth", "revenue_growth", "profit_margins",
+                "operating_margins", "return_on_assets", "current_ratio",
+                "free_cashflow"]
         values = [fields.get(c) for c in cols]
         with self.db.get_connection() as conn:
             conn.execute(f"""

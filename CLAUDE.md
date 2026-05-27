@@ -58,9 +58,20 @@ This is a Hong Kong / China stock sentiment tool. It scrapes RSS feeds and Yahoo
 - `.env` — optional `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `CLAUDE_API_KEY`
 
 **Storage** (`storage/`):
-- 7 tables: `articles`, `article_tickers`, `sentiment_scores`, `ticker_signals`, `sector_signals`, `securities` (full HKEX universe + watchlist flags), `fundamentals_snapshots` (daily yfinance .info ratios, append-only)
+- 7 tables: `articles`, `article_tickers`, `sentiment_scores`, `ticker_signals`, `sector_signals`, `securities` (full HKEX universe + watchlist flags), `fundamentals_snapshots` (daily yfinance .info ratios, append-only; 16 columns including extended growth/quality/liquidity fields added in Direction C)
 - SQLite WAL mode; `data/sentiment.db` is gitignored and auto-created at runtime
 - HKEX universe ingested from `data/cache/hkex_YYYYMMDD.xlsx` (auto-downloaded by `universe/hkex_loader.py`); reconciled into `securities` by `universe/reconciler.py`. Reconciler deactivates rows that disappear from HKEX (skipped on offline-fallback path).
+
+**Fundamentals + multi-factor scoring** (Direction C):
+- Per-ticker yfinance `.info` ratios stored daily by `scrapers/fundamentals_scraper.py`. 9 "core" ratios (P/E, P/B, EV/EBITDA, dividend yield, ROE, D/E, beta, market cap, forward P/E) plus 7 "extended" fields (earnings_growth, revenue_growth, profit_margins, operating_margins, return_on_assets, current_ratio, free_cashflow). Daily cron at 03:15 UTC.
+- `analysis/factor_scores.py` — `FactorScoringEngine` computes sector-relative percentile ranks (0-100) per ticker on four factors: **Value** (1/PE, 1/PB, 1/EV-EBITDA), **Quality** (ROE, ROA, -D/E), **Growth** (earnings + revenue growth), **Sentiment** (avg article sentiment over window). Composite = weighted average of available factors. Viability guards disqualify negative book value, microcaps (<HK$200M), P/E < 0.5 or > 500, profit margins < -50%. Sector-risk flags from `config/sector_risk.yaml` add informational warning badges (not disqualifiers).
+- `analysis/screens.py` — rule-based screens with **absolute thresholds**: Value (P/E 5-20, P/B 0.5-3, ROE>10%), Quality Compounder (ROE≥15%, D/E<100%, +ve growth, ≥HK$10B), Income (yield≥4%, ≥HK$5B), Avoid Distress (educational — extreme cheap + ≥2 distress red flags). No scoring, pass/fail only.
+
+**Dashboard** (`dashboard/`) — 4 tabs:
+- **Sentiment** (`callbacks.py` + `layout.py:_sentiment_tab`) — original sector-card view for the 54 curated watchlist tickers
+- **Screener** (`screener_layout.py` + `screener_callbacks.py`) — raw fundamentals table for all ~2,768 active universe tickers, sortable/filterable
+- **Discovery** (`recommendations_layout.py` + `recommendations_callbacks.py`) — multi-factor percentile-rank candidates; 4 weight inputs (Value/Quality/Growth/Sentiment) + viability filters + sector-risk flag badges
+- **Screens** (`screens_layout.py` + `screens_callbacks.py`) — 4 rule-based pass/fail screens with absolute thresholds, accessed via sub-tabs
 - When you rename or add sectors in `watchlist.yaml`, clear stale rows from `sector_signals` and `ticker_signals`:
   ```python
   import sqlite3; conn = sqlite3.connect("data/sentiment.db")

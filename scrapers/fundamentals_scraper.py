@@ -28,6 +28,7 @@ def _coerce_finite(v):
     return f
 
 # yfinance .info field name → our column name. Order matters for completeness scoring.
+# Core valuation + balance-sheet ratios — same fields used since Phase 2.
 RATIO_FIELDS = {
     "trailingPE":         "trailing_pe",
     "forwardPE":          "forward_pe",
@@ -38,6 +39,19 @@ RATIO_FIELDS = {
     "beta":               "beta",
     "returnOnEquity":     "return_on_equity",
     "debtToEquity":       "debt_to_equity",
+}
+
+# Direction C additions: growth + quality + liquidity fields used by the new
+# multi-factor ScoreEngine and rule-based screens. Empirically confirmed
+# reliable for HK names (large + mid cap; small caps sparser).
+EXTENDED_FIELDS = {
+    "earningsGrowth":   "earnings_growth",    # YoY earnings growth, fraction
+    "revenueGrowth":    "revenue_growth",     # YoY revenue growth, fraction
+    "profitMargins":    "profit_margins",     # net profit margin, fraction
+    "operatingMargins": "operating_margins",  # operating margin, fraction
+    "returnOnAssets":   "return_on_assets",   # ROA, fraction
+    "currentRatio":     "current_ratio",      # liquidity ratio
+    "freeCashflow":     "free_cashflow",      # FCF in local currency
 }
 
 
@@ -64,11 +78,15 @@ class FundamentalsScraper:
 
         snapshot = {}
         non_null_count = 0
+        # Core ratios drive the data_completeness score (kept stable for backward compat).
         for src_key, col in RATIO_FIELDS.items():
             value = _coerce_finite(info.get(src_key))
             if value is not None:
                 non_null_count += 1
             snapshot[col] = value
+        # Extended fields (Direction C) are stored but don't affect completeness scoring.
+        for src_key, col in EXTENDED_FIELDS.items():
+            snapshot[col] = _coerce_finite(info.get(src_key))
 
         snapshot["last_price"] = _coerce_finite(
             info.get("currentPrice")

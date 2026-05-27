@@ -5,6 +5,7 @@ from dashboard.layout import build_layout
 from dashboard.callbacks import register_callbacks
 from dashboard.screener_callbacks import register_screener_callbacks
 from dashboard.recommendations_callbacks import register_recommendations_callbacks
+from dashboard.screens_callbacks import register_screens_callbacks
 
 
 def create_app(db_path: str, settings) -> dash.Dash:
@@ -38,5 +39,6 @@ def create_app(db_path: str, settings) -> dash.Dash:
     register_callbacks(app, db_path, cfg, watchlist, yahoo)
     register_screener_callbacks(app, db_path)
     register_recommendations_callbacks(app, db_path)
+    register_screens_callbacks(app, db_path)
 
     return app

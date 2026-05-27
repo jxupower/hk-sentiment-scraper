@@ -99,6 +99,14 @@ class Database:
                     last_price        REAL,
                     currency          TEXT,
                     data_completeness REAL,
+                    -- Direction C additions (Stage 1): growth + quality + liquidity
+                    earnings_growth   REAL,
+                    revenue_growth    REAL,
+                    profit_margins    REAL,
+                    operating_margins REAL,
+                    return_on_assets  REAL,
+                    current_ratio     REAL,
+                    free_cashflow     REAL,
                     captured_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(ticker, snapshot_date)
                 );
@@ -113,7 +121,27 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_fundamentals_ticker_date ON fundamentals_snapshots(ticker, snapshot_date);
                 CREATE INDEX IF NOT EXISTS idx_fundamentals_date ON fundamentals_snapshots(snapshot_date);
             """)
+            # Migration: add Direction C columns to fundamentals_snapshots if missing
+            # (CREATE TABLE IF NOT EXISTS won't add columns to a pre-existing table).
+            self._add_columns_if_missing(conn, "fundamentals_snapshots", [
+                ("earnings_growth",   "REAL"),
+                ("revenue_growth",    "REAL"),
+                ("profit_margins",    "REAL"),
+                ("operating_margins", "REAL"),
+                ("return_on_assets",  "REAL"),
+                ("current_ratio",     "REAL"),
+                ("free_cashflow",     "REAL"),
+            ])
         logger.info("Database initialized at %s", self.db_path)
+
+    def _add_columns_if_missing(self, conn, table: str, columns: list[tuple[str, str]]):
+        """Idempotently add columns; SQLite has no IF NOT EXISTS for ADD COLUMN."""
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for col_name, col_type in columns:
+            if col_name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                logger.info("Migration: added %s.%s", table, col_name)
+        conn.commit()
 
     def get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
