@@ -52,6 +52,12 @@ EXTENDED_FIELDS = {
     "returnOnAssets":   "return_on_assets",   # ROA, fraction
     "currentRatio":     "current_ratio",      # liquidity ratio
     "freeCashflow":     "free_cashflow",      # FCF in local currency
+    # Backtest stage 1: per-share metrics so historical snapshots can produce
+    # as-of P/E and P/B by joining with historical_prices. yfinance live
+    # snapshots populate them alongside trailing_pe etc.
+    "trailingEps":      "eps_ttm",            # trailing 12-month EPS
+    "bookValue":        "bps",                # book value per share
+    "sharesOutstanding": "shares_outstanding",
 }
 
 

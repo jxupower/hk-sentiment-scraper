@@ -67,11 +67,28 @@ This is a Hong Kong / China stock sentiment tool. It scrapes RSS feeds and Yahoo
 - `analysis/factor_scores.py` — `FactorScoringEngine` computes sector-relative percentile ranks (0-100) per ticker on four factors: **Value** (1/PE, 1/PB, 1/EV-EBITDA), **Quality** (ROE, ROA, -D/E), **Growth** (earnings + revenue growth), **Sentiment** (avg article sentiment over window). Composite = weighted average of available factors. Viability guards disqualify negative book value, microcaps (<HK$200M), P/E < 0.5 or > 500, profit margins < -50%. Sector-risk flags from `config/sector_risk.yaml` add informational warning badges (not disqualifiers).
 - `analysis/screens.py` — rule-based screens with **absolute thresholds**: Value (P/E 5-20, P/B 0.5-3, ROE>10%), Quality Compounder (ROE≥15%, D/E<100%, +ve growth, ≥HK$10B), Income (yield≥4%, ≥HK$5B), Avoid Distress (educational — extreme cheap + ≥2 distress red flags). No scoring, pass/fail only.
 
-**Dashboard** (`dashboard/`) — 4 tabs:
+**Dashboard** (`dashboard/`) — 5 tabs:
 - **Sentiment** (`callbacks.py` + `layout.py:_sentiment_tab`) — original sector-card view for the 54 curated watchlist tickers
 - **Screener** (`screener_layout.py` + `screener_callbacks.py`) — raw fundamentals table for all ~2,768 active universe tickers, sortable/filterable
 - **Discovery** (`recommendations_layout.py` + `recommendations_callbacks.py`) — multi-factor percentile-rank candidates; 4 weight inputs (Value/Quality/Growth/Sentiment) + viability filters + sector-risk flag badges
 - **Screens** (`screens_layout.py` + `screens_callbacks.py`) — 4 rule-based pass/fail screens with absolute thresholds, accessed via sub-tabs
+- **Backtest** (`backtest_layout.py` + `backtest_callbacks.py`) — per-industry walk-forward optimization results for each screen; sub-tabs per screen; live "what-if" backtest button using default params
+
+**Backtest + per-industry optimization** (added after Direction C):
+- `scrapers/akshare_historical_scraper.py` pulls ~9 years of annual HK fundamentals via akshare (`stock_financial_hk_analysis_indicator_em`). Writes into the same `fundamentals_snapshots` table; per-share fields (`eps_ttm`, `bps`, `shares_outstanding`) populated so the backtest can derive as-of P/E and P/B by combining with `historical_prices`.
+- `scrapers/historical_price_scraper.py` uses `yfinance.download(tickers=[batch], period='10y')` for bulk multi-year OHLCV. Writes to new `historical_prices` table.
+- `analysis/screens.py` — each screen is now parameterized via `ScreenParams` dataclass; `BUILTIN_SCREENS[i].default_params` preserves the original hardcoded thresholds for backward compat.
+- `analysis/backtest.py` — `BacktestEngine` rebalances at chosen frequency, applies screen with given params, equal-weights survivors, compares to sector-equal-weighted benchmark, computes total_return / Information Ratio / Sharpe / max drawdown / hit rate. 60-day reporting lag applied to mitigate look-ahead bias from akshare's as-restated data.
+- `analysis/optimization.py` — `WalkForwardOptimizer` sweeps coarse parameter grids (`PARAM_GRIDS`), runs backtests across rolling train+test windows, picks per-(screen, industry) params that maximize avg Information Ratio. Persists to `optimized_parameters`.
+- 4 new tables: `historical_prices`, `backtest_runs`, `backtest_holdings`, `optimized_parameters`.
+- New CLI commands:
+  ```bash
+  python main.py historical seed --tickers ALL --price-period 10y     # ~6-8h one-time
+  python main.py backtest run --screen value --start 2020-01-01       # ad-hoc
+  python main.py backtest optimize --screen value                     # walk-forward
+  ```
+- New scheduled jobs in `JobRunner`: weekly `_refresh_historical_prices` (Sun 04:00 UTC), monthly `_reoptimize_parameters` (1st 05:00 UTC).
+- **Honest limitations** documented in plan + dashboard banner: (1) akshare data is as-restated not point-in-time → look-ahead bias; (2) survivor bias from missing-delisted-ticker data; (3) MVP is equal-weighted, no transaction costs; (4) HK trading calendar / holidays ignored; (5) `Income` screen has 0 historical matches because akshare doesn't expose historical dividend yield — the screen is therefore valuable only for current-day filtering, not backtesting.
 - When you rename or add sectors in `watchlist.yaml`, clear stale rows from `sector_signals` and `ticker_signals`:
   ```python
   import sqlite3; conn = sqlite3.connect("data/sentiment.db")

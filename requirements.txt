@@ -24,6 +24,7 @@ pandas>=2.1
 numpy>=1.26
 openpyxl>=3.1
 requests>=2.31
+akshare>=1.13
 
 # CLI
 click>=8.1

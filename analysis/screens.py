@@ -1,20 +1,19 @@
 """Rule-based fundamental screens — pass/fail filters using absolute thresholds.
 
-Unlike the percentile-rank ScoreEngine (relative ranking within sectors), screens
-here use *absolute* thresholds informed by how disciplined value/quality investors
-actually think. A stock either passes the screen or it doesn't — no scoring, no
-sorting beyond market-cap order.
+Unlike the percentile-rank FactorScoringEngine (relative ranking within sectors),
+screens here use *absolute* thresholds informed by how disciplined value/quality
+investors think. A stock either passes the screen or it doesn't — no scoring.
 
-Each screen is a dataclass describing:
-  - the criteria (predicate function on a fundamentals row)
-  - human-readable description of what it filters for
-  - which sector_risk flags to auto-exclude (or include for "distress" screens)
-
-Adding a screen = add an entry to `BUILTIN_SCREENS`. The UI loops over this list.
+Each screen is parameterized via `ScreenParams` so the same predicate can be
+re-evaluated with different thresholds. The per-industry optimizer
+(`analysis/optimization.py`) sweeps the param grid to find the per-industry
+thresholds that historically produced the best Information Ratio. The dashboard
+falls back to `BUILTIN_SCREENS[i].default_params` when no optimized set is
+available for an industry.
 """
 import math
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -22,8 +21,59 @@ import yaml
 
 
 @dataclass
+class ScreenParams:
+    """All possible thresholds across all screens. Each screen uses a subset.
+    Default values are "permissive" (pass anything) so unused fields don't
+    accidentally filter."""
+    pe_min: float = -math.inf
+    pe_max: float = math.inf
+    pb_min: float = -math.inf
+    pb_max: float = math.inf
+    roe_min: float = -math.inf
+    roe_max: float = math.inf
+    de_max: float = math.inf
+    earnings_growth_min: float = -math.inf
+    revenue_growth_min: float = -math.inf
+    profit_margins_min: float = -math.inf
+    profit_margins_max: float = math.inf
+    dividend_yield_min: float = -math.inf
+    market_cap_min: float = 0.0
+    # Distress screen: requires extreme cheapness AND red flags
+    distress_pe_max: float = math.inf
+    distress_pb_max: float = math.inf
+    distress_min_red_flags: int = 0
+    distress_eg_threshold: float = -math.inf      # earnings_growth below this is a red flag
+    distress_pm_threshold: float = -math.inf      # profit_margins below this is a red flag
+    distress_rg_threshold: float = -math.inf      # revenue_growth below this is a red flag
+    distress_de_threshold: float = math.inf       # debt_to_equity above this is a red flag
+
+    def to_dict(self) -> dict:
+        """Serialize to dict, replacing inf with None for JSON friendliness."""
+        out = {}
+        for f in fields(self):
+            v = getattr(self, f.name)
+            if isinstance(v, float) and (math.isinf(v) or math.isnan(v)):
+                out[f.name] = None
+            else:
+                out[f.name] = v
+        return out
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ScreenParams":
+        """Reconstruct from to_dict() — None means 'permissive default'."""
+        defaults = {f.name: f.default for f in fields(cls)}
+        merged = {}
+        for f in fields(cls):
+            v = d.get(f.name, defaults[f.name])
+            if v is None:
+                v = defaults[f.name]
+            merged[f.name] = v
+        return cls(**merged)
+
+
+@dataclass
 class ScreenCriterion:
-    label: str            # short human label e.g. "P/E in [5, 20]"
+    label: str
     passed: bool
 
 
@@ -34,9 +84,7 @@ class ScreenResult:
     sector: str
     market_cap: Optional[float]
     is_watchlist: bool
-    # Why this ticker matched (or didn't): list of (criterion label, pass/fail)
     criteria: list[ScreenCriterion]
-    # Convenience: raw values for the display table
     trailing_pe: Optional[float]
     price_to_book: Optional[float]
     dividend_yield: Optional[float]
@@ -50,15 +98,16 @@ class ScreenResult:
 @dataclass
 class ScreenDefinition:
     id: str
-    name: str               # short user-visible name
-    description: str        # 1-line summary of intent
-    long_description: str   # multi-line explanation of methodology
-    predicate: Callable     # (row, criteria_collector) -> bool
+    name: str
+    description: str
+    long_description: str
+    predicate: Callable               # (row, params, criteria_collector) -> bool
+    default_params: ScreenParams
     exclude_flagged: bool = True
-    is_distress_screen: bool = False  # if True, runs against DISQUALIFIED tickers too
+    is_distress_screen: bool = False
 
 
-# ============== Builtin screens ==============
+# ============== Predicates (now parameterized) ==============
 
 def _finite(v) -> Optional[float]:
     if v is None:
@@ -72,70 +121,73 @@ def _finite(v) -> Optional[float]:
     return f
 
 
-def _value_screen(row, criteria):
-    """Classic value: P/E 5-20, P/B 0.5-3, ROE > 10%, market cap > HK$2B, not flagged."""
+def _value_screen(row, params: ScreenParams, criteria):
     pe  = _finite(row.get("trailing_pe"))
     pb  = _finite(row.get("price_to_book"))
     roe = _finite(row.get("return_on_equity"))
     mc  = _finite(row.get("market_cap"))
     eg  = _finite(row.get("earnings_growth"))
 
-    c_pe   = pe is not None and 5 <= pe <= 20
-    c_pb   = pb is not None and 0.5 <= pb <= 3.0
-    c_roe  = roe is not None and roe >= 0.10
-    c_mc   = mc is not None and mc >= 2_000_000_000
-    c_grow = eg is None or eg >= -0.10  # tolerate small earnings dip; reject big declines
+    c_pe   = pe is not None and params.pe_min <= pe <= params.pe_max
+    c_pb   = pb is not None and params.pb_min <= pb <= params.pb_max
+    c_roe  = roe is not None and roe >= params.roe_min
+    c_mc   = mc is not None and mc >= params.market_cap_min
+    # Earnings-growth tolerance: missing data passes (we don't have it for all tickers)
+    c_grow = eg is None or eg >= params.earnings_growth_min
 
-    criteria.append(ScreenCriterion("P/E ∈ [5, 20]", bool(c_pe)))
-    criteria.append(ScreenCriterion("P/B ∈ [0.5, 3]", bool(c_pb)))
-    criteria.append(ScreenCriterion("ROE ≥ 10%", bool(c_roe)))
-    criteria.append(ScreenCriterion("Market cap ≥ HK$2B", bool(c_mc)))
-    criteria.append(ScreenCriterion("Earnings growth > -10%", bool(c_grow)))
+    criteria.append(ScreenCriterion(
+        f"P/E in [{_fmt(params.pe_min)}, {_fmt(params.pe_max)}]", bool(c_pe)))
+    criteria.append(ScreenCriterion(
+        f"P/B in [{_fmt(params.pb_min)}, {_fmt(params.pb_max)}]", bool(c_pb)))
+    criteria.append(ScreenCriterion(
+        f"ROE >= {_fmt_pct(params.roe_min)}", bool(c_roe)))
+    criteria.append(ScreenCriterion(
+        f"Market cap >= HK${_fmt_money(params.market_cap_min)}", bool(c_mc)))
+    criteria.append(ScreenCriterion(
+        f"Earnings growth >= {_fmt_pct(params.earnings_growth_min)}", bool(c_grow)))
     return all([c_pe, c_pb, c_roe, c_mc, c_grow])
 
 
-def _quality_compounder_screen(row, criteria):
-    """ROE ≥ 15%, D/E < 100%, earnings growth ≥ 0, mkt cap ≥ HK$10B."""
+def _quality_compounder_screen(row, params: ScreenParams, criteria):
     roe = _finite(row.get("return_on_equity"))
     de  = _finite(row.get("debt_to_equity"))
     eg  = _finite(row.get("earnings_growth"))
     mc  = _finite(row.get("market_cap"))
 
-    c_roe  = roe is not None and roe >= 0.15
-    c_de   = de is None or de < 100   # banks have None D/E; tolerate
-    c_grow = eg is not None and eg >= 0
-    c_mc   = mc is not None and mc >= 10_000_000_000
+    c_roe  = roe is not None and roe >= params.roe_min
+    # D/E missing is tolerated (banks have None D/E in yfinance)
+    c_de   = de is None or de < params.de_max
+    c_grow = eg is not None and eg >= params.earnings_growth_min
+    c_mc   = mc is not None and mc >= params.market_cap_min
 
-    criteria.append(ScreenCriterion("ROE ≥ 15%", bool(c_roe)))
-    criteria.append(ScreenCriterion("D/E < 100%", bool(c_de)))
-    criteria.append(ScreenCriterion("Earnings growth ≥ 0", bool(c_grow)))
-    criteria.append(ScreenCriterion("Market cap ≥ HK$10B", bool(c_mc)))
+    criteria.append(ScreenCriterion(f"ROE >= {_fmt_pct(params.roe_min)}", bool(c_roe)))
+    criteria.append(ScreenCriterion(f"D/E < {_fmt(params.de_max)}%", bool(c_de)))
+    criteria.append(ScreenCriterion(
+        f"Earnings growth >= {_fmt_pct(params.earnings_growth_min)}", bool(c_grow)))
+    criteria.append(ScreenCriterion(
+        f"Market cap >= HK${_fmt_money(params.market_cap_min)}", bool(c_mc)))
     return all([c_roe, c_de, c_grow, c_mc])
 
 
-def _income_screen(row, criteria):
-    """Dividend yield ≥ 4%, mkt cap ≥ HK$5B, earnings growth ≥ -5% (stable)."""
-    dy  = _finite(row.get("dividend_yield"))
-    mc  = _finite(row.get("market_cap"))
-    eg  = _finite(row.get("earnings_growth"))
+def _income_screen(row, params: ScreenParams, criteria):
+    dy = _finite(row.get("dividend_yield"))
+    mc = _finite(row.get("market_cap"))
+    eg = _finite(row.get("earnings_growth"))
 
-    c_dy   = dy is not None and dy >= 4.0    # yfinance returns yield in percent already
-    c_mc   = mc is not None and mc >= 5_000_000_000
-    c_grow = eg is None or eg >= -0.05
+    c_dy   = dy is not None and dy >= params.dividend_yield_min
+    c_mc   = mc is not None and mc >= params.market_cap_min
+    c_grow = eg is None or eg >= params.earnings_growth_min
 
-    criteria.append(ScreenCriterion("Dividend yield ≥ 4%", bool(c_dy)))
-    criteria.append(ScreenCriterion("Market cap ≥ HK$5B", bool(c_mc)))
-    criteria.append(ScreenCriterion("Earnings growth ≥ -5%", bool(c_grow)))
+    criteria.append(ScreenCriterion(
+        f"Dividend yield >= {_fmt(params.dividend_yield_min)}%", bool(c_dy)))
+    criteria.append(ScreenCriterion(
+        f"Market cap >= HK${_fmt_money(params.market_cap_min)}", bool(c_mc)))
+    criteria.append(ScreenCriterion(
+        f"Earnings growth >= {_fmt_pct(params.earnings_growth_min)}", bool(c_grow)))
     return all([c_dy, c_mc, c_grow])
 
 
-def _avoid_distress_screen(row, criteria):
-    """Educational view — surfaces names that LOOK cheap but show actual distress.
-
-    Tuned to be strict: low P/B alone is structural in some industries (banks,
-    insurers, property) and is NOT distress. We require extreme cheapness AND
-    at least 2 concrete distress signals.
-    """
+def _avoid_distress_screen(row, params: ScreenParams, criteria):
     pe  = _finite(row.get("trailing_pe"))
     pb  = _finite(row.get("price_to_book"))
     pm  = _finite(row.get("profit_margins"))
@@ -143,74 +195,124 @@ def _avoid_distress_screen(row, criteria):
     rg  = _finite(row.get("revenue_growth"))
     de  = _finite(row.get("debt_to_equity"))
 
-    # Extreme cheapness (much tighter than naive value)
-    looks_cheap = (pe is not None and 0 < pe < 3) or (pb is not None and 0 < pb < 0.25)
+    looks_cheap = ((pe is not None and 0 < pe < params.distress_pe_max) or
+                   (pb is not None and 0 < pb < params.distress_pb_max))
     if not looks_cheap:
         return False
 
-    # Distress red flags (tightened)
     red_flags = []
-    if pm is not None and pm < -0.10:
-        red_flags.append(ScreenCriterion("Profit margins < -10%", True))
-    if eg is not None and eg < -0.30:
-        red_flags.append(ScreenCriterion("Earnings growth < -30%", True))
-    if rg is not None and rg < -0.15:
-        red_flags.append(ScreenCriterion("Revenue growth < -15%", True))
-    if de is not None and de > 300:
-        red_flags.append(ScreenCriterion("D/E > 300%", True))
+    if pm is not None and pm < params.distress_pm_threshold:
+        red_flags.append(ScreenCriterion(f"Profit margins < {_fmt_pct(params.distress_pm_threshold)}", True))
+    if eg is not None and eg < params.distress_eg_threshold:
+        red_flags.append(ScreenCriterion(f"Earnings growth < {_fmt_pct(params.distress_eg_threshold)}", True))
+    if rg is not None and rg < params.distress_rg_threshold:
+        red_flags.append(ScreenCriterion(f"Revenue growth < {_fmt_pct(params.distress_rg_threshold)}", True))
+    if de is not None and de > params.distress_de_threshold:
+        red_flags.append(ScreenCriterion(f"D/E > {_fmt(params.distress_de_threshold)}%", True))
 
-    # Need at least 2 red flags to call it actual distress
-    if len(red_flags) < 2:
+    if len(red_flags) < params.distress_min_red_flags:
         return False
 
-    criteria.append(ScreenCriterion("P/E < 3 OR P/B < 0.25 (extreme cheapness)", True))
+    criteria.append(ScreenCriterion(
+        f"P/E < {_fmt(params.distress_pe_max)} OR P/B < {_fmt(params.distress_pb_max)}", True))
     criteria.extend(red_flags)
     return True
 
+
+def _fmt(v):
+    if v is None or (isinstance(v, float) and (math.isinf(v) or math.isnan(v))):
+        return "∞" if v == math.inf else ("-∞" if v == -math.inf else "?")
+    if isinstance(v, float) and v == int(v):
+        return f"{int(v)}"
+    return f"{v}"
+
+def _fmt_pct(v):
+    if v is None or (isinstance(v, float) and (math.isinf(v) or math.isnan(v))):
+        return "any"
+    return f"{v * 100:.0f}%"
+
+def _fmt_money(v):
+    if v is None or v == 0:
+        return "0"
+    abbr = [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")]
+    for size, suffix in abbr:
+        if v >= size:
+            return f"{v/size:.1f}{suffix}"
+    return f"{v:.0f}"
+
+
+# ============== Builtin screens with default params (preserve old behavior) ==============
 
 BUILTIN_SCREENS = [
     ScreenDefinition(
         id="value", name="Value",
         description="Cheap by P/E and P/B, decent ROE, not too small.",
         long_description=(
-            "Classic value screen. Looking for: P/E 5-20×, P/B 0.5-3×, ROE ≥ 10%, "
-            "market cap ≥ HK$2B, and earnings haven't fallen more than 10% YoY. "
-            "Excludes anything in the flagged sectors (China for-profit edu, "
-            "property developers in workout). This is the screen for 'cheap-but-not-a-trap'."
+            "Classic value screen. Default thresholds: P/E in [5, 20], P/B in [0.5, 3], "
+            "ROE >= 10%, market cap >= HK$2B, earnings growth tolerated down to -10%. "
+            "Excludes anything in the flagged sectors. "
+            "Backtest can override these per-industry from optimized_parameters."
         ),
         predicate=_value_screen, exclude_flagged=True,
+        default_params=ScreenParams(
+            pe_min=5, pe_max=20,
+            pb_min=0.5, pb_max=3,
+            roe_min=0.10,
+            market_cap_min=2_000_000_000,
+            earnings_growth_min=-0.10,
+        ),
     ),
     ScreenDefinition(
         id="quality_compounder", name="Quality Compounder",
         description="High ROE, low debt, growing earnings, sizeable mkt cap.",
         long_description=(
-            "Buffett-style 'wonderful business at a fair price'. ROE ≥ 15%, "
-            "D/E < 100%, positive YoY earnings growth, market cap ≥ HK$10B. "
+            "Buffett-style 'wonderful business at a fair price'. Default thresholds: "
+            "ROE >= 15%, D/E < 100%, earnings growth >= 0, market cap >= HK$10B. "
             "Doesn't gate on valuation — you may still overpay — but the screen "
             "ensures the underlying business is profitable and growing."
         ),
         predicate=_quality_compounder_screen, exclude_flagged=True,
+        default_params=ScreenParams(
+            roe_min=0.15,
+            de_max=100,
+            earnings_growth_min=0.0,
+            market_cap_min=10_000_000_000,
+        ),
     ),
     ScreenDefinition(
         id="income", name="Income",
-        description="Dividend yield ≥ 4%, mid-large cap, stable earnings.",
+        description="Dividend yield >= 4%, mid-large cap, stable earnings.",
         long_description=(
-            "For income-oriented portfolios. Dividend yield ≥ 4%, market cap ≥ HK$5B, "
-            "earnings haven't fallen more than 5% YoY. Excludes flagged names whose "
+            "For income-oriented portfolios. Default thresholds: dividend yield >= 4%, "
+            "market cap >= HK$5B, earnings growth >= -5%. Excludes flagged names whose "
             "high yields may reflect price collapse rather than payout strength."
         ),
         predicate=_income_screen, exclude_flagged=True,
+        default_params=ScreenParams(
+            dividend_yield_min=4.0,
+            market_cap_min=5_000_000_000,
+            earnings_growth_min=-0.05,
+        ),
     ),
     ScreenDefinition(
         id="avoid_distress", name="Avoid Distress (educational)",
         description="Looks cheap, IS broken. Why your value screen would miss these.",
         long_description=(
-            "Educational view. Shows tickers that look 'cheap' (P/E < 5 or P/B < 0.5) "
-            "BUT have at least one red flag: negative profit margins, earnings down >20% YoY, "
-            "D/E > 200%, or negative book value. This is what a naive value screen would "
-            "flag as a top buy — and why a quality / growth overlay matters."
+            "Educational view. Default thresholds: P/E < 3 OR P/B < 0.25 (extreme cheap), "
+            "plus >= 2 distress red flags from: profit margin < -10%, earnings growth < -30%, "
+            "revenue growth < -15%, D/E > 300%. Shows what a naive value screen would buy."
         ),
         predicate=_avoid_distress_screen, exclude_flagged=False,
+        is_distress_screen=True,
+        default_params=ScreenParams(
+            distress_pe_max=3,
+            distress_pb_max=0.25,
+            distress_min_red_flags=2,
+            distress_pm_threshold=-0.10,
+            distress_eg_threshold=-0.30,
+            distress_rg_threshold=-0.15,
+            distress_de_threshold=300,
+        ),
     ),
 ]
 
@@ -230,7 +332,13 @@ def _load_flagged_tickers(sector_risk_path: Optional[str]) -> set[str]:
 
 
 def run_screen(db_path: str, screen: ScreenDefinition,
-               sector_risk_path: Optional[str] = None) -> list[ScreenResult]:
+               sector_risk_path: Optional[str] = None,
+               params: Optional[ScreenParams] = None) -> list[ScreenResult]:
+    """Apply the screen to the latest fundamentals snapshot of every active ticker.
+
+    `params` defaults to `screen.default_params` for backward compatibility with
+    the dashboard. The optimizer / backtest engine pass custom params."""
+    use_params = params if params is not None else screen.default_params
     flagged = _load_flagged_tickers(sector_risk_path)
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -253,7 +361,7 @@ def run_screen(db_path: str, screen: ScreenDefinition,
             continue
 
         criteria: list[ScreenCriterion] = []
-        passed = screen.predicate(row, criteria)
+        passed = screen.predicate(row, use_params, criteria)
         if not passed:
             continue
 
@@ -274,6 +382,5 @@ def run_screen(db_path: str, screen: ScreenDefinition,
             flagged=is_flagged,
         ))
 
-    # Sort by market cap descending
     results.sort(key=lambda r: (r.market_cap is None, -(r.market_cap or 0)))
     return results

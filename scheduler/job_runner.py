@@ -62,6 +62,24 @@ class JobRunner:
                 id="fundamentals_refresh",
                 max_instances=1,
             )
+        # Backtest infrastructure refresh — only registered if securities_repo wired
+        if self._securities_repo is not None:
+            self._scheduler.add_job(
+                func=self._refresh_historical_prices,
+                trigger="cron",
+                day_of_week="sun",
+                hour=4,
+                id="historical_prices_refresh",
+                max_instances=1,
+            )
+            self._scheduler.add_job(
+                func=self._reoptimize_parameters,
+                trigger="cron",
+                day="1",         # first day of each month
+                hour=5,
+                id="reoptimize_parameters",
+                max_instances=1,
+            )
         self._scheduler.start()
         logger.info("Scheduler started. Scraping every %d minutes.", self._interval)
 
@@ -217,3 +235,51 @@ class JobRunner:
             scraper.fetch_many(tickers, self._fundamentals_repo)
         except Exception as e:
             logger.error("Daily fundamentals refresh failed: %s", e)
+
+    def _refresh_historical_prices(self):
+        """Weekly yfinance multi-year price history refresh — keeps the backtest
+        engine's data fresh as new trading days land."""
+        from storage.repository import HistoricalPricesRepository
+        from scrapers.historical_price_scraper import fetch_many as price_fetch_many
+        try:
+            tickers = [s["ticker"] for s in self._securities_repo.get_universe()]
+            prices_repo = HistoricalPricesRepository(self._securities_repo.db)
+            # Only need the last year of new data; UPSERT handles dup dates.
+            price_fetch_many(tickers, prices_repo, period="1y")
+        except Exception as e:
+            logger.error("Weekly historical price refresh failed: %s", e)
+
+    def _reoptimize_parameters(self):
+        """Monthly walk-forward CV re-optimization for each non-distress screen.
+        Persists per-(screen, industry) best params to optimized_parameters."""
+        import sqlite3
+        from datetime import date as date_cls
+        from storage.repository import OptimizedParamsRepository
+        from analysis.optimization import WalkForwardOptimizer
+        from analysis.screens import BUILTIN_SCREENS
+        try:
+            repo = OptimizedParamsRepository(self._securities_repo.db)
+            optimizer = WalkForwardOptimizer(
+                self._securities_repo.db.db_path,
+                sector_risk_path=str(self._config.BASE_DIR / "config" / "sector_risk.yaml"),
+            )
+            # Get industries with enough coverage to optimize
+            with sqlite3.connect(self._securities_repo.db.db_path) as conn:
+                rows = conn.execute("""
+                    SELECT yf_sector, COUNT(DISTINCT ticker) AS n
+                    FROM securities WHERE is_active=1 AND yf_sector IS NOT NULL
+                    GROUP BY yf_sector HAVING n >= 10 ORDER BY yf_sector
+                """).fetchall()
+                industries = [r[0] for r in rows]
+
+            end = date_cls.today().strftime("%Y-%m-%d")
+            for screen in BUILTIN_SCREENS:
+                if screen.id == "avoid_distress":
+                    continue
+                logger.info("Re-optimizing screen=%s across %d industries", screen.id, len(industries))
+                optimizer.optimize_all_industries(
+                    screen, industries, start_date="2018-01-01", end_date=end,
+                    persist_repo=repo,
+                )
+        except Exception as e:
+            logger.error("Monthly parameter re-optimization failed: %s", e)

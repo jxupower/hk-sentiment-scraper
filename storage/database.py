@@ -120,6 +120,70 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_securities_category ON securities(listing_category);
                 CREATE INDEX IF NOT EXISTS idx_fundamentals_ticker_date ON fundamentals_snapshots(ticker, snapshot_date);
                 CREATE INDEX IF NOT EXISTS idx_fundamentals_date ON fundamentals_snapshots(snapshot_date);
+
+                -- Backtest infrastructure (Stage 1 of per-industry optimization)
+                CREATE TABLE IF NOT EXISTS historical_prices (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker      TEXT NOT NULL,
+                    date        DATE NOT NULL,
+                    open        REAL,
+                    high        REAL,
+                    low         REAL,
+                    close       REAL,
+                    adj_close   REAL,
+                    volume      INTEGER,
+                    UNIQUE(ticker, date)
+                );
+                CREATE INDEX IF NOT EXISTS idx_historical_prices_ticker_date
+                    ON historical_prices(ticker, date);
+
+                CREATE TABLE IF NOT EXISTS backtest_runs (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id              TEXT UNIQUE NOT NULL,
+                    screen_id           TEXT NOT NULL,
+                    industry            TEXT,
+                    parameters_json     TEXT NOT NULL,
+                    start_date          DATE NOT NULL,
+                    end_date            DATE NOT NULL,
+                    rebalance_freq      TEXT NOT NULL,
+                    n_rebalances        INTEGER,
+                    total_return        REAL,
+                    benchmark_return    REAL,
+                    information_ratio   REAL,
+                    sharpe              REAL,
+                    max_drawdown        REAL,
+                    hit_rate            REAL,
+                    n_unique_holdings   INTEGER,
+                    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_backtest_runs_screen
+                    ON backtest_runs(screen_id, industry);
+
+                CREATE TABLE IF NOT EXISTS backtest_holdings (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id          TEXT NOT NULL,
+                    rebalance_date  DATE NOT NULL,
+                    ticker          TEXT NOT NULL,
+                    weight          REAL,
+                    return_to_next  REAL,
+                    sector          TEXT,
+                    UNIQUE(run_id, rebalance_date, ticker)
+                );
+                CREATE INDEX IF NOT EXISTS idx_backtest_holdings_run
+                    ON backtest_holdings(run_id);
+
+                CREATE TABLE IF NOT EXISTS optimized_parameters (
+                    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                    screen_id               TEXT NOT NULL,
+                    industry                TEXT NOT NULL,
+                    parameters_json         TEXT NOT NULL,
+                    information_ratio       REAL,
+                    n_walk_forward_windows  INTEGER,
+                    train_window_months     INTEGER,
+                    test_window_months      INTEGER,
+                    last_optimized_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(screen_id, industry)
+                );
             """)
             # Migration: add Direction C columns to fundamentals_snapshots if missing
             # (CREATE TABLE IF NOT EXISTS won't add columns to a pre-existing table).
@@ -131,6 +195,11 @@ class Database:
                 ("return_on_assets",  "REAL"),
                 ("current_ratio",     "REAL"),
                 ("free_cashflow",     "REAL"),
+                # Backtest stage 1: per-share metrics needed to compute historical
+                # P/E and P/B by combining with historical_prices at backtest time.
+                ("eps_ttm",            "REAL"),
+                ("bps",                "REAL"),
+                ("shares_outstanding", "REAL"),
             ])
         logger.info("Database initialized at %s", self.db_path)
 

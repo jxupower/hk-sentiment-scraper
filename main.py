@@ -282,6 +282,214 @@ def fundamentals_refresh(tickers: str, throttle: float):
     console.print(table)
 
 
+@cli.group()
+def historical():
+    """Historical fundamentals (akshare) + multi-year price data (yfinance) for backtesting."""
+
+
+@historical.command("seed")
+@click.option("--tickers", default="WATCHLIST", show_default=True,
+              help="ALL | WATCHLIST | comma-separated tickers")
+@click.option("--throttle", default=0.5, show_default=True, type=float,
+              help="Seconds between akshare requests.")
+@click.option("--skip-prices", is_flag=True, default=False,
+              help="Skip the yfinance price-history pull (only seed fundamentals).")
+@click.option("--skip-fundamentals", is_flag=True, default=False,
+              help="Skip the akshare fundamentals pull (only seed prices).")
+@click.option("--price-period", default="10y", show_default=True,
+              help="Period for yfinance history (e.g. 5y, 10y, max).")
+def historical_seed(tickers, throttle, skip_prices, skip_fundamentals, price_period):
+    """One-time backfill: pull akshare historical fundamentals + yfinance multi-year prices."""
+    import config.settings as settings
+    from storage.database import Database
+    from storage.repository import (SecuritiesRepository, FundamentalsRepository,
+                                     HistoricalPricesRepository)
+    from scrapers.akshare_historical_scraper import fetch_many as ak_fetch_many
+    from scrapers.historical_price_scraper import fetch_many as price_fetch_many
+
+    db = Database(settings.DB_PATH)
+    db.initialize()
+    securities_repo = SecuritiesRepository(db)
+    fundamentals_repo = FundamentalsRepository(db)
+    prices_repo = HistoricalPricesRepository(db)
+
+    selector = tickers.strip().upper()
+    if selector == "ALL":
+        target = [s["ticker"] for s in securities_repo.get_universe()]
+        console.print(f"[bold cyan]Seeding historical data for ALL {len(target)} active securities...[/bold cyan]")
+        console.print("[yellow]Fundamentals: ~6-8 hours at 0.5s throttle. Prices: ~10-15 min in batches.[/yellow]")
+    elif selector == "WATCHLIST":
+        target = [s["ticker"] for s in securities_repo.get_watchlist()]
+        console.print(f"[bold cyan]Seeding historical data for {len(target)} watchlist tickers...[/bold cyan]")
+    else:
+        target = [t.strip() for t in tickers.split(",") if t.strip()]
+        console.print(f"[bold cyan]Seeding historical data for {len(target)} ticker(s): {target}[/bold cyan]")
+
+    if not target:
+        console.print("[red]No tickers. Did you run 'universe refresh' first?[/red]")
+        return
+
+    if not skip_fundamentals:
+        console.print(f"\n[bold]Stage A: akshare historical fundamentals (annual, ~9 years)[/bold]")
+        ak_summary = ak_fetch_many(target, fundamentals_repo, securities_repo,
+                                    throttle_seconds=throttle)
+        console.print(f"  attempted: {ak_summary['attempted']}, "
+                      f"snapshots_written: {ak_summary['snapshots_written']}, "
+                      f"no_data: {ak_summary['no_data_tickers']}, "
+                      f"failed: {ak_summary['failed_tickers']}")
+
+    if not skip_prices:
+        console.print(f"\n[bold]Stage B: yfinance multi-year price history (period={price_period})[/bold]")
+        px_summary = price_fetch_many(target, prices_repo, period=price_period)
+        console.print(f"  attempted: {px_summary['attempted']}, "
+                      f"tickers_with_data: {px_summary['tickers_with_data']}, "
+                      f"total_rows: {px_summary['total_rows']}, "
+                      f"failed: {px_summary['failed_tickers']}")
+
+
+@cli.group()
+def backtest():
+    """Backtest fundamental screens with walk-forward optimization."""
+
+
+@backtest.command("run")
+@click.option("--screen", "screen_id", required=True,
+              help="Screen ID: value | quality_compounder | income | avoid_distress")
+@click.option("--start", default="2018-01-01", show_default=True,
+              help="Start date (YYYY-MM-DD).")
+@click.option("--end", default=None,
+              help="End date (YYYY-MM-DD). Defaults to today.")
+@click.option("--freq", default="quarterly", show_default=True,
+              type=click.Choice(["monthly", "quarterly", "annual"]))
+@click.option("--industry", default=None,
+              help="Optional yf_sector filter (e.g. 'Financial Services').")
+@click.option("--persist/--no-persist", default=True, show_default=True,
+              help="Save run + holdings to DB.")
+def backtest_run(screen_id, start, end, freq, industry, persist):
+    """Run a single backtest of one screen with its default parameters."""
+    from datetime import date as date_cls
+    import config.settings as settings
+    from storage.database import Database
+    from storage.repository import BacktestRepository
+    from analysis.backtest import BacktestEngine
+    from analysis.screens import BUILTIN_SCREENS
+
+    end = end or date_cls.today().strftime("%Y-%m-%d")
+    screen = next((s for s in BUILTIN_SCREENS if s.id == screen_id), None)
+    if not screen:
+        console.print(f"[red]Unknown screen_id: {screen_id}. Options: "
+                      f"{[s.id for s in BUILTIN_SCREENS]}[/red]")
+        return
+
+    db = Database(settings.DB_PATH)
+    db.initialize()
+    repo = BacktestRepository(db) if persist else None
+    engine = BacktestEngine(settings.DB_PATH, sector_risk_path=str(
+        settings.BASE_DIR / "config" / "sector_risk.yaml"))
+
+    console.print(f"[bold cyan]Backtest: {screen.name} | freq={freq} | "
+                  f"industry={industry or 'all'} | {start} to {end}[/bold cyan]")
+    result = engine.run(screen, screen.default_params, start, end, rebalance_freq=freq,
+                        industry_filter=industry, persist_repo=repo)
+
+    def pct(v):
+        return f"{v*100:+.2f}%" if v is not None else "N/A"
+    def num(v, d=2):
+        return f"{v:.{d}f}" if v is not None else "N/A"
+
+    table = Table(title=f"Backtest Result — run_id={result.run_id}")
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("Rebalances", str(result.n_rebalances))
+    table.add_row("Unique holdings", str(result.n_unique_holdings))
+    table.add_row("Total return", pct(result.total_return))
+    table.add_row("Benchmark return", pct(result.benchmark_return))
+    table.add_row("Excess return", pct(result.total_return - result.benchmark_return))
+    table.add_row("Information Ratio", num(result.information_ratio, 3))
+    table.add_row("Sharpe (per-period)", num(result.sharpe, 3))
+    table.add_row("Max drawdown", pct(result.max_drawdown))
+    table.add_row("Hit rate (beat bench)", pct(result.hit_rate))
+    console.print(table)
+
+
+@backtest.command("optimize")
+@click.option("--screen", "screen_id", required=True,
+              help="Screen ID (skips avoid_distress; it's educational, not for optimization).")
+@click.option("--industry", default=None,
+              help="Optional: one yf_sector. Otherwise iterates all sectors with data.")
+@click.option("--start", default="2018-01-01", show_default=True)
+@click.option("--end", default=None, help="Defaults to today.")
+@click.option("--train-months", default=36, show_default=True, type=int)
+@click.option("--test-months", default=12, show_default=True, type=int)
+@click.option("--step-months", default=12, show_default=True, type=int)
+@click.option("--freq", default="quarterly", show_default=True,
+              type=click.Choice(["monthly", "quarterly", "annual"]))
+def backtest_optimize(screen_id, industry, start, end, train_months,
+                       test_months, step_months, freq):
+    """Walk-forward CV: find per-industry parameters that maximize Information Ratio."""
+    from datetime import date as date_cls
+    import sqlite3
+    import config.settings as settings
+    from storage.database import Database
+    from storage.repository import OptimizedParamsRepository
+    from analysis.optimization import WalkForwardOptimizer
+    from analysis.screens import BUILTIN_SCREENS
+
+    end = end or date_cls.today().strftime("%Y-%m-%d")
+    screen = next((s for s in BUILTIN_SCREENS if s.id == screen_id), None)
+    if not screen:
+        console.print(f"[red]Unknown screen_id: {screen_id}[/red]")
+        return
+
+    db = Database(settings.DB_PATH)
+    db.initialize()
+    repo = OptimizedParamsRepository(db)
+
+    # Determine industries to optimize
+    if industry:
+        industries = [industry]
+    else:
+        with sqlite3.connect(settings.DB_PATH) as conn:
+            rows = conn.execute("""
+                SELECT yf_sector, COUNT(DISTINCT ticker) AS n
+                FROM securities WHERE is_active=1 AND yf_sector IS NOT NULL
+                GROUP BY yf_sector HAVING n >= 5 ORDER BY yf_sector
+            """).fetchall()
+            industries = [r[0] for r in rows]
+
+    console.print(f"[bold cyan]Optimizing {screen.name} across {len(industries)} industries[/bold cyan]")
+    console.print(f"[dim]Range: {start} to {end} | train={train_months}mo + test={test_months}mo (step {step_months}mo)[/dim]")
+
+    optimizer = WalkForwardOptimizer(
+        settings.DB_PATH,
+        sector_risk_path=str(settings.BASE_DIR / "config" / "sector_risk.yaml"),
+    )
+    results = optimizer.optimize_all_industries(
+        screen, industries, start, end,
+        train_window_months=train_months, test_window_months=test_months,
+        step_months=step_months, rebalance_freq=freq, persist_repo=repo,
+    )
+
+    table = Table(title=f"Optimized Parameters for {screen.name}")
+    table.add_column("Industry", style="bold")
+    table.add_column("Avg IR", justify="right")
+    table.add_column("Best params (key fields)")
+    for r in results:
+        p = r.best_params
+        # Just show a few headline fields per screen
+        if screen_id == "value":
+            key = f"P/E≤{p.pe_max}  P/B≤{p.pb_max}  ROE≥{int(p.roe_min*100)}%  mc≥${p.market_cap_min/1e9:.0f}B"
+        elif screen_id == "quality_compounder":
+            key = f"ROE≥{int(p.roe_min*100)}%  D/E<{p.de_max}  eg≥{int(p.earnings_growth_min*100)}%  mc≥${p.market_cap_min/1e9:.0f}B"
+        elif screen_id == "income":
+            key = f"divY≥{p.dividend_yield_min}%  mc≥${p.market_cap_min/1e9:.0f}B  eg≥{int(p.earnings_growth_min*100)}%"
+        else:
+            key = "(see DB)"
+        ir = f"{r.avg_information_ratio:+.3f}" if r.avg_information_ratio is not None else "N/A"
+        table.add_row(r.industry, ir, key)
+    console.print(table)
+
+
 def _print_sector_signals(sector_signal_repo):
     signals = sector_signal_repo.get_latest_signals()
     if not signals:

@@ -330,7 +330,9 @@ class FundamentalsRepository:
                 # Direction C extended fields
                 "earnings_growth", "revenue_growth", "profit_margins",
                 "operating_margins", "return_on_assets", "current_ratio",
-                "free_cashflow"]
+                "free_cashflow",
+                # Backtest per-share metrics for as-of P/E and P/B computation
+                "eps_ttm", "bps", "shares_outstanding"]
         values = [fields.get(c) for c in cols]
         with self.db.get_connection() as conn:
             conn.execute(f"""
@@ -392,6 +394,170 @@ class FundamentalsRepository:
                 WHERE ticker = ?
             """, (yf_sector, yf_industry, ticker))
             conn.commit()
+
+
+class HistoricalPricesRepository:
+    """Multi-year daily OHLCV per ticker, ingested from yfinance bulk download."""
+    def __init__(self, db: Database):
+        self.db = db
+
+    def upsert_rows(self, ticker: str, rows: list[dict]) -> int:
+        """rows: list of dicts with keys date, open, high, low, close, adj_close, volume."""
+        if not rows:
+            return 0
+        with self.db.get_connection() as conn:
+            conn.executemany("""
+                INSERT INTO historical_prices (ticker, date, open, high, low, close, adj_close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ticker, date) DO UPDATE SET
+                    open = excluded.open, high = excluded.high, low = excluded.low,
+                    close = excluded.close, adj_close = excluded.adj_close, volume = excluded.volume
+            """, [(ticker, r["date"], r.get("open"), r.get("high"), r.get("low"),
+                   r.get("close"), r.get("adj_close"), r.get("volume")) for r in rows])
+            conn.commit()
+            return len(rows)
+
+    def get_price_on_or_before(self, ticker: str, target_date: str) -> Optional[float]:
+        """Latest adj_close at or before target_date (for as-of valuation queries)."""
+        with self.db.get_connection() as conn:
+            row = conn.execute("""
+                SELECT adj_close FROM historical_prices
+                WHERE ticker = ? AND date <= ?
+                ORDER BY date DESC LIMIT 1
+            """, (ticker, target_date)).fetchone()
+            return row[0] if row else None
+
+    def get_price_series(self, ticker: str, start_date: str, end_date: str) -> list[dict]:
+        with self.db.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT date, adj_close FROM historical_prices
+                WHERE ticker = ? AND date >= ? AND date <= ?
+                ORDER BY date ASC
+            """, (ticker, start_date, end_date)).fetchall()
+            return [dict(r) for r in rows]
+
+    def count_rows(self, ticker: Optional[str] = None) -> int:
+        with self.db.get_connection() as conn:
+            if ticker:
+                return conn.execute(
+                    "SELECT COUNT(*) FROM historical_prices WHERE ticker = ?", (ticker,)
+                ).fetchone()[0]
+            return conn.execute("SELECT COUNT(*) FROM historical_prices").fetchone()[0]
+
+    def earliest_date(self, ticker: str) -> Optional[str]:
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT MIN(date) FROM historical_prices WHERE ticker = ?", (ticker,)
+            ).fetchone()
+            return row[0] if row else None
+
+
+class BacktestRepository:
+    """Backtest runs + per-rebalance holdings."""
+    def __init__(self, db: Database):
+        self.db = db
+
+    def insert_run(self, run_id: str, screen_id: str, industry: Optional[str],
+                   parameters_json: str, start_date: str, end_date: str,
+                   rebalance_freq: str, metrics: dict):
+        with self.db.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO backtest_runs
+                    (run_id, screen_id, industry, parameters_json, start_date, end_date,
+                     rebalance_freq, n_rebalances, total_return, benchmark_return,
+                     information_ratio, sharpe, max_drawdown, hit_rate, n_unique_holdings)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    parameters_json = excluded.parameters_json,
+                    n_rebalances = excluded.n_rebalances,
+                    total_return = excluded.total_return,
+                    benchmark_return = excluded.benchmark_return,
+                    information_ratio = excluded.information_ratio,
+                    sharpe = excluded.sharpe,
+                    max_drawdown = excluded.max_drawdown,
+                    hit_rate = excluded.hit_rate,
+                    n_unique_holdings = excluded.n_unique_holdings,
+                    created_at = CURRENT_TIMESTAMP
+            """, (run_id, screen_id, industry, parameters_json, start_date, end_date,
+                  rebalance_freq, metrics.get("n_rebalances"),
+                  metrics.get("total_return"), metrics.get("benchmark_return"),
+                  metrics.get("information_ratio"), metrics.get("sharpe"),
+                  metrics.get("max_drawdown"), metrics.get("hit_rate"),
+                  metrics.get("n_unique_holdings")))
+            conn.commit()
+
+    def insert_holdings(self, run_id: str, holdings: list[dict]):
+        if not holdings:
+            return
+        with self.db.get_connection() as conn:
+            # Delete existing holdings for this run first (rerun-friendly)
+            conn.execute("DELETE FROM backtest_holdings WHERE run_id = ?", (run_id,))
+            conn.executemany("""
+                INSERT INTO backtest_holdings
+                    (run_id, rebalance_date, ticker, weight, return_to_next, sector)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, [(run_id, h["rebalance_date"], h["ticker"], h.get("weight"),
+                   h.get("return_to_next"), h.get("sector")) for h in holdings])
+            conn.commit()
+
+    def get_run(self, run_id: str) -> Optional[dict]:
+        with self.db.get_connection() as conn:
+            row = conn.execute("SELECT * FROM backtest_runs WHERE run_id = ?", (run_id,)).fetchone()
+            return dict(row) if row else None
+
+    def get_runs_for_screen(self, screen_id: str) -> list[dict]:
+        with self.db.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM backtest_runs WHERE screen_id = ? ORDER BY created_at DESC
+            """, (screen_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_holdings(self, run_id: str) -> list[dict]:
+        with self.db.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM backtest_holdings WHERE run_id = ? ORDER BY rebalance_date, ticker
+            """, (run_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+
+class OptimizedParamsRepository:
+    """Per-(screen, industry) optimal parameter sets from walk-forward CV."""
+    def __init__(self, db: Database):
+        self.db = db
+
+    def upsert(self, screen_id: str, industry: str, parameters_json: str,
+               information_ratio: float, n_windows: int,
+               train_months: int, test_months: int):
+        with self.db.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO optimized_parameters
+                    (screen_id, industry, parameters_json, information_ratio,
+                     n_walk_forward_windows, train_window_months, test_window_months)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(screen_id, industry) DO UPDATE SET
+                    parameters_json = excluded.parameters_json,
+                    information_ratio = excluded.information_ratio,
+                    n_walk_forward_windows = excluded.n_walk_forward_windows,
+                    train_window_months = excluded.train_window_months,
+                    test_window_months = excluded.test_window_months,
+                    last_optimized_at = CURRENT_TIMESTAMP
+            """, (screen_id, industry, parameters_json, information_ratio,
+                  n_windows, train_months, test_months))
+            conn.commit()
+
+    def get(self, screen_id: str, industry: str) -> Optional[dict]:
+        with self.db.get_connection() as conn:
+            row = conn.execute("""
+                SELECT * FROM optimized_parameters WHERE screen_id = ? AND industry = ?
+            """, (screen_id, industry)).fetchone()
+            return dict(row) if row else None
+
+    def get_all_for_screen(self, screen_id: str) -> list[dict]:
+        with self.db.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM optimized_parameters WHERE screen_id = ? ORDER BY industry
+            """, (screen_id,)).fetchall()
+            return [dict(r) for r in rows]
 
 
 class SectorSignalRepository:
