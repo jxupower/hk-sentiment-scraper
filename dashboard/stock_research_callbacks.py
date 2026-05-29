@@ -36,33 +36,52 @@ def register_stock_research_callbacks(app, db_path: str):
                                      "sector_risk.yaml")
 
     # ----- Autocomplete dropdown options -----
+    # Critical: must always include the currently-selected `value` in the
+    # returned options list, otherwise Dash silently clears the selection when
+    # the user picks a non-watchlist ticker (the options list refreshes to
+    # "watchlist only" when search_value clears, dropping the selected ticker).
     @app.callback(
         Output("sr-ticker-select", "options"),
         Input("sr-ticker-select", "search_value"),
+        State("sr-ticker-select", "value"),
     )
-    def populate_ticker_options(search):
+    def populate_ticker_options(search, current_value):
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
             if search:
-                # Match ticker prefix OR name substring (case-insensitive)
                 rows = conn.execute("""
                     SELECT ticker, name FROM securities
                     WHERE is_active = 1 AND (
                         UPPER(ticker) LIKE UPPER(?) OR UPPER(name) LIKE UPPER(?)
                     )
-                    ORDER BY (is_watchlist = 1) DESC, market_cap_b_proxy DESC, ticker
+                    ORDER BY (is_watchlist = 1) DESC, ticker
                     LIMIT 30
-                """.replace("market_cap_b_proxy", "ticker"),  # no market_cap on securities
-                                    (f"{search}%", f"%{search}%")).fetchall()
+                """, (f"{search}%", f"%{search}%")).fetchall()
             else:
-                # Default to watchlist tickers when no search
+                # Default to watchlist when no search
                 rows = conn.execute("""
                     SELECT ticker, name FROM securities
                     WHERE is_active = 1 AND is_watchlist = 1
                     ORDER BY ticker LIMIT 30
                 """).fetchall()
-            return [{"label": f"{r['ticker']} — {r['name']}", "value": r["ticker"]}
-                    for r in rows]
+            options = [{"label": f"{r['ticker']} — {r['name']}", "value": r["ticker"]}
+                       for r in rows]
+
+            # Always include the current selection so Dash doesn't clear it
+            if current_value and current_value not in [o["value"] for o in options]:
+                cur_row = conn.execute(
+                    "SELECT ticker, name FROM securities WHERE ticker = ?",
+                    (current_value,)
+                ).fetchone()
+                if cur_row:
+                    options.insert(0, {
+                        "label": f"{cur_row['ticker']} — {cur_row['name']}",
+                        "value": cur_row["ticker"],
+                    })
+                else:
+                    # Ticker not in DB; preserve it anyway so the value persists
+                    options.insert(0, {"label": current_value, "value": current_value})
+        return options
 
     # ----- Main report render -----
     @app.callback(
