@@ -210,6 +210,10 @@ def register_stock_research_callbacks(app, db_path: str):
         )
 
     # ----- DCF live recomputation on slider change -----
+    # Performance critical: this fires on every slider tick, AND fires 4 times
+    # cascading when render_report sets all 4 slider Outputs. Must NOT call
+    # build_research_report (which runs FactorScoringEngine over the full universe
+    # and every screen). Instead, pull just the per-share fields we need.
     @app.callback(
         Output("sr-dcf-result", "children"),
         Output("sr-dcf-sensitivity", "figure"),
@@ -218,23 +222,24 @@ def register_stock_research_callbacks(app, db_path: str):
         Input("sr-dcf-tg", "value"),
         Input("sr-dcf-wacc", "value"),
         State("sr-ticker-select", "value"),
+        prevent_initial_call=True,
     )
     def recompute_dcf(g15, g610, tg, wacc, ticker):
         if not ticker:
             return "", {}
-        r = build_research_report(ticker, db_path, sector_risk_path)
-        if r is None or r.dcf_inputs_default is None:
+        dcf_inputs = _load_dcf_inputs_only(db_path, ticker)
+        if dcf_inputs is None:
             return html.Span("Insufficient per-share data for DCF.",
                               className="text-warning small"), {}
 
         inputs = DCFInputs(
-            base_fcf=r.dcf_inputs_default.base_fcf,
+            base_fcf=dcf_inputs.base_fcf,
             growth_y1_5=g15 / 100.0,
             growth_y6_10=g610 / 100.0,
             terminal_growth=tg / 100.0,
             wacc=wacc / 100.0,
-            shares_outstanding=r.dcf_inputs_default.shares_outstanding,
-            current_price=r.dcf_inputs_default.current_price,
+            shares_outstanding=dcf_inputs.shares_outstanding,
+            current_price=dcf_inputs.current_price,
         )
         result = compute_dcf(inputs)
         if result.error:
@@ -530,6 +535,47 @@ def _load_prices(db_path: str, ticker: str) -> list[dict]:
             WHERE ticker = ? ORDER BY date ASC
         """, (ticker,)).fetchall()
         return [dict(r) for r in rows]
+
+
+def _load_dcf_inputs_only(db_path: str, ticker: str) -> Optional[DCFInputs]:
+    """Fast path: build only what DCF needs, without running FactorScoringEngine
+    or screen predicates over the universe. Used by the recompute_dcf slider
+    callback which fires on every slider tick."""
+    from analysis.dcf import default_inputs_from_snapshot
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        # Walk newest→oldest history until we find a snapshot with per-share data
+        rows = conn.execute("""
+            SELECT snapshot_date, eps_ttm, bps, shares_outstanding, earnings_growth, last_price
+            FROM fundamentals_snapshots
+            WHERE ticker = ?
+            ORDER BY snapshot_date DESC
+        """, (ticker,)).fetchall()
+        latest_price_row = conn.execute("""
+            SELECT adj_close FROM historical_prices
+            WHERE ticker = ? ORDER BY date DESC LIMIT 1
+        """, (ticker,)).fetchone()
+
+    current_price = latest_price_row[0] if latest_price_row else None
+    growths = [r["earnings_growth"] for r in rows[:5]
+                if r["earnings_growth"] is not None]
+    if growths:
+        sorted_g = sorted(growths)
+        median_g = sorted_g[len(sorted_g) // 2]
+        default_growth = max(-0.05, min(0.20, float(median_g)))
+    else:
+        default_growth = 0.08
+
+    for r in rows:
+        if r["eps_ttm"] is not None and r["shares_outstanding"] is not None:
+            snap = {
+                "eps_ttm": r["eps_ttm"],
+                "shares_outstanding": r["shares_outstanding"],
+                "earnings_growth": default_growth,
+                "last_price": current_price if current_price is not None else r["last_price"],
+            }
+            return default_inputs_from_snapshot(snap)
+    return None
 
 
 def _generate_devil_advocate(r) -> html.Div:

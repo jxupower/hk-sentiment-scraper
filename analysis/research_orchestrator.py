@@ -253,6 +253,8 @@ def _cagr_from_growth_series(history: list[HistoryPoint]) -> dict[int, Optional[
     Since akshare doesn't give us raw revenue, we synthesize a series starting
     at index 100 and applying each YoY growth. The CAGR of that synthetic
     series matches what the actual revenue CAGR would be."""
+    if not history:
+        return {5: None, 10: None, 15: None}
     synthetic = [(history[0].date, 100.0)]
     cur = 100.0
     for i in range(1, len(history)):

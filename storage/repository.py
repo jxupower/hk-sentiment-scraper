@@ -572,8 +572,11 @@ class ResearchNotesRepository:
 
     def upsert(self, ticker: str, **kwargs):
         """Upsert any subset of FIELDS for a ticker. Unspecified fields are
-        preserved on existing rows."""
-        provided = {k: v for k, v in kwargs.items() if k in self.FIELDS}
+        preserved on existing rows. None values are dropped (treated as
+        'unchanged'), so callers can safely pass full kwargs sets without
+        wiping previously-saved data — only non-None updates land."""
+        provided = {k: v for k, v in kwargs.items()
+                     if k in self.FIELDS and v is not None}
         if not provided:
             return
         with self.db.get_connection() as conn:
