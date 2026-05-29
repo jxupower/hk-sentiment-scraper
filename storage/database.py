@@ -184,6 +184,25 @@ class Database:
                     last_optimized_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(screen_id, industry)
                 );
+
+                -- Per-ticker research notes (Plain Bagel 6-step framework persistence)
+                CREATE TABLE IF NOT EXISTS research_notes (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker              TEXT NOT NULL UNIQUE,
+                    research_status     TEXT,             -- raw|researched|watchlist|owned|rejected
+                    swot_strengths      TEXT,
+                    swot_weaknesses     TEXT,
+                    swot_opportunities  TEXT,
+                    swot_threats        TEXT,
+                    business_notes      TEXT,
+                    strategy_notes      TEXT,
+                    valuation_notes     TEXT,
+                    thesis              TEXT,
+                    dcf_inputs_json     TEXT,
+                    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_research_notes_status
+                    ON research_notes(research_status);
             """)
             # Migration: add Direction C columns to fundamentals_snapshots if missing
             # (CREATE TABLE IF NOT EXISTS won't add columns to a pre-existing table).

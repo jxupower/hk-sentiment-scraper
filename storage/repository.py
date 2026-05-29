@@ -560,6 +560,67 @@ class OptimizedParamsRepository:
             return [dict(r) for r in rows]
 
 
+class ResearchNotesRepository:
+    """Per-ticker user research notes for the Stock Research dashboard tab.
+    Persists SWOT, qualitative notes, DCF inputs, research-status workflow."""
+    FIELDS = ["research_status", "swot_strengths", "swot_weaknesses",
+              "swot_opportunities", "swot_threats", "business_notes",
+              "strategy_notes", "valuation_notes", "thesis", "dcf_inputs_json"]
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def upsert(self, ticker: str, **kwargs):
+        """Upsert any subset of FIELDS for a ticker. Unspecified fields are
+        preserved on existing rows."""
+        provided = {k: v for k, v in kwargs.items() if k in self.FIELDS}
+        if not provided:
+            return
+        with self.db.get_connection() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM research_notes WHERE ticker = ?", (ticker,)
+            ).fetchone()
+            if existing:
+                set_clause = ", ".join(f"{k} = ?" for k in provided.keys())
+                values = list(provided.values()) + [ticker]
+                conn.execute(
+                    f"UPDATE research_notes SET {set_clause}, "
+                    f"updated_at = CURRENT_TIMESTAMP WHERE ticker = ?",
+                    values,
+                )
+            else:
+                cols = ["ticker"] + list(provided.keys())
+                placeholders = ", ".join("?" * len(cols))
+                values = [ticker] + list(provided.values())
+                conn.execute(
+                    f"INSERT INTO research_notes ({', '.join(cols)}) VALUES ({placeholders})",
+                    values,
+                )
+            conn.commit()
+
+    def get(self, ticker: str) -> Optional[dict]:
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_notes WHERE ticker = ?", (ticker,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_by_status(self, status: str) -> list[dict]:
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM research_notes WHERE research_status = ? ORDER BY ticker",
+                (status,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_all(self) -> list[dict]:
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM research_notes ORDER BY updated_at DESC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+
 class SectorSignalRepository:
     def __init__(self, db: Database):
         self.db = db

@@ -67,12 +67,22 @@ This is a Hong Kong / China stock sentiment tool. It scrapes RSS feeds and Yahoo
 - `analysis/factor_scores.py` — `FactorScoringEngine` computes sector-relative percentile ranks (0-100) per ticker on four factors: **Value** (1/PE, 1/PB, 1/EV-EBITDA), **Quality** (ROE, ROA, -D/E), **Growth** (earnings + revenue growth), **Sentiment** (avg article sentiment over window). Composite = weighted average of available factors. Viability guards disqualify negative book value, microcaps (<HK$200M), P/E < 0.5 or > 500, profit margins < -50%. Sector-risk flags from `config/sector_risk.yaml` add informational warning badges (not disqualifiers).
 - `analysis/screens.py` — rule-based screens with **absolute thresholds**: Value (P/E 5-20, P/B 0.5-3, ROE>10%), Quality Compounder (ROE≥15%, D/E<100%, +ve growth, ≥HK$10B), Income (yield≥4%, ≥HK$5B), Avoid Distress (educational — extreme cheap + ≥2 distress red flags). No scoring, pass/fail only.
 
-**Dashboard** (`dashboard/`) — 5 tabs:
+**Dashboard** (`dashboard/`) — 6 tabs:
 - **Sentiment** (`callbacks.py` + `layout.py:_sentiment_tab`) — original sector-card view for the 54 curated watchlist tickers
 - **Screener** (`screener_layout.py` + `screener_callbacks.py`) — raw fundamentals table for all ~2,768 active universe tickers, sortable/filterable
 - **Discovery** (`recommendations_layout.py` + `recommendations_callbacks.py`) — multi-factor percentile-rank candidates; 4 weight inputs (Value/Quality/Growth/Sentiment) + viability filters + sector-risk flag badges
 - **Screens** (`screens_layout.py` + `screens_callbacks.py`) — 4 rule-based pass/fail screens with absolute thresholds, accessed via sub-tabs
 - **Backtest** (`backtest_layout.py` + `backtest_callbacks.py`) — per-industry walk-forward optimization results for each screen; sub-tabs per screen; live "what-if" backtest button using default params
+- **Stock Research** (`stock_research_layout.py` + `stock_research_callbacks.py`) — single-stock deep-dive following The Plain Bagel's 6-step framework: type a ticker → see screening context, business overview with auto-SWOT, financial CAGR + peer scorecard + forensic flags, strategy + dilution chart, valuation with 2-stage DCF sliders + sensitivity heatmap, notes/research-status workflow, devil's-advocate Claude AI, markdown export
+
+**Stock Research framework + supporting modules** (Plain Bagel 6-step):
+- `analysis/cagr.py` — multi-horizon (5/10/15y) CAGR helpers + YoY growth series
+- `analysis/forensic.py` — heuristic red-flag detector: share dilution, debt explosion, margin compression, revenue/earnings divergence, sustained earnings decline
+- `analysis/dcf.py` — 2-stage Gordon Growth DCF with sensitivity table. Uses `EPS × shares × 0.8` FCF proxy because akshare/yfinance don't reliably expose historical free cash flow for HK
+- `analysis/peer_comparison.py` — per-ticker scorecard vs sector peers across 10 metrics with percentile ranks
+- `analysis/research_orchestrator.py` — composes everything into one `ResearchReport` dataclass
+- `storage/repository.py:ResearchNotesRepository` — persists SWOT, qualitative notes, DCF inputs, research-status workflow (raw/researched/watchlist/owned/rejected)
+- 1 new table: `research_notes`
 
 **Backtest + per-industry optimization** (added after Direction C):
 - `scrapers/akshare_historical_scraper.py` pulls ~9 years of annual HK fundamentals via akshare (`stock_financial_hk_analysis_indicator_em`). Writes into the same `fundamentals_snapshots` table; per-share fields (`eps_ttm`, `bps`, `shares_outstanding`) populated so the backtest can derive as-of P/E and P/B by combining with `historical_prices`.

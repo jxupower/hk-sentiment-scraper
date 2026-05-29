@@ -7,6 +7,7 @@ from dashboard.screener_callbacks import register_screener_callbacks
 from dashboard.recommendations_callbacks import register_recommendations_callbacks
 from dashboard.screens_callbacks import register_screens_callbacks
 from dashboard.backtest_callbacks import register_backtest_callbacks
+from dashboard.stock_research_callbacks import register_stock_research_callbacks
 
 
 def create_app(db_path: str, settings) -> dash.Dash:
@@ -42,5 +43,6 @@ def create_app(db_path: str, settings) -> dash.Dash:
     register_recommendations_callbacks(app, db_path)
     register_screens_callbacks(app, db_path)
     register_backtest_callbacks(app, db_path)
+    register_stock_research_callbacks(app, db_path)
 
     return app

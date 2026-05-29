@@ -5,6 +5,7 @@ from dashboard.screener_layout import build_screener_tab
 from dashboard.recommendations_layout import build_recommendations_tab
 from dashboard.screens_layout import build_screens_tab
 from dashboard.backtest_layout import build_backtest_tab
+from dashboard.stock_research_layout import build_stock_research_tab
 
 
 def build_layout(sectors: list[str]) -> html.Div:
@@ -30,6 +31,10 @@ def build_layout(sectors: list[str]) -> html.Div:
                         active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
                 dbc.Tab(label="Backtest", tab_id="tab-backtest",
                         children=build_backtest_tab(),
+                        labelClassName="text-light",
+                        active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
+                dbc.Tab(label="Stock Research", tab_id="tab-stock-research",
+                        children=build_stock_research_tab(),
                         labelClassName="text-light",
                         active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
             ], id="main-tabs", active_tab="tab-sentiment", className="mb-3"),

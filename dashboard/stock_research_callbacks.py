@@ -1,0 +1,637 @@
+"""Stock Research tab callbacks — the most callback-dense tab.
+
+Three main callbacks:
+  1. `populate_ticker_options` — autocomplete dropdown options from securities
+  2. `render_report` — heavy callback: ticker + Load click → ~30 outputs (header,
+     section data, charts, AI summary, saved notes pre-fill)
+  3. `recompute_dcf` — DCF slider changes re-run compute_dcf without reloading
+     the rest of the report
+  4. `save_notes` — write SWOT / strategy / valuation / thesis textareas back
+     to research_notes
+  5. `devil_advocate` — Claude prompt for counter-arguments
+  6. `export_markdown` — download button
+"""
+import json
+import math
+import os
+import sqlite3
+import sys
+from typing import Optional
+
+import dash
+import plotly.graph_objects as go
+from dash import Input, Output, State, dcc, html, no_update
+import dash_bootstrap_components as dbc
+
+from analysis.dcf import DCFInputs, compute_dcf, sensitivity_table
+from analysis.research_orchestrator import build_research_report
+from dashboard.charts import (
+    multi_year_eps_chart, revenue_yoy_chart, share_count_chart,
+    historical_multiple_chart, dcf_sensitivity_heatmap, peer_scorecard_heatmap,
+)
+
+
+def register_stock_research_callbacks(app, db_path: str):
+    sector_risk_path = os.path.join(os.path.dirname(__file__), "..", "config",
+                                     "sector_risk.yaml")
+
+    # ----- Autocomplete dropdown options -----
+    @app.callback(
+        Output("sr-ticker-select", "options"),
+        Input("sr-ticker-select", "search_value"),
+    )
+    def populate_ticker_options(search):
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            if search:
+                # Match ticker prefix OR name substring (case-insensitive)
+                rows = conn.execute("""
+                    SELECT ticker, name FROM securities
+                    WHERE is_active = 1 AND (
+                        UPPER(ticker) LIKE UPPER(?) OR UPPER(name) LIKE UPPER(?)
+                    )
+                    ORDER BY (is_watchlist = 1) DESC, market_cap_b_proxy DESC, ticker
+                    LIMIT 30
+                """.replace("market_cap_b_proxy", "ticker"),  # no market_cap on securities
+                                    (f"{search}%", f"%{search}%")).fetchall()
+            else:
+                # Default to watchlist tickers when no search
+                rows = conn.execute("""
+                    SELECT ticker, name FROM securities
+                    WHERE is_active = 1 AND is_watchlist = 1
+                    ORDER BY ticker LIMIT 30
+                """).fetchall()
+            return [{"label": f"{r['ticker']} — {r['name']}", "value": r["ticker"]}
+                    for r in rows]
+
+    # ----- Main report render -----
+    @app.callback(
+        Output("sr-placeholder", "style"),
+        Output("sr-content", "style"),
+        Output("sr-header-name", "children"),
+        Output("sr-header-sector", "children"),
+        Output("sr-header-price", "children"),
+        Output("sr-header-mcap", "children"),
+        Output("sr-header-badges", "children"),
+        Output("sr-screen-passes", "children"),
+        Output("sr-factor-bars", "figure"),
+        Output("sr-business-summary", "children"),
+        Output("sr-swot-strengths", "value"),
+        Output("sr-swot-weaknesses", "value"),
+        Output("sr-swot-opportunities", "value"),
+        Output("sr-swot-threats", "value"),
+        Output("sr-article-feed", "children"),
+        Output("sr-cagr-table", "children"),
+        Output("sr-eps-chart", "figure"),
+        Output("sr-revenue-chart", "figure"),
+        Output("sr-peer-heatmap", "figure"),
+        Output("sr-forensic-flags", "children"),
+        Output("sr-shares-chart", "figure"),
+        Output("sr-strategy-stats", "children"),
+        Output("sr-strategy-notes", "value"),
+        Output("sr-pe-history", "figure"),
+        Output("sr-pb-history", "figure"),
+        Output("sr-valuation-notes", "value"),
+        Output("sr-thesis", "value"),
+        Output("sr-status-select", "value"),
+        # DCF slider defaults
+        Output("sr-dcf-g15", "value"),
+        Output("sr-dcf-g610", "value"),
+        Output("sr-dcf-tg", "value"),
+        Output("sr-dcf-wacc", "value"),
+        Input("sr-load-btn", "n_clicks"),
+        State("sr-ticker-select", "value"),
+        prevent_initial_call=True,
+    )
+    def render_report(_clicks, ticker):
+        if not ticker:
+            return dash.no_update
+        r = build_research_report(ticker, db_path, sector_risk_path)
+        if r is None:
+            return (
+                {"display": "block"}, {"display": "none"},
+                "", "", "", "", [], [], {},
+                "(no data)", "", "", "", "", [],
+                [], {}, {}, {}, [], {}, [], "", {}, {}, "", "", None,
+                10, 5, 2.5, 9,
+            )
+
+        # Header
+        name = r.name
+        sector = r.sector
+        price_str = f"${r.current_price:.2f}" if r.current_price else "NA"
+        mcap_str = f"${r.market_cap/1e9:.1f}B" if r.market_cap else "NA"
+        badges = []
+        if r.is_watchlist:
+            badges.append(dbc.Badge("★ Watchlist", color="warning", className="me-1"))
+        for f in r.risk_flags:
+            badges.append(dbc.Badge(f"⚠ {f.id[:20]}",
+                                     color="danger" if f.severity == "high" else "warning",
+                                     className="me-1"))
+
+        # Section 1: screens + factor bars
+        screen_badges = []
+        for s in r.screen_pass_fail:
+            color = "success" if s.passed else "secondary"
+            sym = "✓" if s.passed else "✗"
+            screen_badges.append(dbc.Badge(f"{sym} {s.name}", color=color, className="me-2"))
+        factor_fig = _factor_bar_chart(r.factor_result)
+
+        # Section 2: business summary (AI), articles, SWOT
+        business_summary = _build_business_summary(r)
+        s_swot, w_swot, o_swot, t_swot = _build_default_swot(r)
+        article_feed = _build_article_feed(r.recent_articles)
+
+        # Section 3: CAGR table, charts, peer heatmap, forensic
+        cagr_table = _build_cagr_table(r)
+        eps_fig = multi_year_eps_chart(r.history)
+        rev_fig = revenue_yoy_chart(r.history)
+        peer_fig = peer_scorecard_heatmap(r.peer_scorecard)
+        forensic = _build_forensic_panel(r.red_flags)
+
+        # Section 4: shares chart + strategy stats
+        shares_fig = share_count_chart(r.history)
+        strat_stats = _build_strategy_stats(r)
+
+        # Section 5: valuation history + initial DCF
+        prices = _load_prices(db_path, ticker)
+        pe_fig = historical_multiple_chart(r.history, prices, "pe")
+        pb_fig = historical_multiple_chart(r.history, prices, "pb")
+
+        # Pre-fill saved notes if any
+        saved = r.saved_notes or {}
+        s_swot = saved.get("swot_strengths") or s_swot
+        w_swot = saved.get("swot_weaknesses") or w_swot
+        o_swot = saved.get("swot_opportunities") or o_swot
+        t_swot = saved.get("swot_threats") or t_swot
+        strat_notes = saved.get("strategy_notes") or ""
+        val_notes = saved.get("valuation_notes") or ""
+        thesis = saved.get("thesis") or ""
+        status = saved.get("research_status")
+
+        # DCF default slider values
+        if r.dcf_inputs_default:
+            d = r.dcf_inputs_default
+            g15 = round(d.growth_y1_5 * 100)
+            g610 = round(d.growth_y6_10 * 100)
+            tg = round(d.terminal_growth * 100, 2)
+            wacc = round(d.wacc * 100)
+        else:
+            g15, g610, tg, wacc = 10, 5, 2.5, 9
+
+        return (
+            {"display": "none"}, {"display": "block"},
+            name, sector, price_str, mcap_str, badges,
+            screen_badges, factor_fig,
+            business_summary, s_swot, w_swot, o_swot, t_swot, article_feed,
+            cagr_table, eps_fig, rev_fig, peer_fig, forensic,
+            shares_fig, strat_stats, strat_notes,
+            pe_fig, pb_fig, val_notes, thesis, status,
+            g15, g610, tg, wacc,
+        )
+
+    # ----- DCF live recomputation on slider change -----
+    @app.callback(
+        Output("sr-dcf-result", "children"),
+        Output("sr-dcf-sensitivity", "figure"),
+        Input("sr-dcf-g15", "value"),
+        Input("sr-dcf-g610", "value"),
+        Input("sr-dcf-tg", "value"),
+        Input("sr-dcf-wacc", "value"),
+        State("sr-ticker-select", "value"),
+    )
+    def recompute_dcf(g15, g610, tg, wacc, ticker):
+        if not ticker:
+            return "", {}
+        r = build_research_report(ticker, db_path, sector_risk_path)
+        if r is None or r.dcf_inputs_default is None:
+            return html.Span("Insufficient per-share data for DCF.",
+                              className="text-warning small"), {}
+
+        inputs = DCFInputs(
+            base_fcf=r.dcf_inputs_default.base_fcf,
+            growth_y1_5=g15 / 100.0,
+            growth_y6_10=g610 / 100.0,
+            terminal_growth=tg / 100.0,
+            wacc=wacc / 100.0,
+            shares_outstanding=r.dcf_inputs_default.shares_outstanding,
+            current_price=r.dcf_inputs_default.current_price,
+        )
+        result = compute_dcf(inputs)
+        if result.error:
+            return html.Span(f"DCF error: {result.error}",
+                              className="text-danger small"), {}
+
+        mos_color = "success" if (result.margin_of_safety or 0) > 0 else "danger"
+        mos_str = f"{result.margin_of_safety*100:+.1f}%" if result.margin_of_safety is not None else "NA"
+        result_html = html.Div([
+            html.Strong("Intrinsic value per share: ", className="me-1"),
+            html.Span(f"${result.intrinsic_value_per_share:.2f}",
+                      className="text-info fw-bold fs-5 me-3"),
+            html.Strong("Current price: ", className="me-1"),
+            html.Span(f"${result.current_price:.2f}", className="text-light me-3"),
+            html.Strong("Margin of safety: ", className="me-1"),
+            dbc.Badge(mos_str, color=mos_color, className="fs-6"),
+            html.P(f"(EV: ${result.enterprise_value/1e9:.1f}B over "
+                   f"{inputs.shares_outstanding/1e9:.2f}B shares; "
+                   f"base FCF: ${inputs.base_fcf/1e9:.1f}B)",
+                   className="text-muted small mt-2 mb-0"),
+        ])
+
+        # Sensitivity heatmap: vary growth_y1_5 and wacc
+        g_grid = [g15/100 - 0.04, g15/100 - 0.02, g15/100, g15/100 + 0.02, g15/100 + 0.04]
+        wacc_grid = [wacc/100 - 0.02, wacc/100 - 0.01, wacc/100,
+                     wacc/100 + 0.01, wacc/100 + 0.02]
+        try:
+            sens_df = sensitivity_table(inputs, "growth_y1_5", "wacc", g_grid, wacc_grid)
+            sens_fig = dcf_sensitivity_heatmap(sens_df, current_price=inputs.current_price,
+                                                 x_label="Growth Y1-5", y_label="WACC")
+        except Exception:
+            sens_fig = {}
+
+        return result_html, sens_fig
+
+    # ----- Save all notes back to DB -----
+    @app.callback(
+        Output("sr-save-status", "children"),
+        Input("sr-save-btn", "n_clicks"),
+        State("sr-ticker-select", "value"),
+        State("sr-status-select", "value"),
+        State("sr-swot-strengths", "value"),
+        State("sr-swot-weaknesses", "value"),
+        State("sr-swot-opportunities", "value"),
+        State("sr-swot-threats", "value"),
+        State("sr-strategy-notes", "value"),
+        State("sr-valuation-notes", "value"),
+        State("sr-thesis", "value"),
+        prevent_initial_call=True,
+    )
+    def save_notes(_clicks, ticker, status, s, w, o, t, strat, val, thesis):
+        if not ticker:
+            return "Select a ticker first."
+        from storage.database import Database
+        from storage.repository import ResearchNotesRepository
+        db = Database(db_path)
+        repo = ResearchNotesRepository(db)
+        repo.upsert(ticker, research_status=status,
+                     swot_strengths=s, swot_weaknesses=w,
+                     swot_opportunities=o, swot_threats=t,
+                     strategy_notes=strat, valuation_notes=val,
+                     thesis=thesis)
+        from datetime import datetime
+        return f"Saved at {datetime.now().strftime('%H:%M:%S')}"
+
+    # ----- Devil's-advocate AI -----
+    @app.callback(
+        Output("sr-devil-output", "children"),
+        Input("sr-devil-btn", "n_clicks"),
+        State("sr-ticker-select", "value"),
+        prevent_initial_call=True,
+    )
+    def devil_advocate(_clicks, ticker):
+        if not ticker:
+            return ""
+        from config.settings import CLAUDE_API_KEY
+        if not CLAUDE_API_KEY:
+            return html.P("Add CLAUDE_API_KEY to .env to use AI Devil's-Advocate.",
+                          className="text-muted small fst-italic")
+        r = build_research_report(ticker, db_path, sector_risk_path)
+        if r is None:
+            return html.P("No data.", className="text-muted small")
+        return _generate_devil_advocate(r)
+
+    # ----- Export as Markdown -----
+    @app.callback(
+        Output("sr-download", "data"),
+        Input("sr-export-btn", "n_clicks"),
+        State("sr-ticker-select", "value"),
+        State("sr-swot-strengths", "value"),
+        State("sr-swot-weaknesses", "value"),
+        State("sr-swot-opportunities", "value"),
+        State("sr-swot-threats", "value"),
+        State("sr-strategy-notes", "value"),
+        State("sr-valuation-notes", "value"),
+        State("sr-thesis", "value"),
+        prevent_initial_call=True,
+    )
+    def export_markdown(_clicks, ticker, s, w, o, t, strat, val, thesis):
+        if not ticker:
+            return no_update
+        r = build_research_report(ticker, db_path, sector_risk_path)
+        if r is None:
+            return no_update
+        md = _report_to_markdown(r, s, w, o, t, strat, val, thesis)
+        return dict(content=md, filename=f"{ticker}_research.md")
+
+
+# ============== helper functions ==============
+
+def _factor_bar_chart(fr) -> go.Figure:
+    if fr is None:
+        return {}
+    metrics = ["Value", "Quality", "Growth", "Sentiment"]
+    values = [fr.value_pctile or 0, fr.quality_pctile or 0,
+              fr.growth_pctile or 0, fr.sentiment_pctile or 0]
+    colors = ["#00c853" if v >= 70 else ("#ff8a65" if v < 30 else "#90caf9") for v in values]
+    fig = go.Figure(go.Bar(x=values, y=metrics, orientation="h",
+                            marker_color=colors,
+                            text=[f"{v:.0f}" if v else "NA" for v in values],
+                            textposition="outside"))
+    fig.add_vline(x=50, line_dash="dot", line_color="#607d8b")
+    fig.update_layout(paper_bgcolor="#1a1a2e", plot_bgcolor="#16213e",
+                       font=dict(color="#eceff1", size=11),
+                       title="Factor percentile ranks (vs sector peers)",
+                       xaxis=dict(range=[0, 100]),
+                       height=200, margin=dict(t=40, b=30, l=80, r=20))
+    return fig
+
+
+def _build_business_summary(r) -> html.Div:
+    from config.settings import CLAUDE_API_KEY
+    if not CLAUDE_API_KEY:
+        return html.P("Add CLAUDE_API_KEY to .env to enable AI business summaries.",
+                      className="text-muted small fst-italic")
+    if not r.recent_articles:
+        return html.P("No recent articles to summarize. (Most universe tickers don't have "
+                      "broad news coverage; try a watchlist name.)",
+                      className="text-muted small")
+    try:
+        import anthropic
+        article_text = "\n".join(
+            f"- [{(a.get('final_score') or 0):+.2f}] {a.get('title','')}"
+            for a in r.recent_articles[:20]
+        )
+        sector = r.sector
+        prompt = (
+            f"You are a sell-side equity analyst. Write a 2-paragraph business summary "
+            f"for {r.name} ({r.ticker}), a {sector} company listed on HKEX. "
+            f"Use the recent news headlines below to identify the current business themes, "
+            f"any recent catalysts or risks, and competitive positioning. "
+            f"Avoid generic phrases; be specific. "
+            f"Recent news (sentiment + headline):\n{article_text}\n\n"
+            f"Format as plain text paragraphs, no markdown."
+        )
+        client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        return html.Div([html.P(p, className="text-light small")
+                          for p in text.split("\n") if p.strip()])
+    except Exception as e:
+        return html.P(f"AI summary unavailable: {e}",
+                      className="text-muted small fst-italic")
+
+
+def _build_default_swot(r) -> tuple[str, str, str, str]:
+    """Auto-populate SWOT from factor percentiles + risk flags + forensic flags."""
+    s_list, w_list, o_list, t_list = [], [], [], []
+    fr = r.factor_result
+    if fr:
+        if (fr.quality_pctile or 0) >= 70:
+            s_list.append(f"Top {100 - (fr.quality_pctile or 0):.0f}% on Quality (ROE/ROA/D-E) within sector")
+        if (fr.growth_pctile or 0) >= 70:
+            s_list.append(f"Top {100 - (fr.growth_pctile or 0):.0f}% on Growth within sector")
+        if (fr.value_pctile or 0) >= 70:
+            s_list.append(f"Top {100 - (fr.value_pctile or 0):.0f}% on Value (cheap vs peers)")
+        if (fr.quality_pctile or 100) < 30:
+            w_list.append(f"Bottom {fr.quality_pctile:.0f}% on Quality — weak ROE/ROA or leveraged")
+        if (fr.growth_pctile or 100) < 30:
+            w_list.append(f"Bottom {fr.growth_pctile:.0f}% on Growth — earnings/revenue not growing well")
+        if (fr.value_pctile or 100) < 30:
+            w_list.append(f"Bottom {fr.value_pctile:.0f}% on Value — expensive vs peers")
+        if fr.sentiment_pctile is not None and fr.sentiment_pctile >= 70:
+            o_list.append("Recent news sentiment in top quartile of universe")
+        if fr.sentiment_pctile is not None and fr.sentiment_pctile < 30:
+            t_list.append("Recent news sentiment in bottom quartile of universe")
+    for f in r.risk_flags:
+        t_list.append(f"Risk flag: {f.label} ({f.severity})")
+    for rf in r.red_flags:
+        if rf.severity in ("high", "medium"):
+            t_list.append(f"Forensic: {rf.title}")
+    return ("\n".join(f"• {x}" for x in s_list) or "(none auto-detected)",
+            "\n".join(f"• {x}" for x in w_list) or "(none auto-detected)",
+            "\n".join(f"• {x}" for x in o_list) or "(none auto-detected)",
+            "\n".join(f"• {x}" for x in t_list) or "(none auto-detected)")
+
+
+def _build_article_feed(articles: list) -> html.Div:
+    if not articles:
+        return html.P("No recent articles for this ticker in last 30 days.",
+                      className="text-muted small")
+    rows = []
+    for a in articles[:20]:
+        score = a.get("final_score", 0) or 0
+        color = "#00c853" if score > 0.05 else ("#d50000" if score < -0.05 else "#90a4ae")
+        rows.append(html.Tr([
+            html.Td((a.get("published_at") or "")[:10], className="text-muted small"),
+            html.Td(dbc.Badge((a.get("source") or "").upper(), color="info",
+                               className="small")),
+            html.Td(html.A(a.get("title", ""), href=a.get("url", "#"),
+                            target="_blank", className="text-light small")),
+            html.Td(html.Span(f"{score:+.2f}", style={"color": color, "fontWeight": "bold"})),
+        ]))
+    return html.Table([html.Tbody(rows)],
+                       className="table table-dark table-sm table-hover w-100 small")
+
+
+def _build_cagr_table(r) -> html.Div:
+    """Render multi-horizon CAGR for revenue / earnings / BPS."""
+    def fmt(v):
+        if v is None: return "—"
+        return f"{v*100:+.1f}%"
+    headers = ["Horizon", "Revenue", "Earnings", "BPS"]
+    rows = [
+        html.Tr([html.Th(h, className="small text-muted") for h in headers]),
+    ]
+    for h in [5, 10, 15]:
+        rev = (r.cagr_revenue or {}).get(h)
+        earn = (r.cagr_earnings or {}).get(h)
+        bps = (r.cagr_bps or {}).get(h)
+        rows.append(html.Tr([
+            html.Td(f"{h}y", className="small text-light fw-bold"),
+            html.Td(fmt(rev), className="small text-light"),
+            html.Td(fmt(earn), className="small text-light"),
+            html.Td(fmt(bps), className="small text-light"),
+        ]))
+    return html.Table(rows, className="table table-dark table-sm w-100 small")
+
+
+def _build_forensic_panel(red_flags) -> html.Div:
+    if not red_flags:
+        return html.P("No forensic red flags detected.",
+                      className="text-success small")
+    items = []
+    for rf in red_flags:
+        color = {"high": "danger", "medium": "warning", "low": "info"}.get(rf.severity, "secondary")
+        items.append(html.Div([
+            dbc.Badge(rf.severity.upper(), color=color, className="me-2"),
+            html.Strong(rf.title, className="text-light small me-2"),
+            html.Span(rf.detail, className="text-muted small"),
+        ], className="mb-2"))
+    return html.Div(items)
+
+
+def _build_strategy_stats(r) -> html.Div:
+    """Long-run ROE trajectory + earnings stability score."""
+    import statistics
+    history = r.history
+    roe_series = [h.return_on_equity for h in history if h.return_on_equity is not None]
+    eg_series = [h.earnings_growth for h in history if h.earnings_growth is not None]
+    de_series = [h.debt_to_equity for h in history if h.debt_to_equity is not None]
+
+    avg_roe = (sum(roe_series) / len(roe_series)) if roe_series else None
+    eg_vol = statistics.stdev(eg_series) if len(eg_series) >= 2 else None
+    latest_de = de_series[-1] if de_series else None
+
+    def fmt_pct(v):
+        return f"{v*100:.1f}%" if v is not None else "—"
+
+    items = [
+        ("Long-run ROE (avg)", fmt_pct(avg_roe)),
+        ("Earnings volatility (stdev YoY)",
+         f"{eg_vol*100:.0f}% — {'high (cyclical)' if eg_vol and eg_vol > 0.5 else 'low (stalwart)' if eg_vol else '—'}"
+         if eg_vol else "—"),
+        ("Latest D/E ratio", f"{latest_de:.0f}%" if latest_de is not None else "—"),
+        ("History points available", f"{len(history)} annual snapshots"),
+    ]
+    return html.Table([html.Tr([html.Td(html.Strong(k), className="small"),
+                                  html.Td(v, className="small text-info")])
+                        for k, v in items],
+                       className="table table-dark table-sm w-100")
+
+
+def _load_prices(db_path: str, ticker: str) -> list[dict]:
+    """Pull all historical prices for a ticker."""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+            SELECT date, adj_close FROM historical_prices
+            WHERE ticker = ? ORDER BY date ASC
+        """, (ticker,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def _generate_devil_advocate(r) -> html.Div:
+    """Claude prompt for bear-case arguments."""
+    from config.settings import CLAUDE_API_KEY
+    try:
+        import anthropic
+        # Build a context dump
+        fr = r.factor_result
+        context = [f"Ticker: {r.ticker} ({r.name})", f"Sector: {r.sector}"]
+        if fr:
+            context.append(f"Composite percentile: {fr.composite_pctile}")
+            context.append(f"V/Q/G/S: {fr.value_pctile}/{fr.quality_pctile}/"
+                            f"{fr.growth_pctile}/{fr.sentiment_pctile}")
+        passed = [s.name for s in r.screen_pass_fail if s.passed]
+        if passed:
+            context.append(f"Passes screens: {', '.join(passed)}")
+        if r.risk_flags:
+            context.append(f"Risk flags: {', '.join(f.label for f in r.risk_flags)}")
+        if r.red_flags:
+            context.append(f"Forensic flags: {', '.join(rf.title for rf in r.red_flags[:4])}")
+        if r.default_dcf:
+            mos = r.default_dcf.margin_of_safety
+            context.append(f"DCF margin of safety: {mos*100:+.0f}%" if mos else "DCF MoS: NA")
+
+        prompt = (
+            "You are a skeptical short-seller. The user is considering BUYING the stock "
+            "described below. Your job is to construct the strongest 3 arguments AGAINST "
+            "this investment. Be specific to this ticker — use the numbers and flags "
+            "provided. Focus on what could go wrong, not generic risks. Avoid hedging.\n\n"
+            "Context:\n" + "\n".join(context) +
+            "\n\nFormat: 3 numbered bullet points, each 2-3 sentences. Plain text, no markdown."
+        )
+        client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        return html.Div([html.P(p, className="text-light small")
+                          for p in text.split("\n") if p.strip()])
+    except Exception as e:
+        return html.P(f"Devil's advocate unavailable: {e}",
+                      className="text-muted small fst-italic")
+
+
+def _report_to_markdown(r, swot_s, swot_w, swot_o, swot_t,
+                         strat_notes, val_notes, thesis) -> str:
+    """Render a markdown export of the report including user notes."""
+    lines = []
+    lines.append(f"# Stock Research Report — {r.ticker}")
+    lines.append("")
+    lines.append(f"**Company**: {r.name}  ")
+    lines.append(f"**Sector**: {r.sector}  ")
+    lines.append(f"**Market cap**: ${r.market_cap/1e9:.1f}B  " if r.market_cap else "**Market cap**: NA  ")
+    lines.append(f"**Current price**: ${r.current_price:.2f}  " if r.current_price else "**Current price**: NA  ")
+    lines.append(f"**Watchlist**: {'Yes' if r.is_watchlist else 'No'}")
+    lines.append("")
+
+    fr = r.factor_result
+    if fr:
+        lines.append("## Factor Percentile Ranks (vs sector)")
+        lines.append(f"- Value: {fr.value_pctile}")
+        lines.append(f"- Quality: {fr.quality_pctile}")
+        lines.append(f"- Growth: {fr.growth_pctile}")
+        lines.append(f"- Sentiment: {fr.sentiment_pctile}")
+        lines.append(f"- **Composite: {fr.composite_pctile}**")
+        lines.append("")
+
+    if r.screen_pass_fail:
+        lines.append("## Screen Pass/Fail")
+        for s in r.screen_pass_fail:
+            mark = "PASS" if s.passed else "FAIL"
+            lines.append(f"- {s.name}: **{mark}**")
+        lines.append("")
+
+    if r.risk_flags:
+        lines.append("## Risk Flags")
+        for f in r.risk_flags:
+            lines.append(f"- {f.severity.upper()}: {f.label}")
+        lines.append("")
+
+    if r.red_flags:
+        lines.append("## Forensic Red Flags")
+        for rf in r.red_flags:
+            lines.append(f"- **{rf.severity.upper()}** — {rf.title}: {rf.detail}")
+        lines.append("")
+
+    lines.append("## SWOT")
+    lines.append(f"### Strengths\n{swot_s or '(none)'}\n")
+    lines.append(f"### Weaknesses\n{swot_w or '(none)'}\n")
+    lines.append(f"### Opportunities\n{swot_o or '(none)'}\n")
+    lines.append(f"### Threats\n{swot_t or '(none)'}\n")
+
+    lines.append("## CAGR")
+    lines.append("| Horizon | Revenue | Earnings | BPS |")
+    lines.append("|---|---|---|---|")
+    for h in [5, 10, 15]:
+        rev = (r.cagr_revenue or {}).get(h)
+        earn = (r.cagr_earnings or {}).get(h)
+        bps = (r.cagr_bps or {}).get(h)
+        def fmt(v): return f"{v*100:+.1f}%" if v is not None else "—"
+        lines.append(f"| {h}y | {fmt(rev)} | {fmt(earn)} | {fmt(bps)} |")
+    lines.append("")
+
+    if r.default_dcf:
+        d = r.default_dcf
+        lines.append("## DCF (default inputs)")
+        lines.append(f"- Intrinsic value per share: ${d.intrinsic_value_per_share:.2f}")
+        lines.append(f"- Current price: ${d.current_price:.2f}")
+        mos = f"{d.margin_of_safety*100:+.0f}%" if d.margin_of_safety is not None else "NA"
+        lines.append(f"- Margin of safety: {mos}")
+        lines.append("")
+
+    if strat_notes:
+        lines.append("## Strategy Notes\n" + strat_notes + "\n")
+    if val_notes:
+        lines.append("## Valuation Notes\n" + val_notes + "\n")
+    if thesis:
+        lines.append("## Investment Thesis\n" + thesis + "\n")
+
+    from datetime import datetime
+    lines.append(f"\n---\n*Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} by hk-sentiment-scraper Stock Research.*")
+    return "\n".join(lines)
