@@ -26,6 +26,7 @@ import dash_bootstrap_components as dbc
 from analysis.dcf import DCFInputs, compute_dcf, sensitivity_table
 from analysis.research_orchestrator import build_research_report
 from dashboard import theme as T
+from dashboard import financial_statement_tables as fst
 from dashboard.charts import (
     multi_year_eps_chart, revenue_yoy_chart, share_count_chart, price_chart,
     historical_multiple_chart, dcf_sensitivity_heatmap, peer_scorecard_heatmap,
@@ -106,6 +107,17 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-revenue-chart", "figure"),
         Output("sr-peer-heatmap", "figure"),
         Output("sr-forensic-flags", "children"),
+        # Section 3b — Financial Statements (charts + source pill + coverage)
+        Output("sr-fs-source-pill", "children"),
+        Output("sr-fs-coverage", "children"),
+        Output("sr-fs-income-chart", "figure"),
+        Output("sr-fs-balance-chart", "figure"),
+        Output("sr-fs-cashflow-chart", "figure"),
+        Output("sr-fs-earnings-chart", "figure"),
+        Output("sr-fs-income-table", "children"),
+        Output("sr-fs-balance-table", "children"),
+        Output("sr-fs-cashflow-table", "children"),
+        Output("sr-fs-earnings-table", "children"),
         Output("sr-strategy-notes", "value"),
         Output("sr-valuation-notes", "value"),
         Output("sr-thesis", "value"),
@@ -129,6 +141,8 @@ def register_stock_research_callbacks(app, db_path: str):
                 "", "", "", "", [], [], {},
                 "(no data)", "", "", "", "", [],
                 [], {}, {}, {}, [],
+                # Section 3b no-data state
+                "", "", {}, {}, {}, {}, "", "", "", "",
                 "", "", "", None,
                 10, 5, 2.5, 9,
             )
@@ -166,6 +180,21 @@ def register_stock_research_callbacks(app, db_path: str):
         peer_fig = peer_scorecard_heatmap(r.peer_scorecard)
         forensic = _build_forensic_panel(r.red_flags)
 
+        # Section 3b: financial statements (income/balance/cashflow/earnings)
+        fs = r.financial_statements or {"income": [], "balance": [], "cashflow": []}
+        fs_source_pill, fs_coverage = _build_fs_meta(fs)
+        income_chart = fst.build_statement_chart("income", fs["income"])
+        balance_chart = fst.build_statement_chart("balance", fs["balance"])
+        cashflow_chart = fst.build_statement_chart("cashflow", fs["cashflow"])
+        earnings_chart = fst.build_earnings_chart(fs["income"])
+        income_table = (fst.build_statement_table("income", fs["income"])
+                         if fs["income"] else fst.build_unavailable_state("income"))
+        balance_table = (fst.build_statement_table("balance", fs["balance"])
+                          if fs["balance"] else fst.build_unavailable_state("balance"))
+        cashflow_table = (fst.build_statement_table("cashflow", fs["cashflow"])
+                           if fs["cashflow"] else fst.build_unavailable_state("cashflow"))
+        earnings_table = fst.build_earnings_table(fs["income"])
+
         # Sections 4 + 5 (period-dependent charts) are handled by a separate,
         # lightweight callback that fires on (ticker, sr-period-select) without
         # re-running FactorScoringEngine.
@@ -197,6 +226,9 @@ def register_stock_research_callbacks(app, db_path: str):
             screen_badges, factor_fig,
             business_summary, s_swot, w_swot, o_swot, t_swot, article_feed,
             cagr_table, eps_fig, rev_fig, peer_fig, forensic,
+            fs_source_pill, fs_coverage,
+            income_chart, balance_chart, cashflow_chart, earnings_chart,
+            income_table, balance_table, cashflow_table, earnings_table,
             strat_notes, val_notes, thesis, status,
             g15, g610, tg, wacc,
         )
@@ -708,6 +740,23 @@ def _coerce_date(v):
 
 def _coerce_date_str(v):
     return _coerce_date(v)
+
+
+def _build_fs_meta(fs: dict) -> tuple:
+    """Return (source_pill, coverage) Spans for Section 3b header."""
+    all_rows = (fs.get("income", []) + fs.get("balance", []) + fs.get("cashflow", []))
+    if not all_rows:
+        return (dbc.Badge("unavailable", color="secondary", className="small"), "")
+    sources = {r.get("source") for r in all_rows if r.get("source")}
+    src_label = "/".join(sorted(sources)) if sources else "unknown"
+    src_color = "info" if src_label == "yfinance" else (
+        "warning" if "akshare" in src_label else "secondary")
+    pill = dbc.Badge(f"source: {src_label}", color=src_color, className="small")
+
+    # Coverage: oldest -> newest period_end_date per statement type
+    n = {k: len(fs.get(k, [])) for k in ("income", "balance", "cashflow")}
+    coverage = f"{n['income']} income · {n['balance']} balance · {n['cashflow']} cashflow periods"
+    return (pill, coverage)
 
 
 def _load_dcf_inputs_only(db_path: str, ticker: str) -> Optional[DCFInputs]:

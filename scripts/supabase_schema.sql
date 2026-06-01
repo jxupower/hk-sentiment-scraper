@@ -71,6 +71,29 @@ CREATE INDEX IF NOT EXISTS idx_fs_ticker_date
 CREATE INDEX IF NOT EXISTS idx_fs_source
     ON fundamentals_snapshots (source);
 
+-- ============== financial_statements ==============
+-- Raw filings: income statement, balance sheet, cash flow per period.
+-- JSONB blob per (ticker, statement_type, period_end_date) so we don't have to
+-- declare ~50 line-item columns per statement type. Line-item names vary
+-- between yfinance (English) and akshare (Chinese) so a fixed schema would
+-- be either huge (50+ NULL-able cols) or lossy. Cache-aside only — populated
+-- on first Research-tab visit to a ticker.
+
+CREATE TABLE IF NOT EXISTS financial_statements (
+    ticker           TEXT          NOT NULL,
+    statement_type   TEXT          NOT NULL,  -- 'income' | 'balance' | 'cashflow'
+    period_end_date  DATE          NOT NULL,
+    period_type      TEXT          NOT NULL,  -- 'annual' | 'semiannual' | 'quarterly'
+    source           TEXT          NOT NULL,  -- 'yfinance' | 'akshare'
+    currency         TEXT,                    -- 'HKD' | 'CNY' | 'USD' etc.
+    line_items       JSONB         NOT NULL,  -- {"Total Revenue": 12345.67, ...}
+    fetched_at       TIMESTAMPTZ   DEFAULT NOW(),
+    PRIMARY KEY (ticker, statement_type, period_end_date, period_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fs_ticker_type
+    ON financial_statements (ticker, statement_type, period_end_date DESC);
+
 -- ============== Smoke-test seed (delete after verifying) ==============
 -- INSERT INTO historical_prices (ticker, date, adj_close)
 --   VALUES ('TEST.HK', CURRENT_DATE, 100.00)

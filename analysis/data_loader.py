@@ -189,6 +189,77 @@ def get_or_fetch_latest_fundamentals(ticker: str, db: Database, *,
     return repo.get_latest(ticker)
 
 
+# ============== Financial statements (income/balance/cashflow) ==============
+
+# Stale rule: refetch when BOTH conditions hold —
+#   (a) cache was filled more than 90 days ago AND
+#   (b) newest period_end_date in cache is older than 180 days
+# 90d alone over-fetches mid-year; 180d alone misses fresh filings during
+# reporting season. The AND combines them so we refetch right after a likely
+# new filing has landed.
+FS_FETCHED_STALE_DAYS = 90
+FS_PERIOD_STALE_DAYS = 180
+
+
+def get_or_fetch_financial_statements(ticker: str, db: Database, *,
+                                       force_refresh: bool = False
+                                       ) -> dict[str, list[dict]]:
+    """Return income/balance/cashflow statements for a ticker.
+    Cache-aside: hits Supabase first, falls back to yfinance + akshare on
+    miss / stale. Returns {'income': [], 'balance': [], 'cashflow': []}
+    on total failure."""
+    from storage.cloud_db import available as cloud_available
+
+    if not cloud_available():
+        # Dev path (USE_CLOUD_DB=false): no cache, fetch every call.
+        log.info("Cloud DB off; fetching financial statements live for %s", ticker)
+        return _fetch_statements_from_sources(ticker)
+
+    from storage.cloud_repository import CloudFinancialStatementsRepository
+    repo = CloudFinancialStatementsRepository()
+
+    if not force_refresh:
+        cached = repo.get_for_ticker(ticker)
+        if _statements_cache_fresh(cached, repo, ticker):
+            return cached
+
+    log.info("Cache-aside fetch: financial statements for %s", ticker)
+    fetched = _fetch_statements_from_sources(ticker)
+    if any(fetched.get(s) for s in ("income", "balance", "cashflow")):
+        repo.upsert_statements(ticker, fetched)
+    return repo.get_for_ticker(ticker)
+
+
+def _fetch_statements_from_sources(ticker: str) -> dict[str, list[dict]]:
+    try:
+        from scrapers.financial_statements_scraper import fetch_statements
+        return fetch_statements(ticker)
+    except Exception as e:
+        log.warning("financial statements scraper failed for %s: %s", ticker, e)
+        return {"income": [], "balance": [], "cashflow": []}
+
+
+def _statements_cache_fresh(cached: dict, repo, ticker: str) -> bool:
+    """Returns False (=refetch) when both staleness gates trip OR cache is empty."""
+    has_any = any(cached.get(s) for s in ("income", "balance", "cashflow"))
+    if not has_any:
+        return False
+    from datetime import date, datetime
+    fetched_at_str = repo.latest_fetched_at(ticker)
+    period_end_str = repo.latest_period_end(ticker)
+    if not fetched_at_str or not period_end_str:
+        return False
+    try:
+        fetched_at = datetime.fromisoformat(fetched_at_str.replace("Z", "+00:00")).date()
+        period_end = datetime.strptime(period_end_str[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return False
+    today = date.today()
+    fetched_old = (today - fetched_at).days > FS_FETCHED_STALE_DAYS
+    period_old = (today - period_end).days > FS_PERIOD_STALE_DAYS
+    return not (fetched_old and period_old)
+
+
 # ============== Cross-table helpers used by analysis modules ==============
 
 def get_universe_fundamentals(db: Database, *,

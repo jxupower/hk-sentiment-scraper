@@ -199,3 +199,91 @@ class CloudHistoricalPricesRepository:
         with cursor() as cur:
             cur.execute("SELECT DISTINCT ticker FROM historical_prices ORDER BY ticker")
             return [r[0] for r in cur.fetchall()]
+
+
+class CloudFinancialStatementsRepository:
+    """Raw income/balance/cashflow statements per ticker. JSONB blob per
+    (ticker, statement_type, period_end_date) — line items vary by source so
+    we don't flatten into columns."""
+
+    def get_for_ticker(self, ticker: str) -> dict[str, list[dict]]:
+        """Return {'income': [...], 'balance': [...], 'cashflow': [...]} with
+        rows sorted newest-first. Empty lists if nothing cached."""
+        out = {"income": [], "balance": [], "cashflow": []}
+        with cursor(dict_rows=True) as cur:
+            cur.execute("""
+                SELECT statement_type, period_end_date, period_type, source,
+                       currency, line_items, fetched_at
+                FROM financial_statements
+                WHERE ticker = %s
+                ORDER BY period_end_date DESC
+            """, (ticker,))
+            for r in cur.fetchall():
+                stype = r["statement_type"]
+                if stype not in out:
+                    continue
+                out[stype].append({
+                    "period_end_date": str(r["period_end_date"]),
+                    "period_type": r["period_type"],
+                    "source": r["source"],
+                    "currency": r["currency"],
+                    "line_items": r["line_items"],   # psycopg2 returns dict for JSONB
+                    "fetched_at": r["fetched_at"].isoformat() if r["fetched_at"] else None,
+                })
+        return out
+
+    def upsert_statements(self, ticker: str,
+                           statements: dict[str, list[dict]]) -> int:
+        """Bulk-upsert all rows across all three statement types. Each row in
+        the input dict-of-lists is one period; line_items goes to JSONB."""
+        from psycopg2.extras import execute_values, Json
+        rows: list[tuple] = []
+        for stype, period_rows in statements.items():
+            for r in period_rows:
+                rows.append((
+                    ticker,
+                    stype,
+                    r["period_end_date"],
+                    r.get("period_type") or "annual",
+                    r.get("source") or "unknown",
+                    r.get("currency"),
+                    Json(r.get("line_items") or {}),
+                ))
+        if not rows:
+            return 0
+        sql = """
+            INSERT INTO financial_statements
+                (ticker, statement_type, period_end_date, period_type,
+                 source, currency, line_items)
+            VALUES %s
+            ON CONFLICT (ticker, statement_type, period_end_date, period_type)
+            DO UPDATE SET
+                source = EXCLUDED.source,
+                currency = EXCLUDED.currency,
+                line_items = EXCLUDED.line_items,
+                fetched_at = NOW()
+        """
+        with cursor() as cur:
+            execute_values(cur, sql, rows, page_size=500)
+        return len(rows)
+
+    def latest_fetched_at(self, ticker: str) -> Optional[str]:
+        """Most recent fetched_at across all this ticker's statement rows.
+        Used by the data_loader to decide if the cache is stale."""
+        with cursor() as cur:
+            cur.execute(
+                "SELECT MAX(fetched_at) FROM financial_statements WHERE ticker = %s",
+                (ticker,)
+            )
+            row = cur.fetchone()
+            return row[0].isoformat() if row and row[0] else None
+
+    def latest_period_end(self, ticker: str) -> Optional[str]:
+        """Newest period_end_date across all this ticker's statements."""
+        with cursor() as cur:
+            cur.execute(
+                "SELECT MAX(period_end_date) FROM financial_statements WHERE ticker = %s",
+                (ticker,)
+            )
+            row = cur.fetchone()
+            return str(row[0]) if row and row[0] else None

@@ -87,6 +87,13 @@ class ResearchReport:
 
     # Section 6 — Notes & Review (handled via saved_notes)
 
+    # Section 3b — Raw financial statements (income / balance / cashflow).
+    # Defaulted so old call sites that don't pass it (or fixtures) still work.
+    # Newest-first per statement_type, one dict per period with line_items.
+    financial_statements: dict = field(default_factory=lambda: {
+        "income": [], "balance": [], "cashflow": []
+    })
+
 
 def build_research_report(ticker: str, db_path: str,
                           sector_risk_path: Optional[str] = None,
@@ -241,7 +248,21 @@ def build_research_report(ticker: str, db_path: str,
         peer_scorecard=peer_scorecard,
         default_dcf=default_dcf,
         dcf_inputs_default=dcf_inputs_default,
+        financial_statements=_load_financial_statements(ticker, db),
     )
+
+
+def _load_financial_statements(ticker: str, db) -> dict:
+    """Wrap the cache-aside loader so a fetch failure doesn't crash the whole
+    report. Section 3b will render an 'unavailable' state on empty dict."""
+    try:
+        from analysis.data_loader import get_or_fetch_financial_statements
+        return get_or_fetch_financial_statements(ticker, db)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Financial statements fetch failed [%s]: %s",
+                                              ticker, e)
+        return {"income": [], "balance": [], "cashflow": []}
 
 
 def _to_float(v):
