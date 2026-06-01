@@ -73,37 +73,20 @@ def _finite(v) -> Optional[float]:
 def build_peer_scorecard(ticker: str, db_path: str,
                          top_n_peers: int = 10) -> Optional[PeerScorecard]:
     """Construct a per-metric comparison vs the target's yfinance sector peers."""
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        target_row = conn.execute("""
-            SELECT f.*, s.name, s.yf_sector, s.watchlist_sector
-            FROM fundamentals_snapshots f
-            INNER JOIN (
-                SELECT ticker, MAX(snapshot_date) AS max_date
-                FROM fundamentals_snapshots GROUP BY ticker
-            ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
-            INNER JOIN securities s ON f.ticker = s.ticker
-            WHERE f.ticker = ?
-        """, (ticker,)).fetchone()
+    from analysis.data_loader import get_universe_fundamentals
+    from storage.database import Database
 
-        if not target_row:
-            return None
-        target_row = dict(target_row)
-        sector = target_row.get("yf_sector") or target_row.get("watchlist_sector")
-        if not sector:
-            return None
-
-        peer_rows = conn.execute("""
-            SELECT f.*, s.name, s.yf_sector
-            FROM fundamentals_snapshots f
-            INNER JOIN (
-                SELECT ticker, MAX(snapshot_date) AS max_date
-                FROM fundamentals_snapshots GROUP BY ticker
-            ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
-            INNER JOIN securities s ON f.ticker = s.ticker
-            WHERE s.is_active = 1 AND s.yf_sector = ? AND f.ticker <> ?
-        """, (sector, ticker)).fetchall()
-        peer_rows = [dict(r) for r in peer_rows]
+    # One universe pull, then filter client-side. Avoids two separate
+    # cloud round-trips for target+peers.
+    universe = get_universe_fundamentals(Database(db_path))
+    target_row = next((r for r in universe if r["ticker"] == ticker), None)
+    if not target_row:
+        return None
+    sector = target_row.get("yf_sector") or target_row.get("watchlist_sector")
+    if not sector:
+        return None
+    peer_rows = [r for r in universe
+                  if r.get("yf_sector") == sector and r["ticker"] != ticker]
 
     scorecard = PeerScorecard(
         target_ticker=ticker,

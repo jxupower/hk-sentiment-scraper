@@ -100,7 +100,7 @@ def _register_run_callback(app, db_path: str, sector_risk_path: str, screen):
                          html.Td(pct(result.max_drawdown))]),
                 html.Tr([html.Td(html.Strong("Hit rate (beat bench)")),
                          html.Td(pct(result.hit_rate))]),
-            ], className="table table-dark table-sm w-auto small"),
+            ], className="table table-sm w-auto small"),
         ])
 
 

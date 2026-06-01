@@ -340,19 +340,9 @@ def run_screen(db_path: str, screen: ScreenDefinition,
     the dashboard. The optimizer / backtest engine pass custom params."""
     use_params = params if params is not None else screen.default_params
     flagged = _load_flagged_tickers(sector_risk_path)
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-            SELECT f.*, s.name, s.is_watchlist, s.yf_sector, s.watchlist_sector
-            FROM fundamentals_snapshots f
-            INNER JOIN (
-                SELECT ticker, MAX(snapshot_date) AS max_date
-                FROM fundamentals_snapshots GROUP BY ticker
-            ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
-            INNER JOIN securities s ON f.ticker = s.ticker
-            WHERE s.is_active = 1
-        """).fetchall()
-        rows = [dict(r) for r in rows]
+    from analysis.data_loader import get_universe_fundamentals
+    from storage.database import Database
+    rows = get_universe_fundamentals(Database(db_path))
 
     results: list[ScreenResult] = []
     for row in rows:

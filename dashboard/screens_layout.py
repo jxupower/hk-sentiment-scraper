@@ -2,8 +2,7 @@ from dash import dcc, html, dash_table
 import dash_bootstrap_components as dbc
 
 from analysis.screens import BUILTIN_SCREENS
-
-CARD_STYLE = {"background": "#1a1a2e", "border": "1px solid #37474f"}
+from dashboard import theme as T
 
 
 def build_screens_tab() -> html.Div:
@@ -18,7 +17,6 @@ def build_screens_tab() -> html.Div:
             "Compare with the Discovery tab (percentile ranks) to see how the two approaches differ.",
         ], color="info", className="small mb-3", dismissable=True),
 
-        # One tab per screen
         dbc.Tabs(
             id="screen-subtabs",
             active_tab="screen-tab-value",
@@ -27,8 +25,6 @@ def build_screens_tab() -> html.Div:
                 dbc.Tab(
                     label=screen.name,
                     tab_id=f"screen-tab-{screen.id}",
-                    labelClassName="text-light",
-                    active_label_style={"color": "#90caf9", "fontWeight": "bold"},
                     children=_build_screen_subtab(screen),
                 )
                 for screen in BUILTIN_SCREENS
@@ -41,29 +37,33 @@ def _build_screen_subtab(screen) -> html.Div:
     return html.Div([
         dbc.Card([
             dbc.CardHeader([
-                html.Span(screen.name, className="fw-bold me-2"),
+                html.Span(screen.name, style={"fontWeight": "600",
+                                                "marginRight": "10px"}),
                 html.Span(id=f"screen-{screen.id}-count",
-                          className="text-info small"),
+                          style={"color": T.PRIMARY, "fontWeight": "600",
+                                 "fontSize": "0.85rem"}),
             ]),
             dbc.CardBody([
-                html.P(screen.long_description, className="text-light small mb-3"),
+                html.P(screen.long_description,
+                       style={"color": T.TEXT, "fontSize": "0.9rem",
+                              "lineHeight": "1.6", "marginBottom": "12px"}),
                 html.P([
-                    html.Strong("Note: ", className="text-warning small"),
+                    html.Strong("Note: ", style={"color": T.WARNING}),
                     html.Span(
                         "Pass/fail screens are coarser than percentile ranking — "
                         "a stock just outside a threshold won't appear. Use Discovery "
                         "for nuanced ranking, Screens for confidence.",
-                        className="text-muted small"
-                    ),
-                ], className="mb-2"),
-            ], style={"padding": "12px 16px"}),
-        ], style=CARD_STYLE, className="mb-3"),
+                        style={"color": T.TEXT_MUTED, "fontSize": "0.85rem"}),
+                ]),
+            ]),
+        ], style=T.CARD_STYLE, className="mb-3"),
 
         dbc.Card([
             dbc.CardHeader([
-                html.Span("Matching Tickers", className="fw-bold small me-2"),
+                html.Span("Matching Tickers",
+                          style={"fontWeight": "600", "marginRight": "10px"}),
                 html.Span(id=f"screen-{screen.id}-meta",
-                          className="text-muted small"),
+                          style={"color": T.TEXT_MUTED, "fontSize": "0.85rem"}),
             ]),
             dbc.CardBody([
                 dash_table.DataTable(
@@ -85,31 +85,25 @@ def _build_screen_subtab(screen) -> html.Div:
                     page_size=25,
                     sort_action="native",
                     filter_action="native",
-                    style_cell={
-                        "backgroundColor": "#16213e", "color": "#eceff1",
-                        "fontSize": "0.78rem", "padding": "5px 7px",
-                        "fontFamily": "monospace", "textAlign": "right",
-                    },
+                    style_cell=T.DATATABLE_CELL,
                     style_cell_conditional=[
-                        {"if": {"column_id": "ticker"}, "textAlign": "left"},
+                        {"if": {"column_id": "ticker"}, "textAlign": "left",
+                         "fontWeight": "600", "color": T.PRIMARY},
                         {"if": {"column_id": "name"}, "textAlign": "left",
-                         "fontFamily": "inherit"},
+                         "fontFamily": "Inter, sans-serif"},
                         {"if": {"column_id": "sector"}, "textAlign": "left",
-                         "fontFamily": "inherit"},
+                         "fontFamily": "Inter, sans-serif", "color": T.TEXT_MUTED},
                         {"if": {"column_id": "status_badge"}, "textAlign": "center"},
                     ],
-                    style_header={
-                        "backgroundColor": "#1a1a2e", "color": "#90caf9",
-                        "fontWeight": "bold", "fontSize": "0.72rem",
-                    },
+                    style_header=T.DATATABLE_HEADER,
                     style_data_conditional=[
                         {"if": {"filter_query": '{status_badge} contains "★"'},
-                         "backgroundColor": "#1f2942"},
+                         "backgroundColor": T.PRIMARY_SOFT},
                         {"if": {"filter_query": '{status_badge} contains "FLAG"'},
-                         "backgroundColor": "#2a1810"},
+                         "backgroundColor": T.WARNING_SOFT},
                     ],
-                    style_filter={"backgroundColor": "#0f1a2e", "color": "#eceff1"},
+                    style_filter=T.DATATABLE_FILTER,
                 ),
             ]),
-        ], style=CARD_STYLE),
+        ], style=T.CARD_STYLE),
     ])

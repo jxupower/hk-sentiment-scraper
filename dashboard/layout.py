@@ -1,6 +1,7 @@
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
+from dashboard import theme as T
 from dashboard.screener_layout import build_screener_tab
 from dashboard.recommendations_layout import build_recommendations_tab
 from dashboard.screens_layout import build_screens_tab
@@ -14,32 +15,20 @@ def build_layout(sectors: list[str]) -> html.Div:
         dbc.Container([
             dbc.Tabs([
                 dbc.Tab(label="Sentiment", tab_id="tab-sentiment",
-                        children=_sentiment_tab(sectors),
-                        labelClassName="text-light",
-                        active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
+                        children=_sentiment_tab(sectors)),
                 dbc.Tab(label="Screener", tab_id="tab-screener",
-                        children=build_screener_tab(),
-                        labelClassName="text-light",
-                        active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
+                        children=build_screener_tab()),
                 dbc.Tab(label="Discovery", tab_id="tab-recommendations",
-                        children=build_recommendations_tab(),
-                        labelClassName="text-light",
-                        active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
+                        children=build_recommendations_tab()),
                 dbc.Tab(label="Screens", tab_id="tab-screens",
-                        children=build_screens_tab(),
-                        labelClassName="text-light",
-                        active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
+                        children=build_screens_tab()),
                 dbc.Tab(label="Backtest", tab_id="tab-backtest",
-                        children=build_backtest_tab(),
-                        labelClassName="text-light",
-                        active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
+                        children=build_backtest_tab()),
                 dbc.Tab(label="Stock Research", tab_id="tab-stock-research",
-                        children=build_stock_research_tab(),
-                        labelClassName="text-light",
-                        active_label_style={"color": "#90caf9", "fontWeight": "bold"}),
-            ], id="main-tabs", active_tab="tab-sentiment", className="mb-3"),
-        ], fluid=True, className="py-3"),
-    ], style={"background": "#0f0f23", "minHeight": "100vh"})
+                        children=build_stock_research_tab()),
+            ], id="main-tabs", active_tab="tab-sentiment", className="mb-4"),
+        ], fluid=True, className="py-3", style={"maxWidth": "1600px"}),
+    ], style={"background": T.BG, "minHeight": "100vh"})
 
 
 def _sentiment_tab(sectors: list[str]) -> html.Div:
@@ -73,79 +62,86 @@ def _sentiment_tab(sectors: list[str]) -> html.Div:
 
 
 def _header_bar():
-    return dbc.Navbar(
+    return html.Div([
         dbc.Container([
             dbc.Row([
-                dbc.Col(html.Span(
-                    "HK & China Market Sentiment", className="text-white fw-bold fs-4"
-                )),
                 dbc.Col([
-                    html.Span("Last updated: ", className="text-muted small me-1"),
-                    html.Span(id="last-updated", className="text-info small"),
+                    html.Span("HK Research", style={
+                        "color": T.PRIMARY, "fontWeight": "800", "fontSize": "1.5rem",
+                        "letterSpacing": "-0.02em",
+                    }),
+                    html.Span(" · Sentiment + Fundamentals + Backtest", style={
+                        "color": T.TEXT_MUTED, "fontWeight": "500", "fontSize": "0.95rem",
+                        "marginLeft": "8px",
+                    }),
+                ]),
+                dbc.Col([
+                    html.Span("Last updated: ",
+                              style={"color": T.TEXT_FAINT, "fontSize": "0.8rem"}),
+                    html.Span(id="last-updated",
+                              style={"color": T.PRIMARY, "fontSize": "0.8rem",
+                                     "fontWeight": "500"}),
                 ], className="text-end"),
             ], align="center", className="w-100"),
-        ], fluid=True),
-        color="#1a1a2e",
-        dark=True,
-        className="mb-3 border-bottom border-secondary",
-    )
+        ], fluid=True, style={"maxWidth": "1600px"}),
+    ], style={
+        "background": T.CARD_BG,
+        "borderBottom": f"1px solid {T.BORDER}",
+        "padding": "16px 0",
+        "marginBottom": "8px",
+    })
 
 
 def _controls_panel():
     return dbc.Card([
-        dbc.CardHeader("Controls", className="fw-bold small"),
+        dbc.CardHeader("Controls"),
         dbc.CardBody([
             dbc.Button("Refresh Now", id="refresh-btn", color="primary",
                        size="sm", className="w-100 mb-3"),
-            html.Div(id="scraper-status", className="small"),
+            html.Div(id="scraper-status",
+                     style={"fontSize": T.FONT_SM, "color": T.TEXT_MUTED}),
         ]),
-    ], style={"background": "#1a1a2e", "border": "1px solid #37474f"})
+    ], style=T.CARD_STYLE)
 
 
 def _sector_detail_panel():
     """Sector detail panel -- all components always in the DOM."""
     placeholder = html.P("Click a sector card above to see detailed analysis.",
-                         className="text-muted text-center py-4")
+                         style={"color": T.TEXT_MUTED, "textAlign": "center",
+                                "padding": "32px 0"})
     return dbc.Card([
         dbc.CardHeader([
             dbc.Row([
-                dbc.Col(html.Span(id="sector-detail-title",
-                                  children="Sector Detail",
-                                  className="fw-bold fs-5 text-light")),
+                dbc.Col(html.Span(id="sector-detail-title", children="Sector Detail",
+                                  style={"fontWeight": "600", "fontSize": "1.1rem",
+                                         "color": T.TEXT})),
                 dbc.Col([
                     dbc.Badge(id="sector-direction-badge", children="--",
-                              color="secondary", className="fs-6 me-2"),
-                    html.Span(id="sector-confidence-text", className="text-muted small"),
+                              color="secondary", className="me-2",
+                              style={"fontSize": "0.85rem"}),
+                    html.Span(id="sector-confidence-text",
+                              style={"color": T.TEXT_MUTED, "fontSize": T.FONT_SM}),
                     html.Br(),
-                    html.Span(id="sector-signal-updated", className="text-muted",
-                              style={"fontSize": "0.7rem"}),
+                    html.Span(id="sector-signal-updated",
+                              style={"color": T.TEXT_FAINT, "fontSize": "0.7rem"}),
                 ], className="text-end"),
             ], align="center"),
         ]),
         dbc.CardBody([
-            # Placeholder shown before any sector is selected
             html.Div(id="sector-detail-placeholder", children=placeholder),
-
-            # All detail content (hidden until a sector is selected)
             html.Div(id="sector-detail-content", style={"display": "none"}, children=[
-                # Top row: gauge + source pie
                 dbc.Row([
                     dbc.Col(dcc.Graph(id="sector-gauge",
-                                     config={"displayModeBar": False},
-                                     figure={}), width=5),
+                                     config={"displayModeBar": False}, figure={}),
+                            width=5),
                     dbc.Col(dcc.Graph(id="sector-source-pie",
-                                     config={"displayModeBar": False},
-                                     figure={}), width=7),
+                                     config={"displayModeBar": False}, figure={}),
+                            width=7),
                 ], className="mb-3"),
-
-                # Sector sentiment timeseries
                 dcc.Graph(id="sector-sentiment-ts",
                           config={"displayModeBar": False}, figure={}),
-
-                # Ticker breakdown within sector
                 dbc.Card([
-                    dbc.CardHeader("Ticker Breakdown (within sector)",
-                                  className="fw-bold small"),
+                    dbc.CardHeader("Ticker Breakdown (within sector)"),
                     dbc.CardBody([
                         dbc.Row([
                             dbc.Col(dcc.Graph(id="ticker-breakdown-bar",
@@ -154,26 +150,18 @@ def _sector_detail_panel():
                             dbc.Col(html.Div(id="ticker-rows"), width=7),
                         ]),
                     ]),
-                ], className="mb-3",
-                   style={"background": "#16213e", "border": "1px solid #37474f"}),
-
-                # AI-generated sector analysis
+                ], className="mb-3", style=T.CARD_STYLE_SOFT),
                 dbc.Card([
-                    dbc.CardHeader("AI Sector Analysis", className="fw-bold small"),
+                    dbc.CardHeader("AI Sector Analysis"),
                     dbc.CardBody(
-                        dcc.Loading(
-                            html.Div(id="sector-ai-analysis"),
-                            type="dot", color="#00c853",
-                        )
+                        dcc.Loading(html.Div(id="sector-ai-analysis"),
+                                    type="dot", color=T.PRIMARY)
                     ),
-                ], className="mb-3",
-                   style={"background": "#16213e", "border": "1px solid #37474f"}),
-
-                # Article feed for this sector
+                ], className="mb-3", style=T.CARD_STYLE_SOFT),
                 dbc.Card([
-                    dbc.CardHeader("Recent Articles", className="fw-bold small"),
+                    dbc.CardHeader("Recent Articles"),
                     dbc.CardBody(html.Div(id="sector-article-feed")),
-                ], style={"background": "#16213e", "border": "1px solid #37474f"}),
+                ], style=T.CARD_STYLE_SOFT),
             ]),
         ]),
-    ], style={"background": "#1a1a2e", "border": "1px solid #37474f"})
+    ], style=T.CARD_STYLE)

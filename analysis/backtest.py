@@ -232,30 +232,18 @@ class BacktestEngine:
         """Latest fundamentals snapshot per ticker at-or-before (rebalance - lag)."""
         cutoff = (datetime.strptime(rebalance_date, "%Y-%m-%d").date()
                   - timedelta(days=self.lag_days)).strftime("%Y-%m-%d")
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("""
-                SELECT f.*, s.name, s.is_watchlist, s.yf_sector, s.watchlist_sector
-                FROM fundamentals_snapshots f
-                INNER JOIN (
-                    SELECT ticker, MAX(snapshot_date) AS max_date
-                    FROM fundamentals_snapshots
-                    WHERE snapshot_date <= ?
-                    GROUP BY ticker
-                ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
-                INNER JOIN securities s ON f.ticker = s.ticker
-                WHERE s.is_active = 1
-            """, (cutoff,)).fetchall()
-            return [dict(r) for r in rows]
+        from analysis.data_loader import get_universe_fundamentals
+        from storage.database import Database
+        return get_universe_fundamentals(Database(self.db_path), as_of_date=cutoff)
 
     def _price_on_or_before(self, ticker: str, target_date: str) -> Optional[float]:
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute("""
-                SELECT adj_close FROM historical_prices
-                WHERE ticker = ? AND date <= ?
-                ORDER BY date DESC LIMIT 1
-            """, (ticker, target_date)).fetchone()
-            return row[0] if row else None
+        """As-of price lookup. Backtest calls this in a tight loop — for cloud
+        backend each call is ~80ms RTT through the SG pooler. If you need
+        max speed, bulk-load all prices once via bulk_get_prices + cache them
+        in memory before the loop (TODO: not yet implemented at the call sites)."""
+        from analysis.data_loader import get_price_on_or_before
+        from storage.database import Database
+        return get_price_on_or_before(Database(self.db_path), ticker, target_date)
 
     def _enrich(self, snapshot: dict, price: float) -> dict:
         """Derive trailing_pe, price_to_book, market_cap from per-share + as-of price

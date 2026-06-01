@@ -25,8 +25,9 @@ import dash_bootstrap_components as dbc
 
 from analysis.dcf import DCFInputs, compute_dcf, sensitivity_table
 from analysis.research_orchestrator import build_research_report
+from dashboard import theme as T
 from dashboard.charts import (
-    multi_year_eps_chart, revenue_yoy_chart, share_count_chart,
+    multi_year_eps_chart, revenue_yoy_chart, share_count_chart, price_chart,
     historical_multiple_chart, dcf_sensitivity_heatmap, peer_scorecard_heatmap,
 )
 
@@ -105,11 +106,7 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-revenue-chart", "figure"),
         Output("sr-peer-heatmap", "figure"),
         Output("sr-forensic-flags", "children"),
-        Output("sr-shares-chart", "figure"),
-        Output("sr-strategy-stats", "children"),
         Output("sr-strategy-notes", "value"),
-        Output("sr-pe-history", "figure"),
-        Output("sr-pb-history", "figure"),
         Output("sr-valuation-notes", "value"),
         Output("sr-thesis", "value"),
         Output("sr-status-select", "value"),
@@ -131,7 +128,8 @@ def register_stock_research_callbacks(app, db_path: str):
                 {"display": "block"}, {"display": "none"},
                 "", "", "", "", [], [], {},
                 "(no data)", "", "", "", "", [],
-                [], {}, {}, {}, [], {}, [], "", {}, {}, "", "", None,
+                [], {}, {}, {}, [],
+                "", "", "", None,
                 10, 5, 2.5, 9,
             )
 
@@ -168,14 +166,9 @@ def register_stock_research_callbacks(app, db_path: str):
         peer_fig = peer_scorecard_heatmap(r.peer_scorecard)
         forensic = _build_forensic_panel(r.red_flags)
 
-        # Section 4: shares chart + strategy stats
-        shares_fig = share_count_chart(r.history)
-        strat_stats = _build_strategy_stats(r)
-
-        # Section 5: valuation history + initial DCF
-        prices = _load_prices(db_path, ticker)
-        pe_fig = historical_multiple_chart(r.history, prices, "pe")
-        pb_fig = historical_multiple_chart(r.history, prices, "pb")
+        # Sections 4 + 5 (period-dependent charts) are handled by a separate,
+        # lightweight callback that fires on (ticker, sr-period-select) without
+        # re-running FactorScoringEngine.
 
         # Pre-fill saved notes if any
         saved = r.saved_notes or {}
@@ -204,10 +197,69 @@ def register_stock_research_callbacks(app, db_path: str):
             screen_badges, factor_fig,
             business_summary, s_swot, w_swot, o_swot, t_swot, article_feed,
             cagr_table, eps_fig, rev_fig, peer_fig, forensic,
-            shares_fig, strat_stats, strat_notes,
-            pe_fig, pb_fig, val_notes, thesis, status,
+            strat_notes, val_notes, thesis, status,
             g15, g610, tg, wacc,
         )
+
+    # ----- Period-driven charts (Sections 4 + 5) -----
+    # Fires on ticker change AND period selector change. Does NOT call
+    # build_research_report — only loads cheap per-ticker data (annual history +
+    # daily prices). Keeps period changes snappy and lets new stocks (<1y) still
+    # render their available data instead of empty annual charts.
+    @app.callback(
+        Output("sr-price-chart", "figure"),
+        Output("sr-price-summary", "children"),
+        Output("sr-shares-chart", "figure"),
+        Output("sr-strategy-stats", "children"),
+        Output("sr-pe-history", "figure"),
+        Output("sr-pb-history", "figure"),
+        Output("sr-period-coverage", "children"),
+        Input("sr-ticker-select", "value"),
+        Input("sr-period-select", "value"),
+        Input("sr-load-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def update_period_charts(ticker, period_days, _clicks):
+        if not ticker:
+            return {}, "", {}, "", {}, {}, ""
+
+        history = _load_history(db_path, ticker)
+        prices_all = _load_prices(db_path, ticker)
+
+        # MAX (period_days == 0) → no clipping
+        cutoff_iso = None
+        if period_days and prices_all:
+            from datetime import datetime, timedelta
+            # Anchor cutoff to the LAST available price date, not "today" —
+            # otherwise a ticker that stopped trading or has stale data shows
+            # an empty chart for short windows.
+            last_date = max(p["date"] for p in prices_all if p.get("date"))
+            try:
+                last_dt = datetime.fromisoformat(last_date[:10])
+                cutoff_iso = (last_dt - timedelta(days=period_days)).isoformat()[:10]
+            except (ValueError, TypeError):
+                cutoff_iso = None
+
+        prices_window = ([p for p in prices_all if p["date"] >= cutoff_iso]
+                         if cutoff_iso else prices_all)
+        history_window = ([h for h in history if h.date >= cutoff_iso]
+                          if cutoff_iso else history)
+
+        # Charts
+        price_fig = price_chart(prices_window, label=f"{ticker}")
+        price_summary = _build_price_summary(prices_window)
+        shares_fig = share_count_chart(history_window)
+        strategy_stats = _build_strategy_stats_window(history_window, prices_window)
+        pe_fig = historical_multiple_chart(history, prices_all, "pe",
+                                            min_date=cutoff_iso)
+        pb_fig = historical_multiple_chart(history, prices_all, "pb",
+                                            min_date=cutoff_iso)
+
+        coverage = _build_coverage_text(prices_all, history, prices_window,
+                                         history_window, period_days)
+
+        return (price_fig, price_summary, shares_fig, strategy_stats,
+                pe_fig, pb_fig, coverage)
 
     # ----- DCF live recomputation on slider change -----
     # Performance critical: this fires on every slider tick, AND fires 4 times
@@ -253,7 +305,8 @@ def register_stock_research_callbacks(app, db_path: str):
             html.Span(f"${result.intrinsic_value_per_share:.2f}",
                       className="text-info fw-bold fs-5 me-3"),
             html.Strong("Current price: ", className="me-1"),
-            html.Span(f"${result.current_price:.2f}", className="text-light me-3"),
+            html.Span(f"${result.current_price:.2f}",
+                      style={"color": T.TEXT, "marginRight": "0.75rem"}),
             html.Strong("Margin of safety: ", className="me-1"),
             dbc.Badge(mos_str, color=mos_color, className="fs-6"),
             html.P(f"(EV: ${result.enterprise_value/1e9:.1f}B over "
@@ -356,17 +409,18 @@ def _factor_bar_chart(fr) -> go.Figure:
     metrics = ["Value", "Quality", "Growth", "Sentiment"]
     values = [fr.value_pctile or 0, fr.quality_pctile or 0,
               fr.growth_pctile or 0, fr.sentiment_pctile or 0]
-    colors = ["#00c853" if v >= 70 else ("#ff8a65" if v < 30 else "#90caf9") for v in values]
+    colors = [T.SUCCESS if v >= 70 else (T.WARNING if v < 30 else T.INFO) for v in values]
     fig = go.Figure(go.Bar(x=values, y=metrics, orientation="h",
-                            marker_color=colors,
+                            marker_color=colors, marker_line_width=0,
                             text=[f"{v:.0f}" if v else "NA" for v in values],
                             textposition="outside"))
-    fig.add_vline(x=50, line_dash="dot", line_color="#607d8b")
-    fig.update_layout(paper_bgcolor="#1a1a2e", plot_bgcolor="#16213e",
-                       font=dict(color="#eceff1", size=11),
-                       title="Factor percentile ranks (vs sector peers)",
-                       xaxis=dict(range=[0, 100]),
-                       height=200, margin=dict(t=40, b=30, l=80, r=20))
+    fig.add_vline(x=50, line_dash="dot", line_color=T.TEXT_MUTED)
+    fig.update_layout(**T.chart_layout(
+        title="Factor percentile ranks (vs sector peers)",
+        xaxis=dict(range=[0, 100], gridcolor=T.BORDER, linecolor=T.BORDER,
+                   tickfont=dict(color=T.TEXT_MUTED)),
+        height=200, margin=dict(t=40, b=30, l=80, r=20),
+    ))
     return fig
 
 
@@ -401,7 +455,8 @@ def _build_business_summary(r) -> html.Div:
             messages=[{"role": "user", "content": prompt}],
         )
         text = resp.content[0].text.strip()
-        return html.Div([html.P(p, className="text-light small")
+        return html.Div([html.P(p, style={"color": T.TEXT, "fontSize": "0.85rem",
+                                          "marginBottom": "0.5rem"})
                           for p in text.split("\n") if p.strip()])
     except Exception as e:
         return html.P(f"AI summary unavailable: {e}",
@@ -447,17 +502,18 @@ def _build_article_feed(articles: list) -> html.Div:
     rows = []
     for a in articles[:20]:
         score = a.get("final_score", 0) or 0
-        color = "#00c853" if score > 0.05 else ("#d50000" if score < -0.05 else "#90a4ae")
+        color = T.SUCCESS if score > 0.05 else (T.DANGER if score < -0.05 else T.TEXT_FAINT)
         rows.append(html.Tr([
             html.Td((a.get("published_at") or "")[:10], className="text-muted small"),
             html.Td(dbc.Badge((a.get("source") or "").upper(), color="info",
                                className="small")),
-            html.Td(html.A(a.get("title", ""), href=a.get("url", "#"),
-                            target="_blank", className="text-light small")),
+            html.Td(html.A(a.get("title", ""), href=a.get("url", "#"), target="_blank",
+                            style={"color": T.PRIMARY, "fontSize": "0.85rem",
+                                   "textDecoration": "none"})),
             html.Td(html.Span(f"{score:+.2f}", style={"color": color, "fontWeight": "bold"})),
         ]))
     return html.Table([html.Tbody(rows)],
-                       className="table table-dark table-sm table-hover w-100 small")
+                       className="table table-sm table-hover w-100 small")
 
 
 def _build_cagr_table(r) -> html.Div:
@@ -474,12 +530,13 @@ def _build_cagr_table(r) -> html.Div:
         earn = (r.cagr_earnings or {}).get(h)
         bps = (r.cagr_bps or {}).get(h)
         rows.append(html.Tr([
-            html.Td(f"{h}y", className="small text-light fw-bold"),
-            html.Td(fmt(rev), className="small text-light"),
-            html.Td(fmt(earn), className="small text-light"),
-            html.Td(fmt(bps), className="small text-light"),
+            html.Td(f"{h}y", className="small fw-bold",
+                    style={"color": T.TEXT}),
+            html.Td(fmt(rev), className="small", style={"color": T.TEXT}),
+            html.Td(fmt(earn), className="small", style={"color": T.TEXT}),
+            html.Td(fmt(bps), className="small", style={"color": T.TEXT}),
         ]))
-    return html.Table(rows, className="table table-dark table-sm w-100 small")
+    return html.Table(rows, className="table table-sm w-100 small")
 
 
 def _build_forensic_panel(red_flags) -> html.Div:
@@ -491,19 +548,26 @@ def _build_forensic_panel(red_flags) -> html.Div:
         color = {"high": "danger", "medium": "warning", "low": "info"}.get(rf.severity, "secondary")
         items.append(html.Div([
             dbc.Badge(rf.severity.upper(), color=color, className="me-2"),
-            html.Strong(rf.title, className="text-light small me-2"),
+            html.Strong(rf.title, className="small me-2",
+                        style={"color": T.TEXT}),
             html.Span(rf.detail, className="text-muted small"),
         ], className="mb-2"))
     return html.Div(items)
 
 
-def _build_strategy_stats(r) -> html.Div:
-    """Long-run ROE trajectory + earnings stability score."""
+def _build_strategy_stats_window(history_window: list,
+                                  prices_window: list) -> html.Div:
+    """Annual-fundamental stats (ROE / earnings vol / D/E) scoped to the
+    selected period, plus price return for the same window. Designed to be
+    informative even when the window holds zero annual snapshots — common
+    for new IPOs or short look-backs."""
     import statistics
-    history = r.history
-    roe_series = [h.return_on_equity for h in history if h.return_on_equity is not None]
-    eg_series = [h.earnings_growth for h in history if h.earnings_growth is not None]
-    de_series = [h.debt_to_equity for h in history if h.debt_to_equity is not None]
+    roe_series = [h.return_on_equity for h in history_window
+                  if h.return_on_equity is not None]
+    eg_series = [h.earnings_growth for h in history_window
+                 if h.earnings_growth is not None]
+    de_series = [h.debt_to_equity for h in history_window
+                 if h.debt_to_equity is not None]
 
     avg_roe = (sum(roe_series) / len(roe_series)) if roe_series else None
     eg_vol = statistics.stdev(eg_series) if len(eg_series) >= 2 else None
@@ -512,67 +576,204 @@ def _build_strategy_stats(r) -> html.Div:
     def fmt_pct(v):
         return f"{v*100:.1f}%" if v is not None else "—"
 
-    items = [
-        ("Long-run ROE (avg)", fmt_pct(avg_roe)),
-        ("Earnings volatility (stdev YoY)",
-         f"{eg_vol*100:.0f}% — {'high (cyclical)' if eg_vol and eg_vol > 0.5 else 'low (stalwart)' if eg_vol else '—'}"
-         if eg_vol else "—"),
-        ("Latest D/E ratio", f"{latest_de:.0f}%" if latest_de is not None else "—"),
-        ("History points available", f"{len(history)} annual snapshots"),
+    # Price-based stats — always work when we have any price data
+    closes = [p["adj_close"] for p in prices_window if p.get("adj_close")]
+    if closes:
+        first, last = closes[0], closes[-1]
+        ret_pct = (last / first - 1) * 100 if first else 0
+        hi, lo = max(closes), min(closes)
+        ret_str = f"{ret_pct:+.1f}%"
+        ret_color = T.SUCCESS if ret_pct >= 0 else T.DANGER
+        price_items = [
+            ("Period return", html.Span(ret_str,
+                                          style={"color": ret_color, "fontWeight": "700"})),
+            ("Period high / low", f"${hi:.2f} / ${lo:.2f}"),
+        ]
+    else:
+        price_items = [("Period return", "—"), ("Period high / low", "—")]
+
+    eg_vol_str = "—"
+    if eg_vol:
+        label = "high (cyclical)" if eg_vol > 0.5 else "low (stalwart)"
+        eg_vol_str = f"{eg_vol*100:.0f}% — {label}"
+
+    annual_items = [
+        ("Avg ROE (window)", fmt_pct(avg_roe)),
+        ("Earnings volatility (stdev YoY)", eg_vol_str),
+        ("Latest D/E (in window)",
+         f"{latest_de:.0f}%" if latest_de is not None else "—"),
+        ("Annual snapshots in window", f"{len(history_window)}"),
     ]
-    return html.Table([html.Tr([html.Td(html.Strong(k), className="small"),
-                                  html.Td(v, className="small text-info")])
-                        for k, v in items],
-                       className="table table-dark table-sm w-100")
+
+    rows = []
+    for k, v in price_items + annual_items:
+        rows.append(html.Tr([
+            html.Td(html.Strong(k), className="small", style={"color": T.TEXT}),
+            html.Td(v if not isinstance(v, str) else
+                    html.Span(v, style={"color": T.PRIMARY}),
+                    className="small"),
+        ]))
+    return html.Table(rows, className="table table-sm w-100")
+
+
+def _build_price_summary(prices_window: list) -> str:
+    closes = [p["adj_close"] for p in prices_window if p.get("adj_close")]
+    if not closes:
+        return ""
+    first, last = closes[0], closes[-1]
+    pct = (last / first - 1) * 100 if first else 0
+    return f"${first:.2f} → ${last:.2f}  ·  {pct:+.1f}%  ·  {len(closes)} trading days"
+
+
+def _build_coverage_text(prices_all: list, history_all: list,
+                          prices_window: list, history_window: list,
+                          period_days: int) -> str:
+    """Tells the user what was available vs what fit in the window — important
+    when a short window holds zero annual snapshots, or a new ticker has less
+    history than the requested window."""
+    parts = []
+    if not prices_all:
+        parts.append("no price history")
+    else:
+        first_date = min(p["date"] for p in prices_all)[:10]
+        parts.append(f"prices from {first_date}")
+    if period_days and prices_all and prices_window:
+        n_total = len(prices_all)
+        n_win = len(prices_window)
+        if n_win < n_total * 0.95 and len(history_window) < len(history_all):
+            parts.append(f"{len(history_window)}/{len(history_all)} annual snapshots in window")
+    return "  ·  ".join(parts)
+
+
+def _load_history(db_path: str, ticker: str) -> list:
+    """Pull annual fundamentals snapshots as HistoryPoint objects.
+
+    Uses the cache-aside loader so first-time tickers self-heal from akshare.
+    Returns HistoryPoint instances matching
+    analysis.research_orchestrator.HistoryPoint, so chart factories accept them.
+    """
+    from analysis.data_loader import get_or_fetch_fundamentals_history
+    from analysis.research_orchestrator import HistoryPoint
+    from storage.database import Database
+
+    db = Database(db_path)
+    rows = get_or_fetch_fundamentals_history(ticker, db)
+    return [HistoryPoint(
+        date=_coerce_date(r.get("snapshot_date")),
+        eps_ttm=_coerce_float(r.get("eps_ttm")),
+        bps=_coerce_float(r.get("bps")),
+        shares_outstanding=_coerce_float(r.get("shares_outstanding")),
+        return_on_equity=_coerce_float(r.get("return_on_equity")),
+        return_on_assets=_coerce_float(r.get("return_on_assets")),
+        profit_margins=_coerce_float(r.get("profit_margins")),
+        debt_to_equity=_coerce_float(r.get("debt_to_equity")),
+        earnings_growth=_coerce_float(r.get("earnings_growth")),
+        revenue_growth=_coerce_float(r.get("revenue_growth")),
+    ) for r in rows]
 
 
 def _load_prices(db_path: str, ticker: str) -> list[dict]:
-    """Pull all historical prices for a ticker."""
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-            SELECT date, adj_close FROM historical_prices
-            WHERE ticker = ? ORDER BY date ASC
-        """, (ticker,)).fetchall()
-        return [dict(r) for r in rows]
+    """Pull all historical prices for a ticker via the cache-aside loader.
+    Cache hit: instant. Cache miss: fetches from yfinance (~3-5s)."""
+    from analysis.data_loader import get_or_fetch_prices
+    from storage.database import Database
+
+    db = Database(db_path)
+    rows = get_or_fetch_prices(ticker, db, period="10y")
+    return [{"date": _coerce_date_str(r.get("date")),
+             "adj_close": _coerce_float(r.get("adj_close"))} for r in rows]
+
+
+def _coerce_float(v):
+    """Postgres NUMERIC -> Python Decimal; coerce to float for downstream
+    chart factories that expect plain numerics. None passes through."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_date(v):
+    """SQLite returns date strings, Postgres returns datetime.date. Normalize
+    to ISO string so HistoryPoint comparisons (`h.date >= cutoff_iso`) work
+    the same regardless of backend."""
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return str(v)[:10]
+
+
+def _coerce_date_str(v):
+    return _coerce_date(v)
 
 
 def _load_dcf_inputs_only(db_path: str, ticker: str) -> Optional[DCFInputs]:
     """Fast path: build only what DCF needs, without running FactorScoringEngine
     or screen predicates over the universe. Used by the recompute_dcf slider
-    callback which fires on every slider tick."""
-    from analysis.dcf import default_inputs_from_snapshot
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        # Walk newest→oldest history until we find a snapshot with per-share data
-        rows = conn.execute("""
-            SELECT snapshot_date, eps_ttm, bps, shares_outstanding, earnings_growth, last_price
-            FROM fundamentals_snapshots
-            WHERE ticker = ?
-            ORDER BY snapshot_date DESC
-        """, (ticker,)).fetchall()
-        latest_price_row = conn.execute("""
-            SELECT adj_close FROM historical_prices
-            WHERE ticker = ? ORDER BY date DESC LIMIT 1
-        """, (ticker,)).fetchone()
+    callback which fires on every slider tick.
 
-    current_price = latest_price_row[0] if latest_price_row else None
-    growths = [r["earnings_growth"] for r in rows[:5]
-                if r["earnings_growth"] is not None]
+    Reads via the storage factory so cloud DB is used when USE_CLOUD_DB=true.
+    Assumes the data is already cached (caller invoked _load_history /
+    _load_prices via cache-aside earlier in render_report)."""
+    from analysis.dcf import default_inputs_from_snapshot
+    from storage.database import Database
+    from storage.factory import get_prices_repo, get_fundamentals_repo
+
+    db = Database(db_path)
+    funds = get_fundamentals_repo(db)
+    prices = get_prices_repo(db)
+
+    # All fundamentals snapshots, newest first (annual + any daily yfinance)
+    if hasattr(funds, "get_history"):
+        rows = funds.get_history(ticker)
+    else:
+        rows = funds.get_history(ticker) if hasattr(funds, "get_history") else []
+        if not rows:
+            # SQLite fallback path
+            with db.get_connection() as conn:
+                rows = [dict(r) for r in conn.execute(
+                    "SELECT * FROM fundamentals_snapshots WHERE ticker=? ORDER BY snapshot_date ASC",
+                    (ticker,)
+                ).fetchall()]
+    rows.reverse()  # newest first
+
+    # Latest cached price (no fetch — keep slider snappy)
+    if hasattr(prices, "latest_date"):
+        latest_date = prices.latest_date(ticker)
+        current_price = (prices.get_price_on_or_before(ticker, latest_date)
+                          if latest_date else None)
+    else:
+        current_price = None
+        with db.get_connection() as conn:
+            r = conn.execute(
+                "SELECT adj_close FROM historical_prices WHERE ticker=? ORDER BY date DESC LIMIT 1",
+                (ticker,)
+            ).fetchone()
+            if r:
+                current_price = r[0]
+
+    growths = [_coerce_float(r.get("earnings_growth")) for r in rows[:5]]
+    growths = [g for g in growths if g is not None]
     if growths:
         sorted_g = sorted(growths)
         median_g = sorted_g[len(sorted_g) // 2]
-        default_growth = max(-0.05, min(0.20, float(median_g)))
+        default_growth = max(-0.05, min(0.20, median_g))
     else:
         default_growth = 0.08
 
     for r in rows:
-        if r["eps_ttm"] is not None and r["shares_outstanding"] is not None:
+        eps = _coerce_float(r.get("eps_ttm"))
+        sh = _coerce_float(r.get("shares_outstanding"))
+        if eps is not None and sh is not None:
             snap = {
-                "eps_ttm": r["eps_ttm"],
-                "shares_outstanding": r["shares_outstanding"],
+                "eps_ttm": eps,
+                "shares_outstanding": sh,
                 "earnings_growth": default_growth,
-                "last_price": current_price if current_price is not None else r["last_price"],
+                "last_price": current_price if current_price is not None
+                              else _coerce_float(r.get("last_price")),
             }
             return default_inputs_from_snapshot(snap)
     return None
@@ -615,7 +816,8 @@ def _generate_devil_advocate(r) -> html.Div:
             messages=[{"role": "user", "content": prompt}],
         )
         text = resp.content[0].text.strip()
-        return html.Div([html.P(p, className="text-light small")
+        return html.Div([html.P(p, style={"color": T.TEXT, "fontSize": "0.85rem",
+                                          "marginBottom": "0.5rem"})
                           for p in text.split("\n") if p.strip()])
     except Exception as e:
         return html.P(f"Devil's advocate unavailable: {e}",

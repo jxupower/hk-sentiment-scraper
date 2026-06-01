@@ -6,8 +6,9 @@ from dash import Input, Output, html
 import dash_bootstrap_components as dbc
 
 from analysis.factor_scores import FactorScoringEngine
+from dashboard import theme as T
 
-FLAG_COLORS = {"high": "#d50000", "medium": "#ff8a65", "low": "#90caf9"}
+FLAG_COLORS = {"high": T.DANGER, "medium": T.WARNING, "low": T.INFO}
 
 
 def register_recommendations_callbacks(app, db_path: str):
@@ -159,34 +160,33 @@ def _build_distribution_chart(results: list, show_filter: list[str]) -> go.Figur
     fig = go.Figure()
     if ok_scores:
         fig.add_trace(go.Histogram(
-            x=ok_scores, name="OK", marker_color="#69f0ae",
+            x=ok_scores, name="OK", marker_color=T.SUCCESS,
             opacity=0.85, xbins=dict(size=5),
         ))
     if flag_scores:
         fig.add_trace(go.Histogram(
-            x=flag_scores, name="Flagged", marker_color="#ff8a65",
+            x=flag_scores, name="Flagged", marker_color=T.WARNING,
             opacity=0.85, xbins=dict(size=5),
         ))
 
     if not ok_scores and not flag_scores:
         fig.add_annotation(text="No scorable results.", xref="paper", yref="paper",
                            x=0.5, y=0.5, showarrow=False,
-                           font=dict(size=13, color="#90a4ae"))
+                           font=dict(size=13, color=T.TEXT_MUTED))
 
     # Reference lines for typical percentile tiers
-    for x, color in [(75, "#69f0ae"), (90, "#00c853"), (25, "#ff8a65")]:
+    for x, color in [(75, T.SUCCESS), (90, T.PRIMARY), (25, T.WARNING)]:
         fig.add_vline(x=x, line_dash="dot", line_color=color, opacity=0.5)
 
-    fig.update_layout(
-        paper_bgcolor="#1a1a2e", plot_bgcolor="#16213e",
-        font=dict(color="#eceff1", size=11),
+    fig.update_layout(**T.chart_layout(
         barmode="stack",
         xaxis_title="Composite Percentile (0=worst, 100=best)",
         yaxis_title="Ticker count",
-        xaxis=dict(range=[0, 100]),
+        xaxis=dict(range=[0, 100], gridcolor=T.BORDER, linecolor=T.BORDER,
+                   tickfont=dict(color=T.TEXT_MUTED)),
         height=240,
         margin=dict(l=60, r=30, t=20, b=40),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                    bgcolor="rgba(0,0,0,0)"),
-    )
+                    bgcolor="rgba(255,255,255,0)"),
+    ))
     return fig

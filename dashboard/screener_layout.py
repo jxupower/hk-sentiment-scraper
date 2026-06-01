@@ -1,50 +1,50 @@
 from dash import dcc, html, dash_table
 import dash_bootstrap_components as dbc
 
-CARD_STYLE = {"background": "#1a1a2e", "border": "1px solid #37474f"}
+from dashboard import theme as T
+
+
+def _stat_block(label: str, value_id: str, value_color: str = None):
+    """Hero number with small uppercase label above."""
+    return html.Div([
+        html.Div(label, className="stat-label"),
+        html.Div(id=value_id, className="hero-number",
+                  style={"color": value_color} if value_color else {}),
+    ])
 
 
 def build_screener_tab() -> html.Div:
     return html.Div([
         dcc.Interval(id="screener-auto-refresh", interval=300_000, n_intervals=0),
 
-        # Header strip with high-level stats
+        # Header strip — 3 hero stats + action button
         dbc.Card([
             dbc.CardBody([
                 dbc.Row([
-                    dbc.Col([
-                        html.Span("Universe size: ", className="text-muted small me-1"),
-                        html.Span(id="screener-stat-total", className="text-light fw-bold"),
-                    ], width=3),
-                    dbc.Col([
-                        html.Span("With fundamentals: ", className="text-muted small me-1"),
-                        html.Span(id="screener-stat-with-data", className="text-info fw-bold"),
-                    ], width=3),
-                    dbc.Col([
-                        html.Span("Latest snapshot: ", className="text-muted small me-1"),
-                        html.Span(id="screener-stat-latest", className="text-warning"),
-                    ], width=3),
-                    dbc.Col([
+                    dbc.Col(_stat_block("Universe size", "screener-stat-total"), width=3),
+                    dbc.Col(_stat_block("With fundamentals", "screener-stat-with-data",
+                                          value_color=T.PRIMARY), width=3),
+                    dbc.Col(_stat_block("Latest snapshot", "screener-stat-latest"), width=4),
+                    dbc.Col(
                         dbc.Button("Refresh", id="screener-refresh-btn", color="primary",
-                                   size="sm", className="float-end"),
-                    ], width=3),
+                                   size="sm", className="float-end mt-2"),
+                        width=2),
                 ], align="center"),
-            ], style={"padding": "10px 16px"}),
-        ], style=CARD_STYLE, className="mb-3"),
+            ], style={"padding": "20px 24px"}),
+        ], style=T.CARD_STYLE, className="mb-3"),
 
         # Filters row
         dbc.Card([
-            dbc.CardHeader("Filters", className="fw-bold small"),
+            dbc.CardHeader("Filters"),
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Sector", className="text-muted small mb-1"),
+                        html.Label("Sector", className="stat-label mb-2"),
                         dcc.Dropdown(id="screener-sector-filter", multi=True,
-                                     placeholder="All sectors",
-                                     style={"background": "#263238"}),
+                                     placeholder="All sectors"),
                     ], width=4),
                     dbc.Col([
-                        html.Label("View", className="text-muted small mb-1"),
+                        html.Label("View", className="stat-label mb-2"),
                         dcc.RadioItems(
                             id="screener-tier-filter",
                             options=[
@@ -53,11 +53,12 @@ def build_screener_tab() -> html.Div:
                                 {"label": " Universe only (non-watchlist)", "value": "universe"},
                             ],
                             value="all",
-                            labelClassName="text-light me-3 small",
+                            labelClassName="me-3",
+                            style={"fontSize": "0.9rem", "color": T.TEXT},
                         ),
                     ], width=4),
                     dbc.Col([
-                        html.Label("Min data completeness", className="text-muted small mb-1"),
+                        html.Label("Min data completeness", className="stat-label mb-2"),
                         dcc.Slider(
                             id="screener-completeness-filter",
                             min=0, max=1, step=0.1, value=0.5,
@@ -67,22 +68,23 @@ def build_screener_tab() -> html.Div:
                     ], width=4),
                 ]),
             ]),
-        ], style=CARD_STYLE, className="mb-3"),
+        ], style=T.CARD_STYLE, className="mb-3"),
 
         # Sector summary chart (median P/E per sector)
         dbc.Card([
-            dbc.CardHeader("Median P/E by Sector", className="fw-bold small"),
+            dbc.CardHeader("Median P/E by Sector"),
             dbc.CardBody([
                 dcc.Graph(id="screener-sector-pe-chart",
                           config={"displayModeBar": False}, figure={}),
             ]),
-        ], style=CARD_STYLE, className="mb-3"),
+        ], style=T.CARD_STYLE, className="mb-3"),
 
         # The big table
         dbc.Card([
             dbc.CardHeader([
-                html.Span("Tickers", className="fw-bold small me-2"),
-                html.Span(id="screener-row-count", className="text-muted small"),
+                html.Span("Tickers", style={"fontWeight": "600", "marginRight": "10px"}),
+                html.Span(id="screener-row-count",
+                          style={"color": T.TEXT_MUTED, "fontSize": "0.85rem"}),
             ]),
             dbc.CardBody([
                 dash_table.DataTable(
@@ -107,27 +109,23 @@ def build_screener_tab() -> html.Div:
                     page_size=25,
                     sort_action="native",
                     filter_action="native",
-                    style_cell={
-                        "backgroundColor": "#16213e", "color": "#eceff1",
-                        "fontSize": "0.8rem", "padding": "6px 8px",
-                        "fontFamily": "monospace", "textAlign": "right",
-                    },
+                    style_cell=T.DATATABLE_CELL,
                     style_cell_conditional=[
-                        {"if": {"column_id": "ticker"}, "textAlign": "left"},
-                        {"if": {"column_id": "name"}, "textAlign": "left", "fontFamily": "inherit"},
-                        {"if": {"column_id": "yf_sector"}, "textAlign": "left", "fontFamily": "inherit"},
+                        {"if": {"column_id": "ticker"}, "textAlign": "left",
+                         "fontWeight": "600", "color": T.PRIMARY},
+                        {"if": {"column_id": "name"}, "textAlign": "left",
+                         "fontFamily": "Inter, sans-serif"},
+                        {"if": {"column_id": "yf_sector"}, "textAlign": "left",
+                         "fontFamily": "Inter, sans-serif", "color": T.TEXT_MUTED},
                         {"if": {"column_id": "watchlist_flag"}, "textAlign": "center"},
                     ],
-                    style_header={
-                        "backgroundColor": "#1a1a2e", "color": "#90caf9",
-                        "fontWeight": "bold", "fontSize": "0.75rem",
-                    },
+                    style_header=T.DATATABLE_HEADER,
                     style_data_conditional=[
                         {"if": {"filter_query": "{watchlist_flag} = '★'"},
-                         "backgroundColor": "#1f2942"},
+                         "backgroundColor": T.PRIMARY_SOFT},
                     ],
-                    style_filter={"backgroundColor": "#0f1a2e", "color": "#eceff1"},
+                    style_filter=T.DATATABLE_FILTER,
                 ),
             ]),
-        ], style=CARD_STYLE),
+        ], style=T.CARD_STYLE),
     ])

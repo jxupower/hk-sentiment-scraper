@@ -74,17 +74,9 @@ def detect_red_flags(ticker: str, db_path: str) -> list[RedFlag]:
 
 def _load_history(ticker: str, db_path: str) -> list[dict]:
     """Load all fundamentals snapshots for ticker, sorted oldest first."""
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-            SELECT snapshot_date, shares_outstanding, debt_to_equity,
-                   profit_margins, revenue_growth, earnings_growth,
-                   eps_ttm, return_on_equity
-            FROM fundamentals_snapshots
-            WHERE ticker = ?
-            ORDER BY snapshot_date ASC
-        """, (ticker,)).fetchall()
-        return [dict(r) for r in rows]
+    from analysis.data_loader import get_ticker_history
+    from storage.database import Database
+    return get_ticker_history(Database(db_path), ticker)
 
 
 def _check_share_dilution(history: list[dict]) -> list[RedFlag]:

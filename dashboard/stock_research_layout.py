@@ -7,9 +7,11 @@ On Enter/Submit, the callback updates ~30 outputs in one shot.
 from dash import dcc, html, dash_table
 import dash_bootstrap_components as dbc
 
-CARD_STYLE = {"background": "#1a1a2e", "border": "1px solid #37474f"}
-INPUT_STYLE = {"background": "#263238", "color": "#eceff1", "border": "1px solid #37474f"}
-TEXTAREA_STYLE = {**INPUT_STYLE, "minHeight": "80px", "fontFamily": "inherit"}
+from dashboard import theme as T
+
+CARD_STYLE = T.CARD_STYLE
+INPUT_STYLE = T.INPUT_STYLE
+TEXTAREA_STYLE = {**T.INPUT_STYLE, "minHeight": "80px", "fontFamily": "Inter, sans-serif"}
 
 STATUS_OPTIONS = [
     {"label": " Raw (not yet researched)", "value": "raw"},
@@ -18,6 +20,18 @@ STATUS_OPTIONS = [
     {"label": " Owned", "value": "owned"},
     {"label": " Rejected (researched, decided not to own)", "value": "rejected"},
 ]
+
+# Period selector for Sections 4-5. 0 = MAX (no filter).
+PERIOD_OPTIONS = [
+    {"label": "1M",  "value": 30},
+    {"label": "3M",  "value": 90},
+    {"label": "6M",  "value": 180},
+    {"label": "1Y",  "value": 365},
+    {"label": "3Y",  "value": 1095},
+    {"label": "5Y",  "value": 1825},
+    {"label": "MAX", "value": 0},
+]
+DEFAULT_PERIOD_DAYS = 365
 
 
 def build_stock_research_tab() -> html.Div:
@@ -42,7 +56,6 @@ def build_stock_research_tab() -> html.Div:
                             id="sr-ticker-select",
                             placeholder="Type to search HK tickers...",
                             search_value="", value=None, clearable=True,
-                            style={"background": "#263238", "color": "#000"},
                         ),
                     ], width=6),
                     dbc.Col([
@@ -51,7 +64,6 @@ def build_stock_research_tab() -> html.Div:
                             id="sr-status-select",
                             options=STATUS_OPTIONS, value=None,
                             placeholder="(not set)", clearable=True,
-                            style={"background": "#263238", "color": "#000"},
                         ),
                     ], width=4),
                     dbc.Col([
@@ -76,18 +88,24 @@ def build_stock_research_tab() -> html.Div:
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col([
-                            html.H4(id="sr-header-name", className="text-light mb-0"),
-                            html.Span(id="sr-header-sector", className="text-muted small"),
+                            html.H4(id="sr-header-name", className="mb-0",
+                                    style={"fontWeight": "700", "color": T.TEXT,
+                                           "fontSize": "1.6rem", "letterSpacing": "-0.02em"}),
+                            html.Span(id="sr-header-sector",
+                                      style={"color": T.TEXT_MUTED, "fontSize": "0.9rem"}),
                         ], width=5),
                         dbc.Col([
+                            html.Div("Current price", className="stat-label"),
+                            html.Div(id="sr-header-price",
+                                      style={"fontSize": "1.6rem", "fontWeight": "700",
+                                             "color": T.PRIMARY, "lineHeight": "1.1"}),
                             html.Div([
-                                html.Span("Current: ", className="text-muted small"),
-                                html.Span(id="sr-header-price", className="text-info fw-bold"),
-                            ]),
-                            html.Div([
-                                html.Span("Mkt cap: ", className="text-muted small"),
-                                html.Span(id="sr-header-mcap", className="text-light"),
-                            ]),
+                                html.Span("Mkt cap: ", style={"color": T.TEXT_FAINT,
+                                                                "fontSize": "0.75rem"}),
+                                html.Span(id="sr-header-mcap",
+                                          style={"color": T.TEXT, "fontWeight": "600",
+                                                 "fontSize": "0.85rem"}),
+                            ], style={"marginTop": "4px"}),
                         ], width=4),
                         dbc.Col(html.Div(id="sr-header-badges"), width=3,
                                 className="text-end"),
@@ -107,16 +125,16 @@ def build_stock_research_tab() -> html.Div:
                 dbc.Card([
                     dbc.CardHeader("AI business summary", className="fw-bold small"),
                     dbc.CardBody(dcc.Loading(html.Div(id="sr-business-summary"),
-                                             type="dot", color="#00c853")),
+                                             type="dot", color=T.PRIMARY)),
                 ], style=CARD_STYLE, className="mb-2"),
                 # SWOT 2x2
                 dbc.Row([
-                    dbc.Col(_swot_card("Strengths", "sr-swot-strengths", "#00c853"), width=6),
-                    dbc.Col(_swot_card("Weaknesses", "sr-swot-weaknesses", "#ff8a65"), width=6),
+                    dbc.Col(_swot_card("Strengths", "sr-swot-strengths", T.SUCCESS), width=6),
+                    dbc.Col(_swot_card("Weaknesses", "sr-swot-weaknesses", T.WARNING), width=6),
                 ], className="mb-2"),
                 dbc.Row([
-                    dbc.Col(_swot_card("Opportunities", "sr-swot-opportunities", "#90caf9"), width=6),
-                    dbc.Col(_swot_card("Threats", "sr-swot-threats", "#d50000"), width=6),
+                    dbc.Col(_swot_card("Opportunities", "sr-swot-opportunities", T.INFO), width=6),
+                    dbc.Col(_swot_card("Threats", "sr-swot-threats", T.DANGER), width=6),
                 ], className="mb-3"),
                 # Article feed
                 dbc.Card([
@@ -131,7 +149,8 @@ def build_stock_research_tab() -> html.Div:
                 dbc.Row([
                     dbc.Col([
                         html.H6("CAGR (compound annual growth rate)",
-                                className="text-light small mb-2"),
+                                style={"color": T.TEXT, "fontWeight": "600",
+                                       "fontSize": "0.9rem", "marginBottom": "8px"}),
                         html.Div(id="sr-cagr-table"),
                     ], width=4),
                     dbc.Col([
@@ -156,8 +175,55 @@ def build_stock_research_tab() -> html.Div:
                 ], style=CARD_STYLE),
             ]),
 
+            # Period selector — drives Sections 4 + 5
+            dbc.Card([
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.Span("Time period",
+                                       style={"color": T.TEXT_MUTED,
+                                              "fontSize": "0.75rem",
+                                              "fontWeight": "600",
+                                              "letterSpacing": "0.05em",
+                                              "textTransform": "uppercase"}),
+                            html.Span(" — sections 4 & 5 below",
+                                       style={"color": T.TEXT_FAINT,
+                                              "fontSize": "0.75rem"}),
+                        ], width="auto", className="d-flex flex-column justify-content-center"),
+                        dbc.Col(
+                            dbc.RadioItems(
+                                id="sr-period-select",
+                                options=PERIOD_OPTIONS,
+                                value=DEFAULT_PERIOD_DAYS,
+                                inline=True,
+                                className="btn-group sr-period-radio",
+                                inputClassName="btn-check",
+                                labelClassName="btn btn-outline-primary btn-sm",
+                                labelCheckedClassName="active",
+                            ),
+                            width="auto",
+                        ),
+                        dbc.Col(
+                            html.Span(id="sr-period-coverage",
+                                       style={"color": T.TEXT_MUTED, "fontSize": "0.75rem"}),
+                            className="text-end d-flex align-items-center justify-content-end"),
+                    ], align="center", className="g-3"),
+                ], style={"padding": "12px 16px"}),
+            ], style=CARD_STYLE, className="mb-3"),
+
             # Section 4 — Strategy & Management
             _section_card("4. Strategy & Management", "sr-section-strategy", [
+                # Price chart — primary canvas (daily resolution, scales to any period)
+                dbc.Card([
+                    dbc.CardHeader([
+                        html.Span("Price history", className="fw-bold small me-2"),
+                        html.Span(id="sr-price-summary",
+                                   style={"color": T.TEXT_MUTED, "fontSize": "0.8rem"}),
+                    ]),
+                    dbc.CardBody(dcc.Graph(id="sr-price-chart",
+                                           config={"displayModeBar": False}, figure={})),
+                ], style=CARD_STYLE, className="mb-3"),
+                # Annual strategy metrics — filtered to the selected window where applicable
                 dbc.Row([
                     dbc.Col(dcc.Graph(id="sr-shares-chart",
                                        config={"displayModeBar": False}, figure={}), width=6),
@@ -228,7 +294,7 @@ def build_stock_research_tab() -> html.Div:
                                            tooltip={"placement": "bottom"}),
                             ], width=3),
                         ], className="mb-3"),
-                        html.Div(id="sr-dcf-result", className="text-light"),
+                        html.Div(id="sr-dcf-result", style={"color": T.TEXT}),
                         dcc.Graph(id="sr-dcf-sensitivity",
                                   config={"displayModeBar": False}, figure={}),
                     ]),
@@ -262,7 +328,7 @@ def build_stock_research_tab() -> html.Div:
                                    color="warning", size="sm"),
                     ]),
                     dbc.CardBody(dcc.Loading(html.Div(id="sr-devil-output"),
-                                             type="dot", color="#ff8a65")),
+                                             type="dot", color=T.WARNING)),
                 ], style=CARD_STYLE, className="mb-2"),
                 html.Div([
                     dbc.Button("Save all notes", id="sr-save-btn",

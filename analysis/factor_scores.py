@@ -215,19 +215,12 @@ class FactorScoringEngine:
     # ---------- private: loading ----------
 
     def _load_fundamentals(self) -> list[dict]:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("""
-                SELECT f.*, s.name, s.is_watchlist, s.yf_sector, s.watchlist_sector
-                FROM fundamentals_snapshots f
-                INNER JOIN (
-                    SELECT ticker, MAX(snapshot_date) AS max_date
-                    FROM fundamentals_snapshots GROUP BY ticker
-                ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
-                INNER JOIN securities s ON f.ticker = s.ticker
-                WHERE s.is_active = 1
-            """).fetchall()
-            return [dict(r) for r in rows]
+        # Routes via analysis/data_loader → storage/factory → cloud or sqlite
+        # depending on USE_CLOUD_DB. Securities join happens client-side when on
+        # cloud (securities stays local).
+        from analysis.data_loader import get_universe_fundamentals
+        from storage.database import Database
+        return get_universe_fundamentals(Database(self.db_path))
 
     def _load_sentiment(self, window_days: int) -> dict[str, dict]:
         with sqlite3.connect(self.db_path) as conn:

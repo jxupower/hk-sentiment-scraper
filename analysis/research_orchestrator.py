@@ -94,41 +94,38 @@ def build_research_report(ticker: str, db_path: str,
                           ) -> Optional[ResearchReport]:
     """Compose the full report for one ticker. Returns None if the ticker has
     no data at all in our DB."""
-    # Pull the latest snapshot and basic header info
+    from analysis.data_loader import (
+        get_or_fetch_fundamentals_history, get_or_fetch_prices, get_universe_fundamentals
+    )
+    from storage.database import Database
+    db = Database(db_path)
+
+    # Latest fundamentals + securities row for this ticker (via universe pull;
+    # cheaper than a single-ticker JOIN against cloud since we need this same
+    # data for the factor engine below anyway).
+    universe = get_universe_fundamentals(db)
+    latest = next((r for r in universe if r["ticker"] == ticker), None)
+    if not latest:
+        return None
+
+    # Multi-year history via cache-aside (akshare-on-miss)
+    hist_rows = get_or_fetch_fundamentals_history(ticker, db)
+    history = [HistoryPoint(
+        date=h.get("snapshot_date") if isinstance(h.get("snapshot_date"), str)
+              else (h["snapshot_date"].isoformat() if h.get("snapshot_date") else None),
+        eps_ttm=_to_float(h.get("eps_ttm")), bps=_to_float(h.get("bps")),
+        shares_outstanding=_to_float(h.get("shares_outstanding")),
+        return_on_equity=_to_float(h.get("return_on_equity")),
+        return_on_assets=_to_float(h.get("return_on_assets")),
+        profit_margins=_to_float(h.get("profit_margins")),
+        debt_to_equity=_to_float(h.get("debt_to_equity")),
+        earnings_growth=_to_float(h.get("earnings_growth")),
+        revenue_growth=_to_float(h.get("revenue_growth")),
+    ) for h in hist_rows]
+
+    # Articles + saved notes stay in local SQLite
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        latest = conn.execute("""
-            SELECT f.*, s.name, s.is_watchlist, s.yf_sector, s.watchlist_sector
-            FROM fundamentals_snapshots f
-            INNER JOIN (
-                SELECT ticker, MAX(snapshot_date) AS max_date
-                FROM fundamentals_snapshots GROUP BY ticker
-            ) lt ON f.ticker = lt.ticker AND f.snapshot_date = lt.max_date
-            INNER JOIN securities s ON f.ticker = s.ticker
-            WHERE f.ticker = ?
-        """, (ticker,)).fetchone()
-        if not latest:
-            return None
-        latest = dict(latest)
-
-        # Multi-year history (annual snapshots, sorted oldest first)
-        hist_rows = conn.execute("""
-            SELECT snapshot_date, eps_ttm, bps, shares_outstanding,
-                   return_on_equity, return_on_assets, profit_margins,
-                   debt_to_equity, earnings_growth, revenue_growth
-            FROM fundamentals_snapshots
-            WHERE ticker = ?
-            ORDER BY snapshot_date ASC
-        """, (ticker,)).fetchall()
-        history = [HistoryPoint(
-            date=r["snapshot_date"], eps_ttm=r["eps_ttm"], bps=r["bps"],
-            shares_outstanding=r["shares_outstanding"],
-            return_on_equity=r["return_on_equity"], return_on_assets=r["return_on_assets"],
-            profit_margins=r["profit_margins"], debt_to_equity=r["debt_to_equity"],
-            earnings_growth=r["earnings_growth"], revenue_growth=r["revenue_growth"],
-        ) for r in hist_rows]
-
-        # Recent articles for this ticker (30 days)
         articles = conn.execute("""
             SELECT s.final_score, s.label, s.scored_at,
                    a.source, a.title, a.url, a.published_at
@@ -139,12 +136,11 @@ def build_research_report(ticker: str, db_path: str,
         """, (ticker,)).fetchall()
         articles = [dict(a) for a in articles]
 
-        # Current price (latest historical price, or last_price from snapshot)
-        px_row = conn.execute("""
-            SELECT adj_close FROM historical_prices
-            WHERE ticker = ? ORDER BY date DESC LIMIT 1
-        """, (ticker,)).fetchone()
-        current_price = px_row[0] if px_row else latest.get("last_price")
+        # Current price: latest from cache (cache-aside ensures cloud has it)
+        price_rows = get_or_fetch_prices(ticker, db, period="1mo")
+        current_price = (float(price_rows[-1]["adj_close"])
+                          if price_rows and price_rows[-1].get("adj_close") is not None
+                          else latest.get("last_price"))
 
         # Saved notes (if any)
         notes_row = conn.execute(
@@ -246,6 +242,16 @@ def build_research_report(ticker: str, db_path: str,
         default_dcf=default_dcf,
         dcf_inputs_default=dcf_inputs_default,
     )
+
+
+def _to_float(v):
+    """Coerce Postgres Decimal / SQLite REAL / None to plain float (or None)."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _cagr_from_growth_series(history: list[HistoryPoint]) -> dict[int, Optional[float]]:

@@ -1,0 +1,78 @@
+-- Supabase Postgres schema for HK Sentiment Scraper cloud DB.
+-- Paste this into your Supabase project's SQL Editor and Run.
+-- Idempotent — safe to re-run; only creates if missing.
+--
+-- Tables hosted in cloud:
+--   historical_prices     - daily OHLCV per ticker
+--   fundamentals_snapshots - annual akshare fundamentals + (eventually) on-demand yfinance .info
+--
+-- Everything else (articles, sentiment, signals, securities, research_notes,
+-- backtest_*) stays in local SQLite — see CLAUDE.md.
+
+-- ============== historical_prices ==============
+
+CREATE TABLE IF NOT EXISTS historical_prices (
+    ticker        TEXT          NOT NULL,
+    date          DATE          NOT NULL,
+    open          NUMERIC(12, 4),
+    high          NUMERIC(12, 4),
+    low           NUMERIC(12, 4),
+    close         NUMERIC(12, 4),
+    adj_close     NUMERIC(12, 4),
+    volume        BIGINT,
+    fetched_at    TIMESTAMPTZ   DEFAULT NOW(),
+    PRIMARY KEY (ticker, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hp_ticker_date
+    ON historical_prices (ticker, date DESC);
+
+-- ============== fundamentals_snapshots ==============
+
+CREATE TABLE IF NOT EXISTS fundamentals_snapshots (
+    ticker             TEXT          NOT NULL,
+    snapshot_date      DATE          NOT NULL,
+    source             TEXT          NOT NULL DEFAULT 'akshare_annual',
+    -- Per-share / shares
+    eps_ttm            NUMERIC,
+    bps                NUMERIC,
+    shares_outstanding NUMERIC,
+    -- Valuation
+    market_cap         NUMERIC,
+    trailing_pe        NUMERIC,
+    forward_pe         NUMERIC,
+    price_to_book      NUMERIC,
+    ev_to_ebitda       NUMERIC,
+    dividend_yield     NUMERIC,
+    -- Quality / profitability
+    return_on_equity   NUMERIC,
+    return_on_assets   NUMERIC,
+    profit_margins     NUMERIC,
+    operating_margins  NUMERIC,
+    debt_to_equity     NUMERIC,
+    current_ratio      NUMERIC,
+    -- Growth
+    earnings_growth    NUMERIC,
+    revenue_growth     NUMERIC,
+    -- Cashflow / liquidity
+    free_cashflow      NUMERIC,
+    -- Misc
+    beta               NUMERIC,
+    last_price         NUMERIC,
+    currency           TEXT,
+    data_completeness  NUMERIC,
+    fetched_at         TIMESTAMPTZ   DEFAULT NOW(),
+    PRIMARY KEY (ticker, snapshot_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fs_ticker_date
+    ON fundamentals_snapshots (ticker, snapshot_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_fs_source
+    ON fundamentals_snapshots (source);
+
+-- ============== Smoke-test seed (delete after verifying) ==============
+-- INSERT INTO historical_prices (ticker, date, adj_close)
+--   VALUES ('TEST.HK', CURRENT_DATE, 100.00)
+--   ON CONFLICT (ticker, date) DO NOTHING;
+-- SELECT * FROM historical_prices WHERE ticker = 'TEST.HK';

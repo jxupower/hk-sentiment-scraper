@@ -123,7 +123,7 @@ def fetch_history(ticker: str) -> list[tuple[str, dict]]:
     try:
         df = ak.stock_financial_hk_analysis_indicator_em(symbol=ak_code, indicator="年度")
     except Exception as e:
-        logger.warning("akshare fetch failed [%s → %s]: %s", ticker, ak_code, e)
+        logger.warning("akshare fetch failed [%s -> %s]: %s", ticker, ak_code, e)
         return []
 
     if df is None or df.empty:

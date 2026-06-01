@@ -7,6 +7,7 @@ from dashboard.charts import (
     sector_heatmap, direction_gauge, source_breakdown_pie,
     DIRECTION_COLORS,
 )
+from dashboard import theme as T
 
 DIRECTION_BADGE_COLOR = {"UP": "success", "DOWN": "danger", "MIXED": "warning", "NEUTRAL": "secondary"}
 
@@ -45,7 +46,7 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         return dbc.Card([
             dbc.CardHeader("Heatmap", className="fw-bold small"),
             dbc.CardBody(dcc.Graph(figure=fig, config={"displayModeBar": False})),
-        ], style={"background": "#1a1a2e", "border": "1px solid #37474f"})
+        ], style=T.CARD_STYLE)
 
     app.clientside_callback(
         """
@@ -148,8 +149,8 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
             html.P("Data Sources", className="text-muted fw-bold mb-1 small"),
             *[html.Div([
                 html.Span("[ON] " if ok else "[--] ",
-                          style={"color": "#00c853" if ok else "#607d8b"}),
-                html.Span(name, className="text-light"),
+                          style={"color": T.SUCCESS if ok else T.TEXT_FAINT}),
+                html.Span(name, style={"color": T.TEXT}),
                 html.Span(f" - {note}" if note and not ok else "", className="text-muted"),
             ], className="small") for name, ok, note in items],
         ])
@@ -220,7 +221,9 @@ def _generate_sector_analysis(sector: str, scores: list, sig) -> html.Div:
         analysis_text = response.content[0].text.strip()
         paragraphs = [p.strip() for p in analysis_text.split(chr(10)) if p.strip()]
         return html.Div([
-            html.P(para, className="text-light small mb-2") for para in paragraphs
+            html.P(para, style={"color": T.TEXT, "fontSize": "0.875rem",
+                                "marginBottom": "0.5rem"})
+            for para in paragraphs
         ])
     except Exception as e:
         return html.P(f"Analysis unavailable: {e}", className="text-muted small fst-italic")
@@ -235,14 +238,15 @@ def _build_ticker_rows(ticker_signals):
         sent = s.get("avg_sentiment_24h") or 0
         momentum = s.get("price_momentum_5d") or 0
         color = DIRECTION_COLORS["UP"] if sent >= 0.05 else (
-            DIRECTION_COLORS["DOWN"] if sent <= -0.05 else "#90a4ae"
+            DIRECTION_COLORS["DOWN"] if sent <= -0.05 else T.TEXT_FAINT
         )
         rows.append(dbc.Row([
-            dbc.Col(html.Strong(s["ticker"], className="text-light small"), width=3),
+            dbc.Col(html.Strong(s["ticker"], style={"color": T.TEXT, "fontSize": "0.85rem"}),
+                    width=3),
             dbc.Col(html.Span(f"{sent:+.3f}", style={"color": color, "fontWeight": "bold",
                                                       "fontSize": "0.85rem"}), width=3),
             dbc.Col(html.Span(f"{momentum:+.2f}%",
-                              style={"color": "#00c853" if momentum >= 0 else "#d50000",
+                              style={"color": T.SUCCESS if momentum >= 0 else T.DANGER,
                                      "fontSize": "0.85rem"}), width=3),
             dbc.Col(html.Span(f"{s.get('article_count_24h', 0)} art",
                               className="text-muted", style={"fontSize": "0.75rem"}), width=3),
@@ -269,7 +273,7 @@ def _build_article_feed(scores):
     rows = []
     for s in scores[:60]:
         score = s.get("final_score", 0) or 0
-        color = "#00c853" if score >= 0.05 else ("#d50000" if score <= -0.05 else "#90a4ae")
+        color = T.SUCCESS if score >= 0.05 else (T.DANGER if score <= -0.05 else T.TEXT_FAINT)
         source_badge = {"rss": "info", "reddit": "warning", "yahoo": "primary"}.get(
             s.get("source", ""), "secondary")
         pub = s.get("published_at", "") or ""
@@ -279,7 +283,9 @@ def _build_article_feed(scores):
             html.Td(dbc.Badge(s.get("source", "").upper(), color=source_badge, className="small")),
             html.Td(html.Span(s.get("ticker", ""), className="text-muted small fw-bold")),
             html.Td(html.A(s.get("title", ""), href=s.get("url", "#"),
-                           target="_blank", className="text-light small")),
+                           target="_blank",
+                           style={"color": T.PRIMARY, "fontSize": "0.85rem",
+                                  "textDecoration": "none"})),
             html.Td(html.Span(f"{score:+.3f}", style={"color": color, "fontWeight": "bold"})),
         ]))
 
@@ -292,4 +298,4 @@ def _build_article_feed(scores):
             html.Th("Score", className="text-muted small"),
         ])),
         html.Tbody(rows),
-    ], className="table table-dark table-sm table-hover w-100")
+    ], className="table table-sm table-hover w-100")

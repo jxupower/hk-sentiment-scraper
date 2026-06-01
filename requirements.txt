@@ -26,6 +26,9 @@ openpyxl>=3.1
 requests>=2.31
 akshare>=1.13
 
+# Cloud DB (Supabase Postgres)
+psycopg2-binary>=2.9
+
 # CLI
 click>=8.1
 rich>=13.0

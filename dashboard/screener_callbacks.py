@@ -4,6 +4,8 @@ from statistics import median
 import plotly.graph_objects as go
 from dash import Input, Output
 
+from dashboard import theme as T
+
 
 def register_screener_callbacks(app, db_path: str):
     @app.callback(
@@ -163,10 +165,7 @@ def _build_sector_pe_chart(rows: list[dict]) -> go.Figure:
 
 
 def _dark_layout(title: str) -> dict:
-    return dict(
-        title={"text": title, "font": {"color": "#eceff1", "size": 13}},
-        paper_bgcolor="#1a1a2e",
-        plot_bgcolor="#16213e",
-        font=dict(color="#eceff1", size=11),
-        legend=dict(bgcolor="#1a1a2e", bordercolor="#37474f", borderwidth=1),
-    )
+    base = T.chart_layout(title=title, height=240)
+    base["legend"] = dict(bgcolor=T.CARD_BG, bordercolor=T.BORDER, borderwidth=1,
+                          font=dict(color=T.TEXT))
+    return base

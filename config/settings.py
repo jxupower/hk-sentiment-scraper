@@ -33,6 +33,15 @@ CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
 DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8050"))
 DASHBOARD_DEBUG = os.getenv("DASHBOARD_DEBUG", "false").lower() == "true"
 
+# Cloud DB (Supabase Postgres) — historical_prices + fundamentals_snapshots only.
+# Articles / sentiment / signals / notes stay in local SQLite.
+USE_CLOUD_DB = os.getenv("USE_CLOUD_DB", "false").lower() == "true"
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL", "")
+
+
+def cloud_db_configured() -> bool:
+    return bool(USE_CLOUD_DB and SUPABASE_DB_URL)
+
 
 def _normalize_entry(entry) -> dict:
     """Accept either a plain string ticker or a {ticker, name, aliases} dict."""

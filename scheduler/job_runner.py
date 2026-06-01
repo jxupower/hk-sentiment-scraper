@@ -53,15 +53,13 @@ class JobRunner:
                 hour=2,
                 id="universe_refresh",
             )
-        if self._securities_repo is not None and self._fundamentals_repo is not None:
-            self._scheduler.add_job(
-                func=self._refresh_fundamentals,
-                trigger="cron",
-                hour=3,
-                minute=15,  # offset from db_prune at 03:00
-                id="fundamentals_refresh",
-                max_instances=1,
-            )
+        # NOTE: Daily yfinance fundamentals snapshot cron is DROPPED in the
+        # cloud-DB migration. Reason: would write ~2,769 rows/day to Supabase,
+        # ballooning the free tier (500MB cap) within months. The Research tab
+        # now fetches current ratios on demand via
+        # analysis.data_loader.get_or_fetch_latest_fundamentals(), and the
+        # akshare annual history covers multi-year analysis. Re-enable if you
+        # truly need a daily snapshot history beyond what's cached on demand.
         # Backtest infrastructure refresh — only registered if securities_repo wired
         if self._securities_repo is not None:
             self._scheduler.add_job(
@@ -225,25 +223,15 @@ class JobRunner:
         except Exception as e:
             logger.error("Weekly universe refresh failed: %s", e)
 
-    def _refresh_fundamentals(self):
-        """Daily yfinance .info pull for the universe. Skips tickers that already have
-        a snapshot for today, so a partial overnight run resumes naturally."""
-        from scrapers.fundamentals_scraper import FundamentalsScraper
-        try:
-            tickers = [s["ticker"] for s in self._securities_repo.get_universe()]
-            scraper = FundamentalsScraper(throttle_seconds=1.5)
-            scraper.fetch_many(tickers, self._fundamentals_repo)
-        except Exception as e:
-            logger.error("Daily fundamentals refresh failed: %s", e)
-
     def _refresh_historical_prices(self):
         """Weekly yfinance multi-year price history refresh — keeps the backtest
-        engine's data fresh as new trading days land."""
-        from storage.repository import HistoricalPricesRepository
+        engine's data fresh as new trading days land. Routes writes through the
+        factory so cloud DB receives the updates when USE_CLOUD_DB=true."""
+        from storage.factory import get_prices_repo
         from scrapers.historical_price_scraper import fetch_many as price_fetch_many
         try:
             tickers = [s["ticker"] for s in self._securities_repo.get_universe()]
-            prices_repo = HistoricalPricesRepository(self._securities_repo.db)
+            prices_repo = get_prices_repo(self._securities_repo.db)
             # Only need the last year of new data; UPSERT handles dup dates.
             price_fetch_many(tickers, prices_repo, period="1y")
         except Exception as e:
