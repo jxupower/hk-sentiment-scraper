@@ -24,10 +24,10 @@ from typing import Optional
 
 from analysis.cagr import multi_horizon_cagr, yoy_growth_series
 from analysis.dcf import DCFInputs, DCFResult, compute_dcf, default_inputs_from_snapshot
-from analysis.factor_scores import FactorScoringEngine, FactorResult, Flag
+from analysis.factor_scores import FactorResult, Flag
 from analysis.forensic import RedFlag, detect_red_flags
 from analysis.peer_comparison import PeerScorecard, build_peer_scorecard
-from analysis.screens import BUILTIN_SCREENS, run_screen
+from analysis.screens import BUILTIN_SCREENS
 
 
 @dataclass
@@ -98,9 +98,17 @@ class ResearchReport:
 def build_research_report(ticker: str, db_path: str,
                           sector_risk_path: Optional[str] = None,
                           user_dcf_inputs: Optional[dict] = None,
+                          *,
+                          skip_financial_statements: bool = False,
                           ) -> Optional[ResearchReport]:
     """Compose the full report for one ticker. Returns None if the ticker has
-    no data at all in our DB."""
+    no data at all in our DB.
+
+    `skip_financial_statements=True` skips the (potentially 3-8s) raw filings
+    fetch in Section 3b. The dashboard uses this for the initial render and
+    fetches statements lazily when the user clicks "Load Financial Statements".
+    """
+    from analysis._research_cache import get_or_build as get_universe_cache
     from analysis.data_loader import (
         get_or_fetch_fundamentals_history, get_or_fetch_prices, get_universe_fundamentals
     )
@@ -155,24 +163,21 @@ def build_research_report(ticker: str, db_path: str,
         ).fetchone()
         saved_notes = dict(notes_row) if notes_row else None
 
-    # Factor result (extract this ticker from the full engine run)
-    engine = FactorScoringEngine(db_path, sector_risk_path)
-    all_results, _ = engine.compute()
-    factor_result = next((r for r in all_results if r.ticker == ticker), None)
+    # Factor result + screen pass/fail come from a per-process cache so we
+    # don't re-score the whole universe and re-scan all 4 screens on every
+    # ticker load. See analysis/_research_cache.py — 15-min TTL.
+    cache = get_universe_cache(db_path, sector_risk_path)
+    factor_result = cache.factor_results.get(ticker)
     risk_flags = factor_result.flags if factor_result else []
 
-    # Screen pass/fail
     screen_pass_fail: list[ScreenPassFail] = []
     for screen in BUILTIN_SCREENS:
-        # Lightweight check: see if our ticker is in run_screen results
-        results = run_screen(db_path, screen, sector_risk_path)
-        passed = any(r.ticker == ticker for r in results)
-        # Find criteria for this specific ticker (if it ran the predicate)
+        results = cache.screen_results_by_id.get(screen.id, [])
         matched = next((r for r in results if r.ticker == ticker), None)
-        criteria = matched.criteria if matched else []
         screen_pass_fail.append(ScreenPassFail(
             screen_id=screen.id, name=screen.name,
-            passed=passed, criteria=criteria,
+            passed=matched is not None,
+            criteria=matched.criteria if matched else [],
         ))
 
     # Forensic red flags
@@ -248,7 +253,9 @@ def build_research_report(ticker: str, db_path: str,
         peer_scorecard=peer_scorecard,
         default_dcf=default_dcf,
         dcf_inputs_default=dcf_inputs_default,
-        financial_statements=_load_financial_statements(ticker, db),
+        financial_statements=(_load_financial_statements(ticker, db)
+                              if not skip_financial_statements
+                              else {"income": [], "balance": [], "cashflow": []}),
     )
 
 

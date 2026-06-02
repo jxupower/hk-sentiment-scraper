@@ -108,17 +108,9 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-revenue-chart", "figure"),
         Output("sr-peer-heatmap", "figure"),
         Output("sr-forensic-flags", "children"),
-        # Section 3b — Financial Statements (charts + source pill + coverage)
-        Output("sr-fs-source-pill", "children"),
-        Output("sr-fs-coverage", "children"),
-        Output("sr-fs-income-chart", "figure"),
-        Output("sr-fs-balance-chart", "figure"),
-        Output("sr-fs-cashflow-chart", "figure"),
-        Output("sr-fs-earnings-chart", "figure"),
-        Output("sr-fs-income-table", "children"),
-        Output("sr-fs-balance-table", "children"),
-        Output("sr-fs-cashflow-table", "children"),
-        Output("sr-fs-earnings-table", "children"),
+        # Section 3b (financial statements) is fetched lazily by a separate
+        # callback when the user clicks "Load Financial Statements" — keeps
+        # the main render fast (saves 3-8s on cold-cache tickers).
         Output("sr-strategy-notes", "value"),
         Output("sr-valuation-notes", "value"),
         Output("sr-thesis", "value"),
@@ -155,15 +147,14 @@ def register_stock_research_callbacks(app, db_path: str):
         opts = list(state_options or [])
         if not any(o.get("value") == ticker for o in opts):
             opts.insert(0, {"label": ticker, "value": ticker})
-        r = build_research_report(ticker, db_path, sector_risk_path)
+        r = build_research_report(ticker, db_path, sector_risk_path,
+                                    skip_financial_statements=True)
         if r is None:
             return (
                 {"display": "block"}, {"display": "none"},
                 "", "", "", "", [], [], {},
                 "(no data)", "", "", "", "", [],
                 [], {}, {}, {}, [],
-                # Section 3b no-data state
-                "", "", {}, {}, {}, {}, "", "", "", "",
                 "", "", "", None,
                 10, 5, 2.5, 9,
                 ticker, opts,  # mirror selection back to dropdown
@@ -202,20 +193,9 @@ def register_stock_research_callbacks(app, db_path: str):
         peer_fig = peer_scorecard_heatmap(r.peer_scorecard)
         forensic = _build_forensic_panel(r.red_flags)
 
-        # Section 3b: financial statements (income/balance/cashflow/earnings)
-        fs = r.financial_statements or {"income": [], "balance": [], "cashflow": []}
-        fs_source_pill, fs_coverage = _build_fs_meta(fs)
-        income_chart = fst.build_statement_chart("income", fs["income"])
-        balance_chart = fst.build_statement_chart("balance", fs["balance"])
-        cashflow_chart = fst.build_statement_chart("cashflow", fs["cashflow"])
-        earnings_chart = fst.build_earnings_chart(fs["income"])
-        income_table = (fst.build_statement_table("income", fs["income"])
-                         if fs["income"] else fst.build_unavailable_state("income"))
-        balance_table = (fst.build_statement_table("balance", fs["balance"])
-                          if fs["balance"] else fst.build_unavailable_state("balance"))
-        cashflow_table = (fst.build_statement_table("cashflow", fs["cashflow"])
-                           if fs["cashflow"] else fst.build_unavailable_state("cashflow"))
-        earnings_table = fst.build_earnings_table(fs["income"])
+        # Section 3b (financial statements) is loaded on demand via
+        # `load_financial_statements` — keeps render_report off the 3-8s
+        # cold-cache yfinance/akshare fetch.
 
         # Sections 4 + 5 (period-dependent charts) are handled by a separate,
         # lightweight callback that fires on (ticker, sr-period-select) without
@@ -248,13 +228,73 @@ def register_stock_research_callbacks(app, db_path: str):
             screen_badges, factor_fig,
             business_summary, s_swot, w_swot, o_swot, t_swot, article_feed,
             cagr_table, eps_fig, rev_fig, peer_fig, forensic,
-            fs_source_pill, fs_coverage,
-            income_chart, balance_chart, cashflow_chart, earnings_chart,
-            income_table, balance_table, cashflow_table, earnings_table,
             strat_notes, val_notes, thesis, status,
             g15, g610, tg, wacc,
             ticker, opts,  # mirror selection back to dropdown
         )
+
+    # ----- Section 3b: lazy financial statements load -----
+    # Fires only when the user clicks "Load Financial Statements". The fetch
+    # is cache-aside via analysis.data_loader.get_or_fetch_financial_statements
+    # so first-load is 3-8s, repeat loads <500ms.
+    @app.callback(
+        Output("sr-fs-tabs-wrapper", "style"),
+        Output("sr-fs-source-pill", "children"),
+        Output("sr-fs-coverage", "children"),
+        Output("sr-fs-status", "children"),
+        Output("sr-fs-income-chart", "figure"),
+        Output("sr-fs-balance-chart", "figure"),
+        Output("sr-fs-cashflow-chart", "figure"),
+        Output("sr-fs-earnings-chart", "figure"),
+        Output("sr-fs-income-table", "children"),
+        Output("sr-fs-balance-table", "children"),
+        Output("sr-fs-cashflow-table", "children"),
+        Output("sr-fs-earnings-table", "children"),
+        Input("sr-fs-load-btn", "n_clicks"),
+        State("sr-ticker-select", "value"),
+        prevent_initial_call=True,
+    )
+    def load_financial_statements(_clicks, ticker):
+        if not ticker:
+            return ({"display": "none"}, "", "", "Pick a ticker first.",
+                    {}, {}, {}, {}, "", "", "", "")
+        from analysis.data_loader import get_or_fetch_financial_statements
+        from storage.database import Database
+        try:
+            fs = get_or_fetch_financial_statements(ticker, Database(db_path))
+        except Exception as e:
+            return ({"display": "none"}, "", "", f"Fetch failed: {e}",
+                    {}, {}, {}, {}, "", "", "", "")
+        fs = fs or {"income": [], "balance": [], "cashflow": []}
+        source_pill, coverage = _build_fs_meta(fs)
+        income_chart = fst.build_statement_chart("income", fs["income"])
+        balance_chart = fst.build_statement_chart("balance", fs["balance"])
+        cashflow_chart = fst.build_statement_chart("cashflow", fs["cashflow"])
+        earnings_chart = fst.build_earnings_chart(fs["income"])
+        income_table = (fst.build_statement_table("income", fs["income"])
+                         if fs["income"] else fst.build_unavailable_state("income"))
+        balance_table = (fst.build_statement_table("balance", fs["balance"])
+                          if fs["balance"] else fst.build_unavailable_state("balance"))
+        cashflow_table = (fst.build_statement_table("cashflow", fs["cashflow"])
+                           if fs["cashflow"] else fst.build_unavailable_state("cashflow"))
+        earnings_table = fst.build_earnings_table(fs["income"])
+        return ({"display": "block"}, source_pill, coverage, "",
+                income_chart, balance_chart, cashflow_chart, earnings_chart,
+                income_table, balance_table, cashflow_table, earnings_table)
+
+    # Reset Section 3b when the user picks a different ticker so stale
+    # statements from the prior ticker don't bleed through until they click
+    # the Load button again.
+    @app.callback(
+        Output("sr-fs-tabs-wrapper", "style", allow_duplicate=True),
+        Output("sr-fs-source-pill", "children", allow_duplicate=True),
+        Output("sr-fs-coverage", "children", allow_duplicate=True),
+        Output("sr-fs-status", "children", allow_duplicate=True),
+        Input("sr-ticker-select", "value"),
+        prevent_initial_call=True,
+    )
+    def reset_fs_section_on_ticker_change(_ticker):
+        return {"display": "none"}, "", "", ""
 
     # ----- Period-driven charts (Sections 4 + 5) -----
     # Fires on ticker change AND period selector change. Does NOT call
@@ -427,7 +467,8 @@ def register_stock_research_callbacks(app, db_path: str):
         if not CLAUDE_API_KEY:
             return html.P("Add CLAUDE_API_KEY to .env to use AI Devil's-Advocate.",
                           className="text-muted small fst-italic")
-        r = build_research_report(ticker, db_path, sector_risk_path)
+        r = build_research_report(ticker, db_path, sector_risk_path,
+                                    skip_financial_statements=True)
         if r is None:
             return html.P("No data.", className="text-muted small")
         return _generate_devil_advocate(r)
@@ -449,7 +490,8 @@ def register_stock_research_callbacks(app, db_path: str):
     def export_markdown(_clicks, ticker, s, w, o, t, strat, val, thesis):
         if not ticker:
             return no_update
-        r = build_research_report(ticker, db_path, sector_risk_path)
+        r = build_research_report(ticker, db_path, sector_risk_path,
+                                    skip_financial_statements=True)
         if r is None:
             return no_update
         md = _report_to_markdown(r, s, w, o, t, strat, val, thesis)

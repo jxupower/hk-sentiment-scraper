@@ -176,54 +176,72 @@ def build_stock_research_tab() -> html.Div:
             ]),
 
             # Section 3b — Financial Statements (Income / Balance / Cash Flow / Earnings)
+            # Deferred load: render_report leaves this empty + hidden. The user
+            # clicks "Load Financial Statements" to fetch them on demand. Saves
+            # 3-8s on cold-cache tickers and ~300ms on warm-cache ones.
             _section_card("3b. Financial Statements", "sr-section-financials", [
                 dbc.Row([
+                    dbc.Col([
+                        dbc.Button("Load Financial Statements",
+                                   id="sr-fs-load-btn", color="primary",
+                                   size="sm"),
+                        html.Span(id="sr-fs-status", className="ms-2 small",
+                                  style={"color": T.TEXT_MUTED}),
+                    ], width="auto"),
                     dbc.Col(html.Span(id="sr-fs-source-pill",
-                                        style={"color": T.TEXT_MUTED, "fontSize": "0.8rem"}),
+                                        style={"color": T.TEXT_MUTED,
+                                                "fontSize": "0.8rem"}),
                             width="auto"),
                     dbc.Col(html.Span(id="sr-fs-coverage",
-                                        style={"color": T.TEXT_FAINT, "fontSize": "0.75rem"}),
+                                        style={"color": T.TEXT_FAINT,
+                                                "fontSize": "0.75rem"}),
                             className="text-end"),
-                ], align="center", className="mb-2"),
+                ], align="center", className="mb-2 g-2"),
 
-                dbc.Tabs(id="sr-fs-tabs", active_tab="income", className="mb-3", children=[
-                    dbc.Tab(label="Income", tab_id="income", children=[
-                        dcc.Graph(id="sr-fs-income-chart",
-                                  config={"displayModeBar": False}, figure={}),
-                        html.Details([
-                            html.Summary("Show full income statement",
-                                          style={"color": T.PRIMARY, "cursor": "pointer",
-                                                 "fontSize": "0.85rem", "fontWeight": "600",
-                                                 "marginBottom": "8px"}),
-                            html.Div(id="sr-fs-income-table"),
-                        ], className="mt-2"),
-                    ]),
-                    dbc.Tab(label="Balance Sheet", tab_id="balance", children=[
-                        dcc.Graph(id="sr-fs-balance-chart",
-                                  config={"displayModeBar": False}, figure={}),
-                        html.Details([
-                            html.Summary("Show full balance sheet",
-                                          style={"color": T.PRIMARY, "cursor": "pointer",
-                                                 "fontSize": "0.85rem", "fontWeight": "600",
-                                                 "marginBottom": "8px"}),
-                            html.Div(id="sr-fs-balance-table"),
-                        ], className="mt-2"),
-                    ]),
-                    dbc.Tab(label="Cash Flow", tab_id="cashflow", children=[
-                        dcc.Graph(id="sr-fs-cashflow-chart",
-                                  config={"displayModeBar": False}, figure={}),
-                        html.Details([
-                            html.Summary("Show full cash flow statement",
-                                          style={"color": T.PRIMARY, "cursor": "pointer",
-                                                 "fontSize": "0.85rem", "fontWeight": "600",
-                                                 "marginBottom": "8px"}),
-                            html.Div(id="sr-fs-cashflow-table"),
-                        ], className="mt-2"),
-                    ]),
-                    dbc.Tab(label="Earnings", tab_id="earnings", children=[
-                        dcc.Graph(id="sr-fs-earnings-chart",
-                                  config={"displayModeBar": False}, figure={}),
-                        html.Div(id="sr-fs-earnings-table", className="mt-2"),
+                dcc.Loading(type="dot", color=T.PRIMARY, children=[
+                    html.Div(id="sr-fs-tabs-wrapper", style={"display": "none"},
+                              children=[
+                        dbc.Tabs(id="sr-fs-tabs", active_tab="income",
+                                  className="mb-3", children=[
+                            dbc.Tab(label="Income", tab_id="income", children=[
+                                dcc.Graph(id="sr-fs-income-chart",
+                                          config={"displayModeBar": False}, figure={}),
+                                html.Details([
+                                    html.Summary("Show full income statement",
+                                                  style={"color": T.PRIMARY, "cursor": "pointer",
+                                                         "fontSize": "0.85rem", "fontWeight": "600",
+                                                         "marginBottom": "8px"}),
+                                    html.Div(id="sr-fs-income-table"),
+                                ], className="mt-2"),
+                            ]),
+                            dbc.Tab(label="Balance Sheet", tab_id="balance", children=[
+                                dcc.Graph(id="sr-fs-balance-chart",
+                                          config={"displayModeBar": False}, figure={}),
+                                html.Details([
+                                    html.Summary("Show full balance sheet",
+                                                  style={"color": T.PRIMARY, "cursor": "pointer",
+                                                         "fontSize": "0.85rem", "fontWeight": "600",
+                                                         "marginBottom": "8px"}),
+                                    html.Div(id="sr-fs-balance-table"),
+                                ], className="mt-2"),
+                            ]),
+                            dbc.Tab(label="Cash Flow", tab_id="cashflow", children=[
+                                dcc.Graph(id="sr-fs-cashflow-chart",
+                                          config={"displayModeBar": False}, figure={}),
+                                html.Details([
+                                    html.Summary("Show full cash flow statement",
+                                                  style={"color": T.PRIMARY, "cursor": "pointer",
+                                                         "fontSize": "0.85rem", "fontWeight": "600",
+                                                         "marginBottom": "8px"}),
+                                    html.Div(id="sr-fs-cashflow-table"),
+                                ], className="mt-2"),
+                            ]),
+                            dbc.Tab(label="Earnings", tab_id="earnings", children=[
+                                dcc.Graph(id="sr-fs-earnings-chart",
+                                          config={"displayModeBar": False}, figure={}),
+                                html.Div(id="sr-fs-earnings-table", className="mt-2"),
+                            ]),
+                        ]),
                     ]),
                 ]),
             ]),

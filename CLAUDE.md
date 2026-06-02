@@ -85,7 +85,8 @@ The app uses a hybrid storage model: most tables stay in local SQLite, but `hist
 - `analysis/forensic.py` — heuristic red-flag detector: share dilution, debt explosion, margin compression, revenue/earnings divergence, sustained earnings decline
 - `analysis/dcf.py` — 2-stage Gordon Growth DCF with sensitivity table. Uses `EPS × shares × 0.8` FCF proxy because akshare/yfinance don't reliably expose historical free cash flow for HK
 - `analysis/peer_comparison.py` — per-ticker scorecard vs sector peers across 10 metrics with percentile ranks
-- `analysis/research_orchestrator.py` — composes everything into one `ResearchReport` dataclass
+- `analysis/research_orchestrator.py` — composes everything into one `ResearchReport` dataclass. Pass `skip_financial_statements=True` to skip the (3-8s on cold cache) Section 3b raw-filings fetch; the dashboard does this and loads them lazily when the user clicks "Load Financial Statements".
+- `analysis/_research_cache.py` — per-process, thread-safe TTL cache (15 min) for `FactorScoringEngine.compute()` + the 4 `BUILTIN_SCREENS` results. Stops `build_research_report` from re-scoring all ~2,769 tickers and re-scanning the universe 4 times on every ticker load. First load builds the cache (~5-7s); subsequent loads within 15 min hit warm cache and skip straight to ticker-specific work (~1-3s). Restart the dashboard to force-rebuild.
 - `storage/repository.py:ResearchNotesRepository` — persists SWOT, qualitative notes, DCF inputs, research-status workflow (raw/researched/watchlist/owned/rejected)
 - 1 new table: `research_notes`
 
