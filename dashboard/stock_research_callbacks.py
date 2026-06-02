@@ -43,9 +43,10 @@ def register_stock_research_callbacks(app, db_path: str):
     # the user picks a non-watchlist ticker (the options list refreshes to
     # "watchlist only" when search_value clears, dropping the selected ticker).
     @app.callback(
-        Output("sr-ticker-select", "options"),
+        Output("sr-ticker-select", "options", allow_duplicate=True),
         Input("sr-ticker-select", "search_value"),
         State("sr-ticker-select", "value"),
+        prevent_initial_call=True,
     )
     def populate_ticker_options(search, current_value):
         with sqlite3.connect(db_path) as conn:
@@ -127,13 +128,33 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-dcf-g610", "value"),
         Output("sr-dcf-tg", "value"),
         Output("sr-dcf-wacc", "value"),
+        # Mirror the active ticker back into the dropdown so cross-tab nav
+        # (Screener cell click → Research tab) updates the visible selection.
+        Output("sr-ticker-select", "value", allow_duplicate=True),
+        Output("sr-ticker-select", "options", allow_duplicate=True),
         Input("sr-load-btn", "n_clicks"),
+        Input("cross-tab-nav", "data"),
         State("sr-ticker-select", "value"),
+        State("sr-ticker-select", "options"),
         prevent_initial_call=True,
     )
-    def render_report(_clicks, ticker):
+    def render_report(_clicks, nav_data, state_ticker, state_options):
+        # Resolve ticker source: cross-tab nav wins when it triggered, else dropdown State
+        triggered = dash.callback_context.triggered_id
+        if triggered == "cross-tab-nav":
+            if not nav_data or not nav_data.get("ticker"):
+                return dash.no_update
+            ticker = nav_data["ticker"]
+        else:
+            ticker = state_ticker
         if not ticker:
             return dash.no_update
+
+        # Ensure the dropdown's options list includes this ticker so the
+        # dropdown can display the value (autocomplete only fetches on type).
+        opts = list(state_options or [])
+        if not any(o.get("value") == ticker for o in opts):
+            opts.insert(0, {"label": ticker, "value": ticker})
         r = build_research_report(ticker, db_path, sector_risk_path)
         if r is None:
             return (
@@ -145,6 +166,7 @@ def register_stock_research_callbacks(app, db_path: str):
                 "", "", {}, {}, {}, {}, "", "", "", "",
                 "", "", "", None,
                 10, 5, 2.5, 9,
+                ticker, opts,  # mirror selection back to dropdown
             )
 
         # Header
@@ -231,6 +253,7 @@ def register_stock_research_callbacks(app, db_path: str):
             income_table, balance_table, cashflow_table, earnings_table,
             strat_notes, val_notes, thesis, status,
             g15, g610, tg, wacc,
+            ticker, opts,  # mirror selection back to dropdown
         )
 
     # ----- Period-driven charts (Sections 4 + 5) -----

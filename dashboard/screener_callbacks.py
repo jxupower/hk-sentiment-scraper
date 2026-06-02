@@ -1,13 +1,38 @@
 import sqlite3
+import time
 from statistics import median
 
 import plotly.graph_objects as go
-from dash import Input, Output
+from dash import Input, Output, State
+from dash.exceptions import PreventUpdate
 
 from dashboard import theme as T
 
 
 def register_screener_callbacks(app, db_path: str):
+    # Cell-click on the screener table's ticker column → jump to Research tab
+    # and load that ticker. Uses the cross-tab-nav Store as the trigger, which
+    # the Research-tab callbacks listen for.
+    @app.callback(
+        Output("main-tabs", "active_tab", allow_duplicate=True),
+        Output("cross-tab-nav", "data", allow_duplicate=True),
+        Input("screener-table", "active_cell"),
+        State("screener-table", "data"),
+        prevent_initial_call=True,
+    )
+    def jump_to_research_from_screener(active_cell, table_rows):
+        if not active_cell or active_cell.get("column_id") != "ticker":
+            raise PreventUpdate
+        try:
+            ticker = table_rows[active_cell["row"]]["ticker"]
+        except (KeyError, IndexError, TypeError):
+            raise PreventUpdate
+        if not ticker:
+            raise PreventUpdate
+        # `ts` makes the Store payload unique per click — repeated clicks on the
+        # same ticker still produce a new dict so render_report re-fires.
+        return "tab-stock-research", {"ticker": ticker, "ts": int(time.time() * 1000)}
+
     @app.callback(
         Output("screener-table", "data"),
         Output("screener-stat-total", "children"),

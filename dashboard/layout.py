@@ -11,6 +11,10 @@ from dashboard.stock_research_layout import build_stock_research_tab
 
 def build_layout(sectors: list[str]) -> html.Div:
     return html.Div([
+        # Cross-tab navigation signal (Screener → Research auto-load, etc).
+        # Payload: {"ticker": "0700.HK", "ts": 1234567890} — ts is a millisecond
+        # epoch so two clicks on the same ticker still trigger a new render.
+        dcc.Store(id="cross-tab-nav", data=None),
         _header_bar(),
         dbc.Container([
             dbc.Tabs([

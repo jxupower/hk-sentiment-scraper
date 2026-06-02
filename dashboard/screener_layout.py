@@ -112,7 +112,8 @@ def build_screener_tab() -> html.Div:
                     style_cell=T.DATATABLE_CELL,
                     style_cell_conditional=[
                         {"if": {"column_id": "ticker"}, "textAlign": "left",
-                         "fontWeight": "600", "color": T.PRIMARY},
+                         "fontWeight": "600", "color": T.PRIMARY,
+                         "cursor": "pointer", "textDecoration": "underline"},
                         {"if": {"column_id": "name"}, "textAlign": "left",
                          "fontFamily": "Inter, sans-serif"},
                         {"if": {"column_id": "yf_sector"}, "textAlign": "left",
