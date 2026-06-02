@@ -46,10 +46,15 @@ def fetch_one(ticker: str, period: str = "10y") -> list[dict]:
 
 def fetch_many(tickers: list[str], prices_repo,
                period: str = "10y", batch_size: int = 50,
-               throttle_seconds: float = 2.0) -> dict:
+               throttle_seconds: float = 2.0,
+               verbose: bool = False) -> dict:
     """Bulk-download price history for many tickers in chunks, write to repo.
 
     Returns summary dict: {attempted, tickers_with_data, total_rows, failed_tickers}.
+
+    verbose=True logs each ticker as it's persisted (used by long-running
+    interactive seed scripts so the user can see progress within a batch).
+    Off by default to keep scheduler/cron logs quiet.
     """
     attempted = 0
     tickers_with_data = 0
@@ -76,13 +81,15 @@ def fetch_many(tickers: list[str], prices_repo,
 
         # When batch has >1 ticker, columns are MultiIndex (ticker, price_field).
         # When batch has 1 ticker, columns are flat.
-        for ticker in batch:
+        for idx, ticker in enumerate(batch, start=1):
             try:
                 if len(batch) == 1:
                     ticker_df = df
                 else:
                     ticker_df = df[ticker] if ticker in df.columns.get_level_values(0) else None
                 if ticker_df is None or ticker_df.empty:
+                    if verbose:
+                        logger.info("  [%d/%d] %s: no data", idx, len(batch), ticker)
                     continue
                 rows = []
                 for ts, row in ticker_df.dropna(how="all").iterrows():
@@ -99,6 +106,10 @@ def fetch_many(tickers: list[str], prices_repo,
                     n = prices_repo.upsert_rows(ticker, rows)
                     tickers_with_data += 1
                     total_rows += n
+                    if verbose:
+                        logger.info("  [%d/%d] %s: %d rows", idx, len(batch), ticker, n)
+                elif verbose:
+                    logger.info("  [%d/%d] %s: empty after dropna", idx, len(batch), ticker)
             except Exception as e:
                 logger.warning("price persist failed [%s]: %s", ticker, e)
                 failed += 1

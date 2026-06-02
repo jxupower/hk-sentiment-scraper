@@ -105,7 +105,8 @@ def main():
                  batch_start, batch_start + len(batch), len(missing),
                  batch[0], batch[-1])
         try:
-            summary = price_fetch_many(batch, repo, period=args.period)
+            summary = price_fetch_many(batch, repo, period=args.period,
+                                         verbose=True)
             log.info("  attempted=%d with_data=%d total_rows=%d failed=%d",
                      summary["attempted"], summary["tickers_with_data"],
                      summary["total_rows"], len(summary.get("failed_tickers", [])))
