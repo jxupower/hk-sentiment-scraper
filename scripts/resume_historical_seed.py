@@ -7,9 +7,12 @@ Result: only ~54 tickers have prices in the DB, the rest are blank.
 This script:
   1. Reads the list of active tickers from local SQLite securities table
   2. Compares against the set already covered in Supabase historical_prices
-  3. Fetches the missing tickers in batches via yfinance (existing scraper)
-  4. Writes results to Supabase via CloudHistoricalPricesRepository
-  5. Updates a checkpoint file every 50 tickers so re-runs are cheap
+  3. Skips tickers previously confirmed as having no yfinance data
+     (data/.yfinance_delisted.txt, self-learned across runs)
+  4. Fetches the missing tickers in batches via yfinance (existing scraper)
+  5. Writes results to Supabase via CloudHistoricalPricesRepository
+  6. Updates a checkpoint file every batch so re-runs are cheap
+  7. Appends newly-confirmed no-data tickers to the delisted log
 
 Long-running: ~6-8 hours for ~2,700 tickers due to yfinance throttling.
 Run in background with nohup / a separate terminal.
@@ -36,6 +39,12 @@ from storage.cloud_db import available
 from storage.cloud_repository import CloudHistoricalPricesRepository
 
 CHECKPOINT_FILE = Path(__file__).parent.parent / "data" / ".seed_checkpoint.json"
+# Self-learning skip list: tickers yfinance has confirmed as having no data
+# (delisted, broken, or otherwise unreachable). Built up by fetch_many; loaded
+# here to avoid re-probing on subsequent runs. NOT a static HKEX list — HKEX
+# reuses 4-digit codes, so a third-party "delisted" list can wrongly exclude
+# active tickers.
+DELISTED_LOG = Path(__file__).parent.parent / "data" / ".yfinance_delisted.txt"
 
 
 def main():
@@ -77,6 +86,17 @@ def main():
     all_tickers = sorted(r[0] for r in rows)
     missing = [t for t in all_tickers if t not in already_covered]
 
+    # Filter out tickers yfinance has previously confirmed have no data.
+    delisted = set()
+    if DELISTED_LOG.exists():
+        delisted = {ln.strip() for ln in DELISTED_LOG.read_text().splitlines()
+                     if ln.strip()}
+    if delisted:
+        before = len(missing)
+        missing = [t for t in missing if t not in delisted]
+        log.info("Skipping %d tickers from %s (previously confirmed no-data)",
+                 before - len(missing), DELISTED_LOG.name)
+
     if args.limit:
         missing = missing[:args.limit]
 
@@ -106,10 +126,12 @@ def main():
                  batch[0], batch[-1])
         try:
             summary = price_fetch_many(batch, repo, period=args.period,
-                                         verbose=True)
-            log.info("  attempted=%d with_data=%d total_rows=%d failed=%d",
+                                         verbose=True,
+                                         delisted_log_path=DELISTED_LOG)
+            log.info("  attempted=%d with_data=%d total_rows=%d failed=%d new_delisted=%d",
                      summary["attempted"], summary["tickers_with_data"],
-                     summary["total_rows"], len(summary.get("failed_tickers", [])))
+                     summary["total_rows"], summary.get("failed_tickers", 0),
+                     len(summary.get("newly_delisted", [])))
         except Exception as e:
             log.error("  batch failed: %s — continuing", e)
 

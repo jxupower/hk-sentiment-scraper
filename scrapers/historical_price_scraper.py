@@ -9,6 +9,7 @@ yfinance's `Ticker(t).history()` works per-ticker but is slow for batch use.
    when len(tickers) > 1, just plain columns when len(tickers) == 1
 """
 import time
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -47,19 +48,29 @@ def fetch_one(ticker: str, period: str = "10y") -> list[dict]:
 def fetch_many(tickers: list[str], prices_repo,
                period: str = "10y", batch_size: int = 50,
                throttle_seconds: float = 2.0,
-               verbose: bool = False) -> dict:
+               verbose: bool = False,
+               delisted_log_path: Optional[Path] = None) -> dict:
     """Bulk-download price history for many tickers in chunks, write to repo.
 
-    Returns summary dict: {attempted, tickers_with_data, total_rows, failed_tickers}.
+    Returns summary dict: {attempted, tickers_with_data, total_rows, failed_tickers,
+    newly_delisted}.
 
     verbose=True logs each ticker as it's persisted (used by long-running
     interactive seed scripts so the user can see progress within a batch).
     Off by default to keep scheduler/cron logs quiet.
+
+    delisted_log_path: when set, tickers that come back empty from a bulk
+    download whose OTHER tickers succeeded are appended (one per line) to
+    this file as confirmed-no-data. Callers (e.g. resume_historical_seed)
+    load this file at start and skip those tickers, avoiding repeat probes
+    against yfinance. Tickers from a wholly-failed batch are NOT recorded —
+    that's a transient error, not a confirmed delisting.
     """
     attempted = 0
     tickers_with_data = 0
     total_rows = 0
     failed = 0
+    newly_delisted: list[str] = []
 
     for i in range(0, len(tickers), batch_size):
         batch = tickers[i:i + batch_size]
@@ -90,6 +101,7 @@ def fetch_many(tickers: list[str], prices_repo,
                 if ticker_df is None or ticker_df.empty:
                     if verbose:
                         logger.info("  [%d/%d] %s: no data", idx, len(batch), ticker)
+                    newly_delisted.append(ticker)
                     continue
                 rows = []
                 for ts, row in ticker_df.dropna(how="all").iterrows():
@@ -108,8 +120,12 @@ def fetch_many(tickers: list[str], prices_repo,
                     total_rows += n
                     if verbose:
                         logger.info("  [%d/%d] %s: %d rows", idx, len(batch), ticker, n)
-                elif verbose:
-                    logger.info("  [%d/%d] %s: empty after dropna", idx, len(batch), ticker)
+                else:
+                    # ticker_df was non-empty but every row was all-NaN — treat
+                    # the same as "no data" for skip purposes.
+                    newly_delisted.append(ticker)
+                    if verbose:
+                        logger.info("  [%d/%d] %s: empty after dropna", idx, len(batch), ticker)
             except Exception as e:
                 logger.warning("price persist failed [%s]: %s", ticker, e)
                 failed += 1
@@ -119,13 +135,30 @@ def fetch_many(tickers: list[str], prices_repo,
                     total_rows, tickers_with_data, failed)
         time.sleep(throttle_seconds)
 
+    # Persist the confirmed-delisted set so future runs skip them.
+    if delisted_log_path and newly_delisted:
+        delisted_log_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = set()
+        if delisted_log_path.exists():
+            existing = {ln.strip() for ln in delisted_log_path.read_text().splitlines()
+                         if ln.strip()}
+        new_only = [t for t in newly_delisted if t not in existing]
+        if new_only:
+            with delisted_log_path.open("a", encoding="utf-8") as f:
+                for t in new_only:
+                    f.write(f"{t}\n")
+            logger.info("recorded %d newly delisted tickers to %s",
+                         len(new_only), delisted_log_path)
+
     summary = {
         "attempted": attempted,
         "tickers_with_data": tickers_with_data,
         "total_rows": total_rows,
         "failed_tickers": failed,
+        "newly_delisted": newly_delisted,
     }
-    logger.info("Historical price seed complete: %s", summary)
+    logger.info("Historical price seed complete: %s",
+                {k: (len(v) if isinstance(v, list) else v) for k, v in summary.items()})
     return summary
 
 
