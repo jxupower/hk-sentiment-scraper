@@ -13,6 +13,8 @@ Key differences vs SQLite repo:
 """
 from typing import Optional
 
+from psycopg2.extras import execute_values
+
 from storage.cloud_db import cursor
 
 
@@ -115,13 +117,19 @@ class CloudFundamentalsRepository:
 
 class CloudHistoricalPricesRepository:
     def upsert_rows(self, ticker: str, rows: list[dict]) -> int:
-        """rows: list of dicts with keys date, open, high, low, close, adj_close, volume."""
+        """rows: list of dicts with keys date, open, high, low, close, adj_close, volume.
+
+        Uses psycopg2.extras.execute_values to batch all rows into a single
+        multi-VALUES INSERT — orders-of-magnitude faster than executemany over
+        the Supabase pooler (executemany = one round-trip per row; this is
+        one round-trip per call).
+        """
         if not rows:
             return 0
         sql = """
             INSERT INTO historical_prices
                 (ticker, date, open, high, low, close, adj_close, volume)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES %s
             ON CONFLICT (ticker, date) DO UPDATE SET
                 open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
                 close = EXCLUDED.close, adj_close = EXCLUDED.adj_close,
@@ -130,7 +138,7 @@ class CloudHistoricalPricesRepository:
         params = [(ticker, r["date"], r.get("open"), r.get("high"), r.get("low"),
                    r.get("close"), r.get("adj_close"), r.get("volume")) for r in rows]
         with cursor() as cur:
-            cur.executemany(sql, params)
+            execute_values(cur, sql, params, page_size=1000)
         return len(rows)
 
     def get_price_on_or_before(self, ticker: str,
