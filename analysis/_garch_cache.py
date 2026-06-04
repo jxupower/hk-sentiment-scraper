@@ -7,9 +7,14 @@ A user that re-renders the same ticker (e.g. flipping between charts or
 adjusting cosmetic UI bits) shouldn't refit — only history-window or ticker
 changes should trigger a refit.
 
-Cache key: (ticker, history_window_days, horizon, last_price_date_iso).
+Cache key: (ticker, history_window_trading_days, horizon, last_price_date_iso).
 The last_price_date component means new daily seed runs auto-invalidate
 the next morning; slider tweaks on the same data hit warm cache.
+
+NOTE on the window unit: `history_window_trading_days` is in **trading**
+days, not calendar days. The prices list contains one row per trading day,
+and we slice with `iloc[-N:]`. HK has ~252 trading days/year, so the UI's
+1Y / 3Y / 5Y options map to 252 / 756 / 1260.
 
 TTL: 15 minutes (matches the convention used by analysis/_research_cache.py).
 """
@@ -58,7 +63,7 @@ _order: list[tuple] = []  # FIFO order of keys for eviction
 
 
 def get_or_build(ticker: str, prices: list[dict], *,
-                  history_window_days: int,
+                  history_window_trading_days: int,
                   horizon: int,
                   n_paths: int = 5000,
                   ttl_seconds: int = _DEFAULT_TTL_SECONDS,
@@ -67,7 +72,7 @@ def get_or_build(ticker: str, prices: list[dict], *,
     """Return a cached or freshly-built RiskBundle for this ticker.
 
     `prices` is the raw list-of-dicts from data_loader.get_or_fetch_prices —
-    we slice to history_window_days inside the cache so the slice is part
+    we slice to history_window_trading_days inside the cache so the slice is part
     of the cached state and a window change forces a refit.
 
     Concurrent calls for the same key coalesce: thread A's build is shared
@@ -80,7 +85,7 @@ def get_or_build(ticker: str, prices: list[dict], *,
         raise ValueError(f"no price data for {ticker}")
 
     last_price_date = str(prices[-1]["date"])[:10]
-    key = (ticker, history_window_days, horizon, last_price_date)
+    key = (ticker, history_window_trading_days, horizon, last_price_date)
 
     with _lock:
         cached = _entries.get(key)
@@ -90,12 +95,12 @@ def get_or_build(ticker: str, prices: list[dict], *,
         # Slice to the requested history window (0 = MAX)
         price_series = pd.Series([float(r["adj_close"]) for r in prices
                                     if r.get("adj_close") is not None])
-        if history_window_days and history_window_days > 0:
-            price_series = price_series.iloc[-history_window_days:]
+        if history_window_trading_days and history_window_trading_days > 0:
+            price_series = price_series.iloc[-history_window_trading_days:]
         if len(price_series) < 251:  # need >=250 returns for fit_garch
             raise ValueError(
                 f"{ticker}: only {len(price_series)} prices in window "
-                f"({history_window_days}d) — need >=251 for a stable fit"
+                f"({history_window_trading_days}d) — need >=251 for a stable fit"
             )
 
         returns = compute_log_returns(price_series)

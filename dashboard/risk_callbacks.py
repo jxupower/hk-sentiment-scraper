@@ -98,7 +98,7 @@ def register_risk_callbacks(app, db_path: str):
 
         try:
             bundle = get_or_build(ticker, prices,
-                                    history_window_days=history_window,
+                                    history_window_trading_days=history_window,
                                     horizon=horizon)
         except ValueError as e:
             return _error_state(str(e))

@@ -16,13 +16,16 @@ INDEX_OPTIONS = [
 ]
 
 # History-window radio: how much past data to feed the GARCH fit.
+# Values are TRADING days, not calendar days — the prices list contains
+# one entry per trading day and the cache slices it with `iloc[-N:]`.
+# HK has ~252 trading days/year, so 252/756/1260 deliver ~1y/3y/5y.
 HISTORY_WINDOW_OPTIONS = [
-    {"label": "1Y", "value": 365},
-    {"label": "3Y", "value": 1095},
-    {"label": "5Y", "value": 1825},
+    {"label": "1Y", "value": 252},
+    {"label": "3Y", "value": 756},
+    {"label": "5Y", "value": 1260},
     {"label": "MAX", "value": 0},
 ]
-DEFAULT_HISTORY_WINDOW = 1825   # 5Y
+DEFAULT_HISTORY_WINDOW = 1260   # 5Y (= 5 × 252 trading days)
 
 # Forecast horizon radio: trading days to simulate forward.
 HORIZON_OPTIONS = [
