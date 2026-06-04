@@ -41,7 +41,14 @@ def get_or_fetch_prices(ticker: str, db: Database, *,
     on miss/stale. `period` is the yfinance period string used only on miss
     (the cache stores everything we've ever pulled, regardless of period).
 
+    Tickers beginning with "^" (e.g. "^HSI", "^HSCEI", "^HSTECH") are
+    routed to get_or_fetch_index_prices() so the same caller-side API
+    works for both equities and indices.
+
     Returns [] if both cache and fetch fail."""
+    if ticker.startswith("^"):
+        return get_or_fetch_index_prices(ticker, db, force_refresh=force_refresh)
+
     repo = get_prices_repo(db)
 
     if not force_refresh:
@@ -57,6 +64,38 @@ def get_or_fetch_prices(ticker: str, db: Database, *,
         repo.upsert_rows(ticker, rows)
         log.info("  upserted %d rows for %s", len(rows), ticker)
     return _get_full_series(repo, ticker)
+
+
+def get_or_fetch_index_prices(index_ticker: str, db: Database, *,
+                                force_refresh: bool = False) -> list[dict]:
+    """Cache-aside read for HK index prices (HSI/HSCEI/HSTECH).
+
+    `index_ticker` uses our "^"-prefix convention (e.g. "^HSI") so it's
+    distinguishable from equities in the same `historical_prices` table
+    and doesn't pollute the screener (which queries securities, not
+    historical_prices). Internally we strip the prefix before calling
+    akshare. Source is fetch_one_index() in akshare_price_scraper.
+    """
+    repo = get_prices_repo(db)
+
+    if not force_refresh:
+        latest_str = repo.latest_date(index_ticker) if hasattr(repo, "latest_date") \
+                      else _sqlite_latest_date(db, index_ticker)
+        if latest_str and not _is_price_stale(latest_str):
+            return _get_full_series(repo, index_ticker)
+
+    bare = index_ticker.lstrip("^")
+    log.info("Cache-aside fetch: akshare index %s", bare)
+    try:
+        from scrapers.akshare_price_scraper import fetch_one_index
+        rows = fetch_one_index(bare)
+    except Exception as e:
+        log.warning("akshare index fetch failed for %s: %s", bare, e)
+        rows = []
+    if rows:
+        repo.upsert_rows(index_ticker, rows)  # stored under "^HSI", not "HSI"
+        log.info("  upserted %d rows for %s", len(rows), index_ticker)
+    return _get_full_series(repo, index_ticker)
 
 
 def _get_full_series(repo, ticker: str) -> list[dict]:

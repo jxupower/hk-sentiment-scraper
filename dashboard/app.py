@@ -8,6 +8,7 @@ from dashboard.recommendations_callbacks import register_recommendations_callbac
 from dashboard.screens_callbacks import register_screens_callbacks
 from dashboard.backtest_callbacks import register_backtest_callbacks
 from dashboard.stock_research_callbacks import register_stock_research_callbacks
+from dashboard.risk_callbacks import register_risk_callbacks
 from dashboard import theme as T
 
 
@@ -247,5 +248,6 @@ def create_app(db_path: str, settings) -> dash.Dash:
     register_screens_callbacks(app, db_path)
     register_backtest_callbacks(app, db_path)
     register_stock_research_callbacks(app, db_path)
+    register_risk_callbacks(app, db_path)
 
     return app

@@ -26,6 +26,9 @@ openpyxl>=3.1
 requests>=2.31
 akshare>=1.13
 
+# Risk modelling
+arch>=5.0       # GARCH; pulls scipy + statsmodels as transitives
+
 # Cloud DB (Supabase Postgres)
 psycopg2-binary>=2.9
 

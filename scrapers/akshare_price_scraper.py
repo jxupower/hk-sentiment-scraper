@@ -30,6 +30,46 @@ def _to_ak_symbol(ticker: str) -> str:
     return base.zfill(5)
 
 
+def fetch_one_index(index_code: str) -> list[dict]:
+    """Fetch a HK index's full daily history (HSI, HSCEI, HSTECH, etc.).
+
+    The Risk Forecast tab calls this for benchmarks. We use the SINA
+    variant of akshare's HK-index endpoint (`stock_hk_index_daily_sina`)
+    because the EM variant raised RemoteDisconnected during testing
+    while sina returns ~13 years of clean daily data instantly.
+
+    `index_code` is the bare symbol used by sina (e.g. "HSI", "HSCEI",
+    "HSTECH") — caller strips any "^" prefix we use internally to
+    distinguish indices from equities in our `historical_prices` table.
+
+    Returns the same dict shape as fetch_one so the existing upsert path
+    accepts them unchanged. close == adj_close (indices have no
+    splits/dividends to adjust for).
+    """
+    try:
+        df = ak.stock_hk_index_daily_sina(symbol=index_code)
+    except Exception as e:
+        logger.warning("akshare index fetch failed [%s]: %s", index_code, e)
+        return []
+    if df is None or df.empty:
+        return []
+
+    out = []
+    for _, row in df.iterrows():
+        d = row["date"]
+        close = _fnum(row.get("close"))
+        out.append({
+            "date": d.isoformat() if hasattr(d, "isoformat") else str(d)[:10],
+            "open": _fnum(row.get("open")),
+            "high": _fnum(row.get("high")),
+            "low":  _fnum(row.get("low")),
+            "close": close,
+            "adj_close": close,  # no corporate actions on an index
+            "volume": _inum(row.get("volume")),
+        })
+    return out
+
+
 def fetch_one(ticker: str) -> list[dict]:
     """Fetch one ticker's full price history via akshare. Returns rows in
     the same shape as scrapers.historical_price_scraper.fetch_one so the

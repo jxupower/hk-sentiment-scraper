@@ -7,6 +7,7 @@ from dashboard.recommendations_layout import build_recommendations_tab
 from dashboard.screens_layout import build_screens_tab
 from dashboard.backtest_layout import build_backtest_tab
 from dashboard.stock_research_layout import build_stock_research_tab
+from dashboard.risk_layout import build_risk_tab
 
 
 def build_layout(sectors: list[str]) -> html.Div:
@@ -30,6 +31,8 @@ def build_layout(sectors: list[str]) -> html.Div:
                         children=build_backtest_tab()),
                 dbc.Tab(label="Stock Research", tab_id="tab-stock-research",
                         children=build_stock_research_tab()),
+                dbc.Tab(label="Risk Forecast", tab_id="tab-risk",
+                        children=build_risk_tab()),
             ], id="main-tabs", active_tab="tab-sentiment", className="mb-4"),
         ], fluid=True, className="py-3", style={"maxWidth": "1600px"}),
     ], style={"background": T.BG, "minHeight": "100vh"})
