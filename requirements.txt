@@ -28,6 +28,7 @@ akshare>=1.13
 
 # Risk modelling
 arch>=5.0       # GARCH; pulls scipy + statsmodels as transitives
+scikit-learn>=1.3  # Ledoit-Wolf shrinkage covariance for portfolio optimizer
 
 # Cloud DB (Supabase Postgres)
 psycopg2-binary>=2.9
