@@ -93,6 +93,10 @@ def build_portfolio_tab() -> html.Div:
         ], style=T.CARD_STYLE, className="mb-3"),
 
         # ============== Parameters ==============
+        # Responsive: stack on phones (xs=12), 2-up on tablets (sm=6),
+        # 4-up on desktop (md=…). Combined with the .sr-period-radio CSS
+        # flex-wrap fix, this prevents the button-group overflow that used
+        # to push 1Y/3Y/5Y buttons into the 5d/21d/63d column.
         dbc.Card([
             dbc.CardHeader("Parameters", className="fw-bold"),
             dbc.CardBody([
@@ -109,7 +113,7 @@ def build_portfolio_tab() -> html.Div:
                             labelClassName="btn btn-outline-primary btn-sm",
                             labelCheckedClassName="active",
                         ),
-                    ], width=3),
+                    ], xs=12, sm=6, md=3),
                     dbc.Col([
                         html.Label("Rebalance frequency (backtest)",
                                     className="text-muted small mb-1"),
@@ -122,7 +126,7 @@ def build_portfolio_tab() -> html.Div:
                             labelClassName="btn btn-outline-primary btn-sm",
                             labelCheckedClassName="active",
                         ),
-                    ], width=4),
+                    ], xs=12, sm=6, md=4),
                     dbc.Col([
                         html.Label([
                             "Per-asset cap ",
@@ -137,7 +141,7 @@ def build_portfolio_tab() -> html.Div:
                             marks={10: "10%", 30: "30%", 50: "50%", 100: "100%"},
                             tooltip={"placement": "bottom"},
                         ),
-                    ], width=3),
+                    ], xs=12, sm=6, md=3),
                     dbc.Col([
                         html.Label("Risk-free rate (%, ann.)",
                                     className="text-muted small mb-1"),
@@ -148,8 +152,8 @@ def build_portfolio_tab() -> html.Div:
                             style={**T.INPUT_STYLE, "width": "100%",
                                    "padding": "5px 10px"},
                         ),
-                    ], width=2),
-                ]),
+                    ], xs=12, sm=6, md=2),
+                ], className="g-3"),
                 html.Div([
                     dbc.Button("Compute optimal portfolio",
                                 id="portfolio-compute-btn",

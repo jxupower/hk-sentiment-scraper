@@ -159,7 +159,16 @@ def create_app(db_path: str, settings) -> dash.Dash:
             background: {T.BORDER_STRONG} !important;
         }}
 
-        /* Period-selector segmented control (Stock Research tab) */
+        /* Period-selector segmented control (Stock Research / Risk / Portfolio tabs) */
+        /* Override Bootstrap's btn-group flex-wrap: nowrap so buttons wrap to a
+           second line instead of overflowing horizontally into adjacent columns
+           when the parent column is squeezed. Small gap so wrapped rows have
+           breathing room. */
+        .sr-period-radio {{
+            flex-wrap: wrap !important;
+            gap: 2px !important;
+            max-width: 100% !important;
+        }}
         .sr-period-radio label.btn-outline-primary {{
             color: {T.TEXT_MUTED} !important;
             border-color: {T.BORDER_STRONG} !important;

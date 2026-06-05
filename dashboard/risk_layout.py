@@ -50,6 +50,9 @@ def build_risk_tab() -> html.Div:
         ], color="info", className="small mb-3", dismissable=True),
 
         # Header — ticker + window + horizon + Load
+        # Responsive: stack on phones (xs=12 each), spread across the row on
+        # md+ desktops. Horizon gets width=3 (was 2) because its 3 buttons have
+        # long labels ("21d (1mo)", "63d (1qtr)") that overflowed width=2.
         dbc.Card([
             dbc.CardBody([
                 dbc.Row([
@@ -63,7 +66,7 @@ def build_risk_tab() -> html.Div:
                             placeholder="Type to search or pick an index above…",
                             clearable=False,
                         ),
-                    ], width=5),
+                    ], xs=12, md=4),
                     dbc.Col([
                         html.Label("History window (fit data)",
                                     className="text-muted small mb-1"),
@@ -77,7 +80,7 @@ def build_risk_tab() -> html.Div:
                             labelClassName="btn btn-outline-primary btn-sm",
                             labelCheckedClassName="active",
                         ),
-                    ], width=3),
+                    ], xs=12, sm=6, md=3),
                     dbc.Col([
                         html.Label("Forecast horizon",
                                     className="text-muted small mb-1"),
@@ -91,13 +94,13 @@ def build_risk_tab() -> html.Div:
                             labelClassName="btn btn-outline-primary btn-sm",
                             labelCheckedClassName="active",
                         ),
-                    ], width=2),
+                    ], xs=12, sm=6, md=3),
                     dbc.Col([
                         html.Label(" ", className="small mb-1"),
                         dbc.Button("Load risk forecast", id="risk-load-btn",
                                    color="primary", size="sm", className="w-100"),
-                    ], width=2),
-                ], align="end"),
+                    ], xs=12, md=2),
+                ], align="end", className="g-2"),
             ], style={"padding": "12px 16px"}),
         ], style=T.CARD_STYLE, className="mb-3"),
 
