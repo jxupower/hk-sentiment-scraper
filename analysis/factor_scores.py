@@ -119,10 +119,17 @@ class FactorScoringEngine:
             else:
                 viable.append(f)
 
-        # Pass 2: bucket viable tickers by sector and compute per-sector percentile ranks
+        # Pass 2: bucket viable tickers by SUB-SECTOR (when available) and
+        # compute per-bucket percentile ranks. Falling back through
+        # effective_sector → yf_sector → watchlist_sector → "—" keeps
+        # tickers without a sub_sector assignment in the system. The reason
+        # to prefer sub_sector: comparing P/E across 301 Technology names
+        # (chips + apps + food delivery + solar) is meaningless; per-sub-sector
+        # ranking lets a Semiconductor P/E be ranked against Semiconductors.
         by_sector: dict[str, list[dict]] = {}
         for f in viable:
-            sec = f.get("yf_sector") or f.get("watchlist_sector") or "—"
+            sec = (f.get("sub_sector") or f.get("effective_sector")
+                    or f.get("yf_sector") or f.get("watchlist_sector") or "—")
             by_sector.setdefault(sec, []).append(f)
 
         sectors_in_play = 0
@@ -162,7 +169,11 @@ class FactorScoringEngine:
             results.append(FactorResult(
                 ticker=ticker,
                 name=f.get("name") or ticker,
-                sector=f.get("yf_sector") or f.get("watchlist_sector") or "—",
+                # Report the sub_sector when present so downstream UI shows
+                # the sharper bucket; fall back through the same chain used
+                # for ranking so this label always matches the peer group.
+                sector=(f.get("sub_sector") or f.get("effective_sector")
+                          or f.get("yf_sector") or f.get("watchlist_sector") or "—"),
                 is_watchlist=bool(f.get("is_watchlist")),
                 value_pctile=v, quality_pctile=q, growth_pctile=g, sentiment_pctile=s,
                 composite_pctile=composite,
@@ -182,7 +193,8 @@ class FactorScoringEngine:
         for f, reason in disqualified:
             results.append(FactorResult(
                 ticker=f["ticker"], name=f.get("name") or f["ticker"],
-                sector=f.get("yf_sector") or f.get("watchlist_sector") or "—",
+                sector=(f.get("sub_sector") or f.get("effective_sector")
+                          or f.get("yf_sector") or f.get("watchlist_sector") or "—"),
                 is_watchlist=bool(f.get("is_watchlist")),
                 value_pctile=None, quality_pctile=None, growth_pctile=None,
                 sentiment_pctile=None, composite_pctile=None, article_count=0,

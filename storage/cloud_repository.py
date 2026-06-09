@@ -295,3 +295,84 @@ class CloudFinancialStatementsRepository:
             )
             row = cur.fetchone()
             return str(row[0]) if row and row[0] else None
+
+
+class CloudPortfoliosRepository:
+    """User-saved portfolios. Each row materialises into one or two synthetic
+    tickers in historical_prices (@NAME and optionally @NAME$OPT), so
+    downstream tabs can treat a portfolio like any other ticker.
+
+    Name is the natural key (one row per unique uppercase-alphanumeric name).
+    Application code is responsible for normalising the name before save.
+    """
+
+    def list_portfolios(self) -> list[dict]:
+        """All saved portfolios, most-recently-updated first."""
+        with cursor(dict_rows=True) as cur:
+            cur.execute("""
+                SELECT name, holdings, optimal_weights, rf, weight_cap,
+                       lookback_days, notes, created_at, updated_at
+                FROM portfolios
+                ORDER BY updated_at DESC
+            """)
+            return [_serialise_portfolio_row(dict(r)) for r in cur.fetchall()]
+
+    def get_portfolio(self, name: str) -> Optional[dict]:
+        with cursor(dict_rows=True) as cur:
+            cur.execute("""
+                SELECT name, holdings, optimal_weights, rf, weight_cap,
+                       lookback_days, notes, created_at, updated_at
+                FROM portfolios WHERE name = %s
+            """, (name,))
+            row = cur.fetchone()
+            return _serialise_portfolio_row(dict(row)) if row else None
+
+    def save_portfolio(self, name: str, holdings: list[dict],
+                        optimal_weights: Optional[list[dict]] = None,
+                        *, rf: Optional[float] = None,
+                        weight_cap: Optional[float] = None,
+                        lookback_days: Optional[int] = None,
+                        notes: Optional[str] = None) -> None:
+        """Upsert. `holdings` is a list of {ticker, shares}; optional
+        `optimal_weights` is a list of {ticker, weight} (already aligned
+        with the same tickers, weights summing to 1)."""
+        from psycopg2.extras import Json
+        with cursor() as cur:
+            cur.execute("""
+                INSERT INTO portfolios
+                    (name, holdings, optimal_weights, rf, weight_cap,
+                     lookback_days, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (name) DO UPDATE SET
+                    holdings = EXCLUDED.holdings,
+                    optimal_weights = EXCLUDED.optimal_weights,
+                    rf = EXCLUDED.rf,
+                    weight_cap = EXCLUDED.weight_cap,
+                    lookback_days = EXCLUDED.lookback_days,
+                    notes = EXCLUDED.notes,
+                    updated_at = NOW()
+            """, (name, Json(holdings),
+                  Json(optimal_weights) if optimal_weights is not None else None,
+                  rf, weight_cap, lookback_days, notes))
+
+    def delete_portfolio(self, name: str) -> bool:
+        """Returns True if a row was deleted. Caller is responsible for
+        cleaning up the matching @NAME / @NAME$OPT rows in historical_prices."""
+        with cursor() as cur:
+            cur.execute("DELETE FROM portfolios WHERE name = %s", (name,))
+            return cur.rowcount > 0
+
+
+def _serialise_portfolio_row(row: dict) -> dict:
+    """Coerce psycopg2 types (datetime, Decimal) to JSON-friendly primitives."""
+    from decimal import Decimal
+    from datetime import datetime
+    out = {}
+    for k, v in row.items():
+        if isinstance(v, Decimal):
+            out[k] = float(v)
+        elif isinstance(v, datetime):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out

@@ -29,6 +29,12 @@ def register_risk_callbacks(app, db_path: str):
         State("risk-ticker-select", "value"),
     )
     def populate_risk_ticker_options(search, current_value):
+        # Saved portfolios become first-class tickers in the Risk Forecast
+        # dropdown — `@CORE` runs GARCH on the status-quo series, `@CORE$OPT`
+        # runs it on the max-Sharpe optimal-weight series. These are pinned
+        # right under the indices so the user can find them fast.
+        portfolio_opts = _build_portfolio_options(search)
+
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
             if search:
@@ -49,18 +55,22 @@ def register_risk_callbacks(app, db_path: str):
             stock_opts = [{"label": f"{r['ticker']} — {r['name']}",
                             "value": r["ticker"]} for r in rows]
 
-            options = list(INDEX_OPTIONS) + stock_opts
+            options = list(INDEX_OPTIONS) + portfolio_opts + stock_opts
 
             # Safeguard: always include the currently-selected value
             if current_value and not any(o["value"] == current_value for o in options):
-                cur_row = conn.execute(
-                    "SELECT ticker, name FROM securities WHERE ticker = ?",
-                    (current_value,)
-                ).fetchone()
-                label = (f"{cur_row['ticker']} — {cur_row['name']}"
-                         if cur_row else current_value)
-                options.insert(len(INDEX_OPTIONS),
-                                {"label": label, "value": current_value})
+                if current_value.startswith("@"):
+                    options.insert(len(INDEX_OPTIONS),
+                                    {"label": current_value, "value": current_value})
+                else:
+                    cur_row = conn.execute(
+                        "SELECT ticker, name FROM securities WHERE ticker = ?",
+                        (current_value,)
+                    ).fetchone()
+                    label = (f"{cur_row['ticker']} — {cur_row['name']}"
+                             if cur_row else current_value)
+                    options.insert(len(INDEX_OPTIONS),
+                                    {"label": label, "value": current_value})
         return options
 
     # ----- Main render: one heavy callback per Load click -----
@@ -121,6 +131,41 @@ def register_risk_callbacks(app, db_path: str):
             {"display": "none"}, {"display": "block"},
             subtitle, fan, cone, var_tbl, prob_tbl, dd_fig, diag,
         )
+
+
+# ============== Saved-portfolio dropdown options ==============
+
+def _build_portfolio_options(search: Optional[str] = None) -> list[dict]:
+    """Pull saved portfolios from Supabase and expose each as one or two
+    dropdown options (`@NAME` always; `@NAME$OPT` when optimal_weights set).
+    Silently empty when the cloud DB isn't configured."""
+    try:
+        from storage.cloud_db import available
+        if not available():
+            return []
+        from storage.cloud_repository import CloudPortfoliosRepository
+        rows = CloudPortfoliosRepository().list_portfolios()
+    except Exception:
+        return []
+
+    options: list[dict] = []
+    needle = (search or "").strip().upper()
+    for r in rows:
+        name = r["name"]
+        sq = f"@{name}"
+        if not needle or needle in sq:
+            options.append({
+                "label": f"⊕ {sq} — saved portfolio ({len(r.get('holdings') or [])} holdings)",
+                "value": sq,
+            })
+        if r.get("optimal_weights"):
+            opt = f"@{name}$OPT"
+            if not needle or needle in opt:
+                options.append({
+                    "label": f"⊕ {opt} — max-Sharpe optimal weights",
+                    "value": opt,
+                })
+    return options
 
 
 # ============== Helper builders (HTML/Bootstrap tables) ==============

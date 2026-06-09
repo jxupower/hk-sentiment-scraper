@@ -44,13 +44,16 @@ def cloud_db_configured() -> bool:
 
 
 def _normalize_entry(entry) -> dict:
-    """Accept either a plain string ticker or a {ticker, name, aliases} dict."""
+    """Accept either a plain string ticker or a {ticker, name, aliases, sub_sector?} dict.
+    `sub_sector` is optional — when set, the reconciler uses it as the
+    highest-priority source for resolving `securities.sub_sector`."""
     if isinstance(entry, str):
-        return {"ticker": entry, "name": entry, "aliases": []}
+        return {"ticker": entry, "name": entry, "aliases": [], "sub_sector": None}
     return {
         "ticker": entry["ticker"],
         "name": entry.get("name", entry["ticker"]),
         "aliases": entry.get("aliases", []),
+        "sub_sector": entry.get("sub_sector"),
     }
 
 
@@ -96,16 +99,18 @@ def get_tickers_for_sector(sector: str, watchlist: dict) -> list[str]:
 
 
 _SECTOR_BROAD_TERMS: dict[str, list[str]] = {
-    "Software Development": ["China tech", "Chinese tech", "China internet", "China platform",
+    "Platforms & Cloud Infrastructure": ["China tech", "Chinese tech", "China internet", "China platform",
                               "China e-commerce", "China digital", "China app", "China mobile internet",
-                              "China gaming", "China AI", "China large language model"],
-    "Communications": ["China Mobile", "China Telecom", "China Unicom", "China 5G",
-                       "China telecom", "China telecommunications", "China wireless network"],
-    "IT Hardware": ["China PC", "China smartphone", "China hardware",
-                    "China electronics", "China consumer electronics"],
-    "Computer Transistors": ["China semiconductor", "China chip", "China foundry",
+                              "China gaming", "China AI", "China large language model",
+                              "China cloud", "AliCloud", "Tencent Cloud", "Baidu Cloud"],
+    "Telecom Services": ["China Mobile", "China Telecom", "China Unicom", "China 5G",
+                          "China telecom", "China telecommunications", "China wireless network"],
+    "Consumer Electronics & Devices": ["China PC", "China smartphone", "China hardware",
+                                        "China electronics", "China consumer electronics",
+                                        "Xiaomi", "Lenovo"],
+    "Semiconductors & Equipment": ["China semiconductor", "China chip", "China foundry",
                               "China chipmaker", "China wafer", "China IC design",
-                              "China integrated circuit"],
+                              "China integrated circuit", "semiconductor equipment"],
     "Banking": ["China bank", "HK bank", "Hong Kong bank", "China banking",
                 "Chinese bank", "China lender", "China credit", "China loan"],
     "Finance": ["HKEX", "Hong Kong exchange", "China fintech", "China brokerage",
@@ -139,8 +144,8 @@ _SECTOR_BROAD_TERMS: dict[str, list[str]] = {
              "China coking coal", "China coal price"],
     "Chemicals": ["China chemical", "China fertilizer", "China petrochemical",
                   "China specialty chemical", "China chemical industry"],
-    "Construction Materials": ["China cement", "China building material", "China construction material",
-                                "China concrete", "China glass fiber"],
+    "Building Products & Equipment": ["China cement", "China building material", "China construction material",
+                                       "China concrete", "China glass fiber"],
     "Mining": ["China mining", "China gold mining", "China copper mining", "China lithium",
                "China mineral", "China rare earth", "China molybdenum"],
     "Utilities": ["China power", "China electricity", "China utility", "China nuclear",

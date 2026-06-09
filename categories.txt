@@ -2,7 +2,7 @@ Industrial Machinery
 Pharmaceuticals
 Real Estate
 Property Management
-Computer Transistors
+Semiconductors & Equipment
 Banking
 Finance
 Healthcare
@@ -14,9 +14,9 @@ Leisure & Luxury
 Textiles
 Education & support services
 Coal
-Construction materials
+Building Products & Equipment
 Chemicals
 Mining
-Software Development
-Communications
-IT Hardware
+Platforms & Cloud Infrastructure
+Telecom Services
+Consumer Electronics & Devices

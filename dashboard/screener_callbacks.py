@@ -41,13 +41,16 @@ def register_screener_callbacks(app, db_path: str):
         Output("screener-row-count", "children"),
         Output("screener-sector-pe-chart", "figure"),
         Output("screener-sector-filter", "options"),
+        Output("screener-subsector-filter", "options"),
         Input("screener-auto-refresh", "n_intervals"),
         Input("screener-refresh-btn", "n_clicks"),
         Input("screener-sector-filter", "value"),
+        Input("screener-subsector-filter", "value"),
         Input("screener-tier-filter", "value"),
         Input("screener-completeness-filter", "value"),
     )
-    def update_screener(_n, _clicks, sector_filter, tier_filter, min_completeness):
+    def update_screener(_n, _clicks, sector_filter, subsector_filter,
+                          tier_filter, min_completeness):
         rows = _query_latest(db_path)
         total_universe = _count_universe(db_path)
         latest_date = max((r["snapshot_date"] for r in rows), default="—")
@@ -62,12 +65,17 @@ def register_screener_callbacks(app, db_path: str):
         if sector_filter:
             chosen = set(sector_filter)
             filtered = [r for r in filtered if r.get("yf_sector") in chosen]
+        if subsector_filter:
+            chosen_sub = set(subsector_filter)
+            filtered = [r for r in filtered if r.get("sub_sector") in chosen_sub]
 
         table_data = [_format_row(r) for r in filtered]
 
-        # Sector dropdown options come from the full snapshot population, not the filtered view
+        # Dropdown options come from the full snapshot population, not filtered view
         sector_set = sorted({r["yf_sector"] for r in rows if r.get("yf_sector")})
         sector_options = [{"label": s, "value": s} for s in sector_set]
+        subsector_set = sorted({r["sub_sector"] for r in rows if r.get("sub_sector")})
+        subsector_options = [{"label": s, "value": s} for s in subsector_set]
 
         chart = _build_sector_pe_chart(filtered)
 
@@ -79,6 +87,7 @@ def register_screener_callbacks(app, db_path: str):
             f"{len(filtered):,} of {len(rows):,} matching filters",
             chart,
             sector_options,
+            subsector_options,
         )
 
 
@@ -92,7 +101,7 @@ def _query_latest(db_path: str) -> list[dict]:
                    f.market_cap, f.beta, f.return_on_equity, f.debt_to_equity,
                    f.last_price, f.currency, f.data_completeness,
                    s.name, s.is_watchlist, s.watchlist_sector,
-                   s.yf_sector, s.yf_industry
+                   s.yf_sector, s.yf_industry, s.sub_sector, s.effective_sector
             FROM fundamentals_snapshots f
             INNER JOIN (
                 SELECT ticker, MAX(snapshot_date) AS max_date
@@ -135,6 +144,7 @@ def _format_row(r: dict) -> dict:
         "ticker": r.get("ticker"),
         "name": (r.get("name") or "")[:30],
         "yf_sector": r.get("yf_sector") or r.get("watchlist_sector") or "—",
+        "sub_sector": r.get("sub_sector") or "—",
         "market_cap_b": rnd(market_cap / 1e9, 1) if market_cap else None,
         "trailing_pe": rnd(r.get("trailing_pe"), 1),
         "forward_pe": rnd(r.get("forward_pe"), 1),

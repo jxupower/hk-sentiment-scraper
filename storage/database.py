@@ -220,6 +220,16 @@ class Database:
                 ("bps",                "REAL"),
                 ("shares_outstanding", "REAL"),
             ])
+            # Sub-sector taxonomy: finer-grained peer grouping than yf_sector.
+            # `sub_sector` = the new fine-grained label resolved from
+            # config/sub_sectors.yaml. `effective_sector` = parent sector AFTER
+            # per-ticker overrides (e.g. BYD's yf_sector stays "Consumer
+            # Cyclical" but effective_sector becomes "Technology" so factor
+            # scoring buckets it under Tech).
+            self._add_columns_if_missing(conn, "securities", [
+                ("sub_sector",       "TEXT"),
+                ("effective_sector", "TEXT"),
+            ])
         logger.info("Database initialized at %s", self.db_path)
 
     def _add_columns_if_missing(self, conn, table: str, columns: list[tuple[str, str]]):

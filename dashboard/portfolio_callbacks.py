@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
-from dash import Input, Output, State, html
+import dash
+from dash import Input, Output, State, html, no_update
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
@@ -35,6 +36,224 @@ def register_portfolio_callbacks(app, db_path: str):
     def add_holdings_row(_n, current):
         return (current or []) + [{"ticker": "", "shares": 0}]
 
+    # ----- Saved portfolios: dropdown options refresh -----
+    # Triggered on initial tab load (n_intervals=0 fires once via the input
+    # below being non-None) and after any save/delete operation via the
+    # `portfolio-save-status` text changing.
+    @app.callback(
+        Output("portfolio-saved-dropdown", "options"),
+        Input("portfolio-save-status", "children"),
+        Input("portfolio-compute-btn", "n_clicks"),
+    )
+    def refresh_saved_dropdown(_status, _n):
+        return _build_saved_options()
+
+    # ----- Save STATUS-QUO portfolio (raw shares only) -----
+    # Always available — doesn't require a Compute first. Persists the
+    # holdings table verbatim and materialises @NAME, the constant-share
+    # buy-and-hold index. Preserves any previously-saved optimal_weights
+    # under the same name so re-saving status-quo doesn't wipe @NAME$OPT.
+    @app.callback(
+        Output("portfolio-save-status", "children", allow_duplicate=True),
+        Input("portfolio-save-status-btn", "n_clicks"),
+        State("portfolio-name-input", "value"),
+        State("portfolio-holdings-table", "data"),
+        prevent_initial_call=True,
+    )
+    def save_status_quo(_n, raw_name, table_data):
+        from analysis.portfolio_synth import (
+            is_valid_name, normalise_name, rebuild_and_upsert,
+        )
+        from storage.cloud_db import available
+        from storage.cloud_repository import CloudPortfoliosRepository
+        from storage.database import Database
+
+        name = normalise_name(raw_name or "")
+        if not name:
+            return _status_error("Enter a name (UPPERCASE / digits / _).")
+        if not is_valid_name(name):
+            return _status_error(
+                f"Invalid name {name!r} — use only A-Z, 0-9, _ (1-32 chars).")
+        if not available():
+            return _status_error(
+                "Cloud DB not configured — set USE_CLOUD_DB=true in .env to save.")
+
+        holdings = _clean_table_data(table_data)
+        if not holdings:
+            return _status_error("Add holdings before saving.")
+
+        # Preserve any existing optimal_weights for this name — saving the
+        # status-quo shouldn't blow away a previously-saved @NAME$OPT series.
+        repo = CloudPortfoliosRepository()
+        existing = None
+        try:
+            existing = repo.get_portfolio(name)
+        except Exception:
+            pass
+        preserved_optimal = (existing or {}).get("optimal_weights") if existing else None
+
+        try:
+            repo.save_portfolio(name, holdings, preserved_optimal)
+        except Exception as e:
+            return _status_error(f"Save failed: {type(e).__name__}: {e}")
+
+        try:
+            db = Database(db_path)
+            summary = rebuild_and_upsert(name, {
+                "holdings": holdings,
+                "optimal_weights": preserved_optimal,
+            }, db)
+        except Exception as e:
+            return _status_ok(
+                f"Saved @{name} (warning: synthetic price rebuild failed: {e})")
+        preserved_msg = (" (preserved @OPT)" if preserved_optimal else "")
+        return _status_ok(
+            f"Saved @{name} status-quo ({summary['status_quo_rows']} rows)"
+            f"{preserved_msg}.")
+
+    # ----- Save OPTIMISED portfolio (uses latest Compute bundle) -----
+    # Persists holdings + optimal_weights snapshot. Requires a recent
+    # Compute click whose ticker set matches the current holdings table;
+    # otherwise the snapshot is stale and we refuse.
+    @app.callback(
+        Output("portfolio-save-status", "children", allow_duplicate=True),
+        Input("portfolio-save-optimal-btn", "n_clicks"),
+        State("portfolio-name-input", "value"),
+        State("portfolio-holdings-table", "data"),
+        State("portfolio-latest-optimal", "data"),
+        prevent_initial_call=True,
+    )
+    def save_optimal(_n, raw_name, table_data, latest_optimal):
+        from analysis.portfolio_synth import (
+            is_valid_name, normalise_name, rebuild_and_upsert,
+        )
+        from storage.cloud_db import available
+        from storage.cloud_repository import CloudPortfoliosRepository
+        from storage.database import Database
+
+        name = normalise_name(raw_name or "")
+        if not name:
+            return _status_error("Enter a name (UPPERCASE / digits / _).")
+        if not is_valid_name(name):
+            return _status_error(f"Invalid name {name!r} — use A-Z, 0-9, _.")
+        if not available():
+            return _status_error("Cloud DB not configured.")
+
+        if not latest_optimal:
+            return _status_error(
+                "Click Compute first to generate optimal weights, then Save.")
+
+        holdings = _clean_table_data(table_data)
+        if not holdings:
+            return _status_error("Add holdings before saving.")
+
+        table_tickers = [h["ticker"] for h in holdings]
+        opt_tickers = list(latest_optimal.get("tickers") or [])
+        if opt_tickers != table_tickers:
+            return _status_error(
+                "Holdings table changed since last Compute. Click Compute "
+                "again, then Save optimised.")
+
+        optimal_weights = [
+            {"ticker": t, "weight": float(w)}
+            for t, w in zip(opt_tickers, latest_optimal["weights"])
+        ]
+        repo = CloudPortfoliosRepository()
+        try:
+            repo.save_portfolio(
+                name, holdings, optimal_weights,
+                rf=latest_optimal.get("rf"),
+                weight_cap=latest_optimal.get("weight_cap"),
+                lookback_days=latest_optimal.get("lookback_days"),
+            )
+        except Exception as e:
+            return _status_error(f"Save failed: {type(e).__name__}: {e}")
+
+        try:
+            db = Database(db_path)
+            summary = rebuild_and_upsert(name, {
+                "holdings": holdings,
+                "optimal_weights": optimal_weights,
+            }, db)
+        except Exception as e:
+            return _status_ok(
+                f"Saved @{name}$OPT (warning: rebuild failed: {e})")
+        return _status_ok(
+            f"Saved @{name} status-quo ({summary['status_quo_rows']} rows) "
+            f"AND @{name}$OPT ({summary['optimal_rows']} rows).")
+
+    # ----- Load a saved portfolio into the holdings table -----
+    @app.callback(
+        Output("portfolio-holdings-table", "data", allow_duplicate=True),
+        Output("portfolio-name-input", "value"),
+        Output("portfolio-save-status", "children", allow_duplicate=True),
+        Output("portfolio-latest-optimal", "data", allow_duplicate=True),
+        Input("portfolio-load-btn", "n_clicks"),
+        State("portfolio-saved-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def load_portfolio(_n, selected_name):
+        from storage.cloud_db import available
+        from storage.cloud_repository import CloudPortfoliosRepository
+
+        if not selected_name:
+            return no_update, no_update, _status_error(
+                "Pick a portfolio from the dropdown first."), no_update
+        if not available():
+            return no_update, no_update, _status_error(
+                "Cloud DB not configured."), no_update
+
+        try:
+            row = CloudPortfoliosRepository().get_portfolio(selected_name)
+        except Exception as e:
+            return no_update, no_update, _status_error(
+                f"Load failed: {e}"), no_update
+        if not row:
+            return no_update, no_update, _status_error(
+                f"No saved portfolio named {selected_name!r}."), no_update
+
+        new_table_data = [
+            {"ticker": h["ticker"], "shares": h.get("shares", 0)}
+            for h in (row.get("holdings") or [])
+        ]
+        return (
+            new_table_data,
+            selected_name,
+            _status_ok(f"Loaded @{selected_name} "
+                        f"({len(new_table_data)} holdings)."),
+            None,  # clear stale optimal-store; user can recompute
+        )
+
+    # ----- Delete a saved portfolio -----
+    @app.callback(
+        Output("portfolio-save-status", "children", allow_duplicate=True),
+        Input("portfolio-delete-btn", "n_clicks"),
+        State("portfolio-saved-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def delete_portfolio(_n, selected_name):
+        from analysis.portfolio_synth import delete_synthetic_rows
+        from storage.cloud_db import available
+        from storage.cloud_repository import CloudPortfoliosRepository
+
+        if not selected_name:
+            return _status_error("Pick a portfolio from the dropdown first.")
+        if not available():
+            return _status_error("Cloud DB not configured.")
+
+        try:
+            removed = CloudPortfoliosRepository().delete_portfolio(selected_name)
+            if not removed:
+                return _status_error(
+                    f"No saved portfolio named {selected_name!r}.")
+            price_rows_removed = delete_synthetic_rows(selected_name)
+        except Exception as e:
+            return _status_error(f"Delete failed: {e}")
+
+        return _status_ok(
+            f"Deleted @{selected_name} (+ {price_rows_removed} synthetic "
+            "price rows).")
+
     # ----- Main compute callback -----
     @app.callback(
         Output("portfolio-placeholder", "style"),
@@ -52,6 +271,8 @@ def register_portfolio_callbacks(app, db_path: str):
         Output("portfolio-trade-list", "children"),
         Output("portfolio-diagnostics", "children"),
         Output("portfolio-compute-status", "children"),
+        Output("portfolio-latest-optimal", "data"),
+        Output("portfolio-cap-warning", "children"),
         Input("portfolio-compute-btn", "n_clicks"),
         State("portfolio-holdings-table", "data"),
         State("portfolio-lookback", "value"),
@@ -116,25 +337,40 @@ def register_portfolio_callbacks(app, db_path: str):
         status = (f"Built {len(bundle.tickers)} tickers, {bundle.mu_sigma.n_obs} "
                   f"returns, data through {bundle.last_price_date}")
 
+        # Snapshot the optimal weights so the Save button can persist them
+        # alongside the raw holdings. We keep this as plain JSON-serialisable
+        # dicts; no numpy in the dcc.Store payload.
+        latest_optimal = {
+            "tickers": list(bundle.tickers),
+            "weights": [float(w) for w in bundle.w_full_optimal],
+            "lookback_days": int(lookback or 0),
+            "rebalance_days": int(rebalance or 21),
+            "weight_cap": float(weight_cap),
+            "rf": float(rf),
+            "last_price_date": bundle.last_price_date,
+        }
+
+        cap_warning = _build_cap_warning(bundle, weight_cap, rf)
+
         return (
             {"display": "none"}, {"display": "block"},
             hero_status, hero_current, hero_full,
             delta_rebal, delta_add,
             weights_fig, frontier_fig, backtest_fig,
             backtest_table, candidate_table, trade_list, diagnostics,
-            status,
+            status, latest_optimal, cap_warning,
         )
 
 
 # ============== Output builders ==============
 
 def _error_state(msg: str):
-    """14-tuple of outputs + a status string for the error path."""
+    """17-tuple matching compute_portfolio's outputs."""
     err = html.Div(html.P(msg, className="text-danger small mb-0"))
     return (
         {"display": "block"}, {"display": "none"},
         "—", "—", "—", "", "", {}, {}, {}, err, err, err, err,
-        msg,
+        msg, None, "",
     )
 
 
@@ -244,6 +480,124 @@ def _build_trade_list(bundle) -> html.Div:
                                 style={"color": color})),
         ]))
     return html.Table(rows, className="table table-sm w-100 small")
+
+
+def _status_ok(msg: str) -> html.Span:
+    return html.Span(msg, style={"color": T.SUCCESS, "fontWeight": "600"})
+
+
+def _status_error(msg: str) -> html.Span:
+    return html.Span(msg, style={"color": T.DANGER, "fontWeight": "600"})
+
+
+def _build_cap_warning(bundle, weight_cap: float, rf: float):
+    """Surface an alert when the per-asset cap is binding in a way that
+    makes the three-Sharpe comparison non-apples-to-apples.
+
+    The math: max-Sharpe over a feasible set is >= the Sharpe of any point
+    in that set. The status-quo's Sharpe can exceed the capped optimum's
+    only when status-quo lives OUTSIDE the feasible set — i.e. at least
+    one status-quo weight exceeds the cap.
+
+    We always show this warning when an infeasible holding exists, even
+    if the optimum still beat status-quo this time — the comparison is
+    constrained either way, and seeing the uncapped Sharpe alongside
+    makes that explicit.
+    """
+    import numpy as np
+    from analysis.portfolio_optimizer import (
+        max_sharpe_portfolio, portfolio_metrics,
+    )
+
+    over_cap = [
+        (t, float(w)) for t, w in zip(bundle.tickers, bundle.w_status_quo)
+        if w > weight_cap + 1e-6
+    ]
+    if not over_cap:
+        return ""
+
+    # Compute the uncapped current-only optimum so the user sees what
+    # the cap is actually costing them.
+    current_tickers = bundle.current_tickers
+    uncapped_msg = ""
+    if len(current_tickers) >= 2:
+        try:
+            idx_current = [bundle.tickers.index(t) for t in current_tickers]
+            mu_c = bundle.mu_sigma.mu[idx_current]
+            sigma_c = bundle.mu_sigma.sigma[np.ix_(idx_current, idx_current)]
+            w_uncapped = max_sharpe_portfolio(mu_c, sigma_c, rf=rf,
+                                                weight_cap=1.0)
+            s_uncapped = portfolio_metrics(w_uncapped, mu_c, sigma_c,
+                                            rf=rf)["sharpe"]
+            s_capped = bundle.m_current_optimal.get("sharpe", 0.0)
+            uncapped_msg = (
+                f" Uncapped current-only Sharpe would be "
+                f"{s_uncapped:+.3f} (vs capped {s_capped:+.3f}) — the cap is "
+                f"costing you {s_uncapped - s_capped:+.3f} of Sharpe."
+            )
+        except Exception:
+            pass
+
+    over_cap_text = ", ".join(
+        f"{t} {w*100:.1f}%" for t, w in sorted(over_cap, key=lambda x: -x[1])
+    )
+
+    return dbc.Alert(
+        [
+            html.Span("⚠ ", style={"fontWeight": "800"}),
+            html.Strong("Status-quo exceeds your per-asset cap. "),
+            f"Cap is {weight_cap*100:.0f}%; over-cap holdings: ",
+            html.Code(over_cap_text, style={"fontSize": "0.85em"}),
+            ". The capped optimum is solving a tighter problem than your "
+            "actual portfolio, so the current-only optimum can have a LOWER "
+            "Sharpe than status-quo even at rf=0 — that's expected, not a bug.",
+            html.Br(),
+            html.Em(uncapped_msg),
+        ],
+        color="warning",
+        className="small mb-0 mt-2 py-2",
+        dismissable=False,
+    )
+
+
+def _clean_table_data(table_data) -> list[dict]:
+    """Strip empty tickers; coerce shares to non-negative float."""
+    out: list[dict] = []
+    for row in table_data or []:
+        t = (row.get("ticker") or "").strip().upper()
+        if not t:
+            continue
+        try:
+            s = max(0.0, float(row.get("shares") or 0))
+        except (TypeError, ValueError):
+            s = 0.0
+        out.append({"ticker": t, "shares": s})
+    return out
+
+
+def _build_saved_options() -> list[dict]:
+    """Pull the saved-portfolios list from Supabase and format for dropdown.
+    Silent empty list on cloud-unavailable so the rest of the tab still works."""
+    try:
+        from storage.cloud_db import available
+        if not available():
+            return []
+        from storage.cloud_repository import CloudPortfoliosRepository
+        rows = CloudPortfoliosRepository().list_portfolios()
+    except Exception:
+        return []
+
+    options: list[dict] = []
+    for r in rows:
+        name = r["name"]
+        n_holdings = len(r.get("holdings") or [])
+        has_opt = bool(r.get("optimal_weights"))
+        suffix = " · @OPT available" if has_opt else ""
+        options.append({
+            "label": f"@{name} — {n_holdings} holdings{suffix}",
+            "value": name,
+        })
+    return options
 
 
 def _build_diagnostics(bundle) -> html.Div:

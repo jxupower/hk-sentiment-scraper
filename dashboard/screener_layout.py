@@ -42,7 +42,12 @@ def build_screener_tab() -> html.Div:
                         html.Label("Sector", className="stat-label mb-2"),
                         dcc.Dropdown(id="screener-sector-filter", multi=True,
                                      placeholder="All sectors"),
-                    ], width=4),
+                    ], xs=12, md=3),
+                    dbc.Col([
+                        html.Label("Sub-sector", className="stat-label mb-2"),
+                        dcc.Dropdown(id="screener-subsector-filter", multi=True,
+                                     placeholder="All sub-sectors"),
+                    ], xs=12, md=3),
                     dbc.Col([
                         html.Label("View", className="stat-label mb-2"),
                         dcc.RadioItems(
@@ -56,7 +61,7 @@ def build_screener_tab() -> html.Div:
                             labelClassName="me-3",
                             style={"fontSize": "0.9rem", "color": T.TEXT},
                         ),
-                    ], width=4),
+                    ], xs=12, md=3),
                     dbc.Col([
                         html.Label("Min data completeness", className="stat-label mb-2"),
                         dcc.Slider(
@@ -65,8 +70,8 @@ def build_screener_tab() -> html.Div:
                             marks={i / 10: f"{i*10}%" for i in range(0, 11, 2)},
                             tooltip={"placement": "bottom", "always_visible": False},
                         ),
-                    ], width=4),
-                ]),
+                    ], xs=12, md=3),
+                ], className="g-3"),
             ]),
         ], style=T.CARD_STYLE, className="mb-3"),
 
@@ -93,6 +98,7 @@ def build_screener_tab() -> html.Div:
                         {"name": "Ticker", "id": "ticker"},
                         {"name": "Name", "id": "name"},
                         {"name": "Sector", "id": "yf_sector"},
+                        {"name": "Sub-sector", "id": "sub_sector"},
                         {"name": "Mkt Cap (B HKD)", "id": "market_cap_b", "type": "numeric"},
                         {"name": "P/E", "id": "trailing_pe", "type": "numeric"},
                         {"name": "Fwd P/E", "id": "forward_pe", "type": "numeric"},
@@ -118,6 +124,9 @@ def build_screener_tab() -> html.Div:
                          "fontFamily": "Inter, sans-serif"},
                         {"if": {"column_id": "yf_sector"}, "textAlign": "left",
                          "fontFamily": "Inter, sans-serif", "color": T.TEXT_MUTED},
+                        {"if": {"column_id": "sub_sector"}, "textAlign": "left",
+                         "fontFamily": "Inter, sans-serif", "color": T.TEXT_MUTED,
+                         "fontSize": "0.85rem"},
                         {"if": {"column_id": "watchlist_flag"}, "textAlign": "center"},
                     ],
                     style_header=T.DATATABLE_HEADER,

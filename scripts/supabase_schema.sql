@@ -94,6 +94,32 @@ CREATE TABLE IF NOT EXISTS financial_statements (
 CREATE INDEX IF NOT EXISTS idx_fs_ticker_type
     ON financial_statements (ticker, statement_type, period_end_date DESC);
 
+-- ============== portfolios ==============
+-- User-saved portfolios. Each row stores BOTH the raw holdings (ticker, shares)
+-- and an optional snapshot of optimal weights from the Portfolio tab's
+-- max-Sharpe solve. The dashboard then materialises two synthetic tickers
+-- per portfolio into historical_prices:
+--    @NAME       -- status-quo (constant-share buy-and-hold) index
+--    @NAME$OPT   -- max-Sharpe optimal-weight index (only if optimal_weights set)
+-- Risk Forecast and any other tab that reads historical_prices can then
+-- consume them like any normal ticker. Name is enforced uppercase alphanumeric
+-- in application code (the @-prefix convention is added on read).
+
+CREATE TABLE IF NOT EXISTS portfolios (
+    name             TEXT          PRIMARY KEY,
+    holdings         JSONB         NOT NULL,           -- [{ticker, shares}, ...]
+    optimal_weights  JSONB,                            -- [{ticker, weight}, ...] or NULL
+    rf               NUMERIC       DEFAULT 0,          -- rf used when computing optimal_weights
+    weight_cap       NUMERIC,                          -- cap used when computing optimal_weights
+    lookback_days    INTEGER,                          -- lookback used when computing optimal_weights
+    notes            TEXT,
+    created_at       TIMESTAMPTZ   DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ   DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_portfolios_updated
+    ON portfolios (updated_at DESC);
+
 -- ============== Smoke-test seed (delete after verifying) ==============
 -- INSERT INTO historical_prices (ticker, date, adj_close)
 --   VALUES ('TEST.HK', CURRENT_DATE, 100.00)

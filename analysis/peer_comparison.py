@@ -82,11 +82,19 @@ def build_peer_scorecard(ticker: str, db_path: str,
     target_row = next((r for r in universe if r["ticker"] == ticker), None)
     if not target_row:
         return None
-    sector = target_row.get("yf_sector") or target_row.get("watchlist_sector")
+    # Prefer sub_sector for the peer group — same fallback chain as factor
+    # scoring so the scorecard's bucket matches what Discovery shows. Falling
+    # back to effective_sector lets the comparison still work for tickers
+    # without a sub_sector assignment.
+    peer_field = ("sub_sector" if target_row.get("sub_sector")
+                   else ("effective_sector" if target_row.get("effective_sector")
+                          else "yf_sector"))
+    sector = (target_row.get("sub_sector") or target_row.get("effective_sector")
+                or target_row.get("yf_sector") or target_row.get("watchlist_sector"))
     if not sector:
         return None
     peer_rows = [r for r in universe
-                  if r.get("yf_sector") == sector and r["ticker"] != ticker]
+                  if r.get(peer_field) == sector and r["ticker"] != ticker]
 
     scorecard = PeerScorecard(
         target_ticker=ticker,

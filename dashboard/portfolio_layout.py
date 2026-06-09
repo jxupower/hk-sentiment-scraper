@@ -34,6 +34,11 @@ DEFAULT_RF_PCT = 0.0
 
 def build_portfolio_tab() -> html.Div:
     return html.Div([
+        # Stash the most-recent compute bundle's optimal-weight snapshot so
+        # the Save button can persist it alongside raw holdings. Cleared on
+        # Load (a load means the user is leaving the previous compute behind).
+        dcc.Store(id="portfolio-latest-optimal", data=None),
+
         dbc.Alert([
             html.Strong("Portfolio Rebalancer — Max-Sharpe via Modern Portfolio Theory. "),
             "Enter your holdings (ticker + shares), add candidate tickers with 0 shares, "
@@ -44,6 +49,97 @@ def build_portfolio_tab() -> html.Div:
                     "in-sample Sharpe is biased up by construction (the walk-forward backtest shows out-of-sample reality); "
                     "no transaction costs / taxes modelled."),
         ], color="info", className="small mb-3", dismissable=True),
+
+        # ============== Saved portfolios bar ==============
+        # Two explicit save buttons:
+        #   • "Save status-quo" persists raw shares -> @NAME synthetic ticker
+        #     (always available; no Compute needed first).
+        #   • "Save w/ optimal" also persists the max-Sharpe weight snapshot
+        #     from the latest Compute -> @NAME$OPT synthetic ticker. Disabled
+        #     until you've clicked Compute on the same set of holdings.
+        # The Risk Forecast tab consumes those @-tickers like normal stocks.
+        dbc.Card([
+            dbc.CardHeader([
+                html.Span("Saved portfolios", className="fw-bold"),
+                html.Span(" — name + Save to persist the current holdings to "
+                          "Supabase. Once saved, they show up as synthetic "
+                          "tickers (e.g. @CORE, @CORE$OPT) in the Risk "
+                          "Forecast tab.",
+                          style={"color": T.TEXT_MUTED, "fontSize": "0.8rem",
+                                 "marginLeft": "8px"}),
+            ]),
+            dbc.CardBody([
+                # Row 1 — name input + load/delete of an existing portfolio
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Portfolio name",
+                                    className="text-muted small mb-1"),
+                        dbc.Input(
+                            id="portfolio-name-input",
+                            type="text",
+                            placeholder="UPPERCASE / digits / _ — e.g. CORE",
+                            maxLength=32,
+                            style={**T.INPUT_STYLE, "width": "100%",
+                                   "padding": "5px 10px"},
+                        ),
+                    ], xs=12, md=5),
+                    dbc.Col([
+                        html.Label("Existing portfolios",
+                                    className="text-muted small mb-1"),
+                        dcc.Dropdown(
+                            id="portfolio-saved-dropdown",
+                            options=[],
+                            placeholder="Load a saved portfolio…",
+                            clearable=True,
+                        ),
+                    ], xs=12, md=4),
+                    dbc.Col([
+                        html.Label(" ", className="small mb-1"),
+                        dbc.ButtonGroup([
+                            dbc.Button("Load", id="portfolio-load-btn",
+                                        color="secondary", outline=True, size="sm"),
+                            dbc.Button("Delete", id="portfolio-delete-btn",
+                                        color="danger", outline=True, size="sm"),
+                        ], className="w-100"),
+                    ], xs=12, md=3),
+                ], className="g-2 mb-2"),
+
+                # Row 2 — explicit save buttons (status-quo vs optimised)
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Button(
+                            [html.I(className="me-1"),
+                             "Save status-quo portfolio  →  @NAME"],
+                            id="portfolio-save-status-btn",
+                            color="primary", size="sm", className="w-100",
+                        ),
+                        html.Div("Materialises the constant-share buy-and-hold "
+                                  "index from the holdings table above.",
+                                  style={"color": T.TEXT_MUTED,
+                                         "fontSize": "0.72rem",
+                                         "marginTop": "4px"}),
+                    ], xs=12, md=6),
+                    dbc.Col([
+                        dbc.Button(
+                            [html.I(className="me-1"),
+                             "Save optimised portfolio  →  @NAME$OPT"],
+                            id="portfolio-save-optimal-btn",
+                            color="success", size="sm", className="w-100",
+                        ),
+                        html.Div("Materialises the latest max-Sharpe optimal "
+                                  "weight series. Requires Compute first "
+                                  "(same tickers as the table).",
+                                  style={"color": T.TEXT_MUTED,
+                                         "fontSize": "0.72rem",
+                                         "marginTop": "4px"}),
+                    ], xs=12, md=6),
+                ], className="g-2"),
+
+                html.Div(id="portfolio-save-status",
+                          style={"color": T.TEXT_MUTED, "fontSize": "0.8rem",
+                                 "marginTop": "8px"}),
+            ]),
+        ], style=T.CARD_STYLE, className="mb-3"),
 
         # ============== Holdings table ==============
         dbc.Card([
@@ -195,6 +291,12 @@ def build_portfolio_tab() -> html.Div:
                                           className="text-center small"),
                                  width=6),
                     ], className="mt-2"),
+                    # Cap-infeasibility warning — populated when any status-quo
+                    # weight exceeds the per-asset cap, which means the
+                    # optimiser is solving a tighter problem than the user is
+                    # actually holding (so current-only optimum can fall below
+                    # status-quo even at rf=0).
+                    html.Div(id="portfolio-cap-warning", className="mt-2"),
                 ]),
             ], style=T.CARD_STYLE, className="mb-3"),
 

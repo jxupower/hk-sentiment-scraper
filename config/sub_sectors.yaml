@@ -1,0 +1,145 @@
+# Sub-sector taxonomy — finer-grained peer grouping than yf_sector.
+#
+# Loaded by `universe/reconciler.py` which writes the resolved values to
+# `securities.sub_sector` and `securities.effective_sector`. Resolution
+# order per ticker (first match wins):
+#   1. Watchlist YAML's per-entry `sub_sector` field
+#   2. `ticker_overrides[ticker].sub_sector`
+#   3. `industry_to_subsector[yf_industry]`
+#   4. NULL
+#
+# `effective_sector` (the parent sector after overrides) is resolved as:
+#   1. `ticker_overrides[ticker].parent_sector`
+#   2. else `watchlist_sector or yf_sector`
+#
+# Downstream consumers (analysis/factor_scores.py + analysis/peer_comparison.py)
+# bucket by sub_sector first, falling back to effective_sector when sub_sector
+# is NULL or the sub-sector has fewer than 5 names.
+
+# ============================================================================
+# industry_to_subsector — authoritative mapping from yfinance industry
+# ============================================================================
+# Covers the 12 yf_industry values present under yf_sector='Technology' in
+# the HK universe. The merged buckets (Semiconductors & Equipment, Tech
+# Components & Distribution, etc.) follow the locked plan in
+# C:\Users\User\.claude\plans\wobbly-bouncing-spindle.md.
+
+industry_to_subsector:
+  Software - Application:                  Application Software
+  Software - Infrastructure:               Platforms & Cloud Infrastructure
+  Information Technology Services:         IT Services & Consulting
+  Semiconductors:                          Semiconductors & Equipment
+  Semiconductor Equipment & Materials:     Semiconductors & Equipment
+  Consumer Electronics:                    Consumer Electronics & Devices
+  Computer Hardware:                       Consumer Electronics & Devices
+  Electronic Components:                   Tech Components & Distribution
+  Scientific & Technical Instruments:      Tech Components & Distribution
+  Electronics & Computer Distribution:     Tech Components & Distribution
+  Communication Equipment:                 Telecom Equipment
+  # Solar gets the new "Clean Energy" sub-sector AND is moved out of
+  # Technology entirely via the per-ticker overrides below.
+  Solar:                                   Clean Energy
+
+  # ---- Industrials (12 sub-sectors covering all 25 yf_industry values) ----
+  Engineering & Construction:              Engineering & Construction
+  Building Products & Equipment:           Building Products & Equipment
+  Specialty Industrial Machinery:          Industrial Machinery
+  Farm & Heavy Construction Machinery:     Industrial Machinery
+  Tools & Accessories:                     Industrial Machinery
+  Electrical Equipment & Parts:            Electrical Equipment
+  Metal Fabrication:                       Metal Fabrication
+  Marine Shipping:                         Logistics & Freight
+  Integrated Freight & Logistics:          Logistics & Freight
+  Trucking:                                Logistics & Freight
+  Airlines:                                Passenger & Air Transport
+  Airports & Air Services:                 Passenger & Air Transport
+  Railroads:                               Passenger & Air Transport
+  Infrastructure Operations:               Infrastructure Operations
+  Waste Management:                        Environmental Services
+  Pollution & Treatment Controls:          Environmental Services
+  Specialty Business Services:             Business & Professional Services
+  Staffing & Employment Services:          Business & Professional Services
+  Consulting Services:                     Business & Professional Services
+  Security & Protection Services:          Business & Professional Services
+  Business Equipment & Supplies:           Business & Professional Services
+  Industrial Distribution:                 Business & Professional Services
+  Rental & Leasing Services:               Business & Professional Services
+  Conglomerates:                           Conglomerates
+  Aerospace & Defense:                     Aerospace & Defense
+
+# ============================================================================
+# ticker_overrides — per-ticker promotions, demotions, and renames
+# ============================================================================
+# Use sparingly. Two main use cases:
+#   A. Cross-sector promotion (parent_sector override): pull a ticker out of
+#      its yfinance parent sector into a different one — e.g. EV makers
+#      promoted from Consumer Cyclical into Technology.
+#   B. Sub-sector override (sub_sector field): override the industry-mapping
+#      default — e.g. the 6 internet giants get pulled out of the generic
+#      Application Software bucket and into Platforms & Cloud Infrastructure.
+
+ticker_overrides:
+  # --------------------------------------------------------------------------
+  # Auto Tech promotions (Consumer Cyclical → Technology)
+  # --------------------------------------------------------------------------
+  # 10 most prominent EV / legacy-auto names. Smaller listed auto manufacturers
+  # (Brilliance, Power Xinchen, Yadea, Voyah, etc.) stay in Consumer Cyclical.
+  # Auto Parts not promoted — line between "auto tech" and "auto parts" is
+  # genuinely blurry (battery makers? braking systems?); revisit if needed.
+  1211.HK: { parent_sector: Technology, sub_sector: Auto Tech }   # BYD
+  0175.HK: { parent_sector: Technology, sub_sector: Auto Tech }   # Geely
+  2015.HK: { parent_sector: Technology, sub_sector: Auto Tech }   # Li Auto
+  9866.HK: { parent_sector: Technology, sub_sector: Auto Tech }   # NIO
+  9868.HK: { parent_sector: Technology, sub_sector: Auto Tech }   # XPeng
+  9863.HK: { parent_sector: Technology, sub_sector: Auto Tech }   # Leapmotor
+  9973.HK: { parent_sector: Technology, sub_sector: Auto Tech }   # Chery
+  9927.HK: { parent_sector: Technology, sub_sector: Auto Tech }   # Seres
+  2238.HK: { parent_sector: Technology, sub_sector: Auto Tech }   # GAC Group
+  2333.HK: { parent_sector: Technology, sub_sector: Auto Tech }   # Great Wall Motor
+
+  # --------------------------------------------------------------------------
+  # Solar demotions (Technology → Energy)
+  # --------------------------------------------------------------------------
+  # The Solar industry mapping above already assigns sub_sector=Clean Energy;
+  # these overrides flip parent_sector so they leave the Technology peer pool.
+  0438.HK: { parent_sector: Energy }
+  0712.HK: { parent_sector: Energy }
+  0750.HK: { parent_sector: Energy }
+  0757.HK: { parent_sector: Energy }
+  0968.HK: { parent_sector: Energy }   # Xinyi Solar
+  1421.HK: { parent_sector: Energy }
+  1799.HK: { parent_sector: Energy }
+  2865.HK: { parent_sector: Energy }
+  3800.HK: { parent_sector: Energy }   # GCL-Poly
+  6865.HK: { parent_sector: Energy }
+  8111.HK: { parent_sector: Energy }
+
+  # --------------------------------------------------------------------------
+  # Internet giants — pull 6 names out of generic Application Software and
+  # into the merged Platforms & Cloud Infrastructure bucket. They all run
+  # major cloud arms (Tencent Cloud, AliCloud, Baidu Cloud) and share
+  # SaaS/usage-based economics with the pure infra-software names.
+  #
+  # `parent_sector: Technology` overrides yfinance's classification — yf
+  # puts Tencent/Baidu/NetEase under "Communication Services" and
+  # Alibaba/JD/Meituan under "Consumer Cyclical" (Internet Content /
+  # Internet Retail industries). Forcing the parent to Technology means
+  # they appear in Tech peer pools at the parent level too, not just at
+  # the sub-sector level.
+  # --------------------------------------------------------------------------
+  0700.HK: { parent_sector: Technology, sub_sector: Platforms & Cloud Infrastructure }   # Tencent
+  9988.HK: { parent_sector: Technology, sub_sector: Platforms & Cloud Infrastructure }   # Alibaba
+  9618.HK: { parent_sector: Technology, sub_sector: Platforms & Cloud Infrastructure }   # JD.com
+  3690.HK: { parent_sector: Technology, sub_sector: Platforms & Cloud Infrastructure }   # Meituan
+  9999.HK: { parent_sector: Technology, sub_sector: Platforms & Cloud Infrastructure }   # NetEase
+  9888.HK: { parent_sector: Technology, sub_sector: Platforms & Cloud Infrastructure }   # Baidu
+
+  # --------------------------------------------------------------------------
+  # Building Products promotion (Basic Materials → Industrials)
+  # Cement / cementitious products are conceptually building products and
+  # share project-cycle / infrastructure-spend exposure with the Engineering
+  # & Construction names they sell to. Same cross-sector promotion pattern
+  # used for BYD → Auto Tech.
+  # --------------------------------------------------------------------------
+  0914.HK: { parent_sector: Industrials, sub_sector: Building Products & Equipment }   # Anhui Conch Cement
+  3323.HK: { parent_sector: Industrials, sub_sector: Building Products & Equipment }   # CNBM

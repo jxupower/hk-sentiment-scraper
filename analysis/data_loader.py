@@ -45,9 +45,15 @@ def get_or_fetch_prices(ticker: str, db: Database, *,
     routed to get_or_fetch_index_prices() so the same caller-side API
     works for both equities and indices.
 
+    Tickers beginning with "@" (e.g. "@CORE", "@CORE$OPT") are routed to
+    get_or_fetch_portfolio_prices() — synthetic series built from user-saved
+    portfolio constituents.
+
     Returns [] if both cache and fetch fail."""
     if ticker.startswith("^"):
         return get_or_fetch_index_prices(ticker, db, force_refresh=force_refresh)
+    if ticker.startswith("@"):
+        return get_or_fetch_portfolio_prices(ticker, db, force_refresh=force_refresh)
 
     repo = get_prices_repo(db)
 
@@ -96,6 +102,59 @@ def get_or_fetch_index_prices(index_ticker: str, db: Database, *,
         repo.upsert_rows(index_ticker, rows)  # stored under "^HSI", not "HSI"
         log.info("  upserted %d rows for %s", len(rows), index_ticker)
     return _get_full_series(repo, index_ticker)
+
+
+def get_or_fetch_portfolio_prices(portfolio_ticker: str, db: Database, *,
+                                    force_refresh: bool = False) -> list[dict]:
+    """Cache-aside read for user-saved portfolio synthetic tickers.
+
+    `@NAME` is the status-quo (constant-share) index; `@NAME$OPT` is the
+    cached max-Sharpe optimal-weight index. On miss / staleness we look
+    up the portfolio definition in Supabase and recompute the series
+    from constituent prices via `analysis/portfolio_synth.py`.
+
+    Returns [] (rather than raising) when the cloud DB isn't configured
+    or the portfolio name isn't found — callers degrade gracefully."""
+    repo = get_prices_repo(db)
+
+    if not force_refresh:
+        latest_str = repo.latest_date(portfolio_ticker) if hasattr(repo, "latest_date") \
+                      else _sqlite_latest_date(db, portfolio_ticker)
+        from analysis.portfolio_synth import is_synthetic_stale
+        if latest_str and not is_synthetic_stale(latest_str):
+            return _get_full_series(repo, portfolio_ticker)
+
+    from analysis.portfolio_synth import parse_portfolio_ticker, rebuild_and_upsert
+    parsed = parse_portfolio_ticker(portfolio_ticker)
+    if not parsed:
+        log.warning("not a portfolio ticker: %s", portfolio_ticker)
+        return []
+    name, _is_optimal = parsed
+
+    # Look up the portfolio definition from Supabase
+    try:
+        from storage.cloud_db import available
+        if not available():
+            log.warning("cloud DB not configured; cannot rebuild %s", portfolio_ticker)
+            return _get_full_series(repo, portfolio_ticker)
+        from storage.cloud_repository import CloudPortfoliosRepository
+        portfolio = CloudPortfoliosRepository().get_portfolio(name)
+    except Exception as e:
+        log.warning("portfolio lookup failed for %s: %s", name, e)
+        return _get_full_series(repo, portfolio_ticker)
+
+    if not portfolio:
+        log.warning("no saved portfolio named %s", name)
+        return []
+
+    log.info("Cache-aside rebuild for portfolio %s", portfolio_ticker)
+    try:
+        summary = rebuild_and_upsert(name, portfolio, db)
+        if summary.get("errors"):
+            log.warning("rebuild for %s reported errors: %s", name, summary["errors"])
+    except Exception as e:
+        log.warning("rebuild_and_upsert failed for %s: %s", name, e)
+    return _get_full_series(repo, portfolio_ticker)
 
 
 def _get_full_series(repo, ticker: str) -> list[dict]:
@@ -324,11 +383,15 @@ def get_universe_fundamentals(db: Database, *,
 
     if not is_cloud:
         # SQLite path — preserve the original single-query JOIN for speed.
+        # sub_sector + effective_sector come from securities (populated by
+        # universe/reconciler.py from config/sub_sectors.yaml) and feed
+        # factor_scores / peer_comparison percentile peer-grouping.
         with db.get_connection() as conn:
             if as_of_date is None:
                 rows = conn.execute("""
                     SELECT f.*, s.name, s.is_watchlist, s.yf_sector,
-                           s.watchlist_sector, s.yf_industry, s.listing_category
+                           s.watchlist_sector, s.yf_industry, s.listing_category,
+                           s.sub_sector, s.effective_sector
                     FROM fundamentals_snapshots f
                     INNER JOIN (
                         SELECT ticker, MAX(snapshot_date) AS max_date
@@ -340,7 +403,8 @@ def get_universe_fundamentals(db: Database, *,
             else:
                 rows = conn.execute("""
                     SELECT f.*, s.name, s.is_watchlist, s.yf_sector,
-                           s.watchlist_sector, s.yf_industry, s.listing_category
+                           s.watchlist_sector, s.yf_industry, s.listing_category,
+                           s.sub_sector, s.effective_sector
                     FROM fundamentals_snapshots f
                     INNER JOIN (
                         SELECT ticker, MAX(snapshot_date) AS max_date
@@ -377,7 +441,7 @@ def get_universe_fundamentals(db: Database, *,
     with db.get_connection() as conn:
         sec_rows = conn.execute("""
             SELECT ticker, name, is_watchlist, yf_sector, watchlist_sector,
-                   yf_industry, listing_category
+                   yf_industry, listing_category, sub_sector, effective_sector
             FROM securities WHERE is_active = 1
         """).fetchall()
         sec_by_ticker = {r["ticker"]: dict(r) for r in sec_rows}

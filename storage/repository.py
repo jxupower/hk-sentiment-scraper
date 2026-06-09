@@ -311,6 +311,35 @@ class SecuritiesRepository:
             conn.commit()
             return cur.rowcount
 
+    def set_sub_sector(self, ticker: str, sub_sector: Optional[str],
+                        effective_sector: Optional[str]) -> None:
+        """Write the resolved sub-sector taxonomy fields onto an existing
+        securities row. Idempotent. No-op if the ticker doesn't exist
+        (the reconciler only iterates rows it already knows about)."""
+        with self.db.get_connection() as conn:
+            conn.execute("""
+                UPDATE securities
+                SET sub_sector = ?, effective_sector = ?
+                WHERE ticker = ?
+            """, (sub_sector, effective_sector, ticker))
+            conn.commit()
+
+    def bulk_set_sub_sector(self, rows: list[tuple]) -> int:
+        """Bulk apply (ticker, sub_sector, effective_sector) tuples in one
+        transaction. ~2,769 rows takes <1s on local SQLite vs ~5s row-by-row.
+        Returns the row count for logging."""
+        if not rows:
+            return 0
+        with self.db.get_connection() as conn:
+            conn.executemany("""
+                UPDATE securities
+                SET sub_sector = ?, effective_sector = ?
+                WHERE ticker = ?
+            """, [(sub_sector, effective_sector, ticker)
+                  for (ticker, sub_sector, effective_sector) in rows])
+            conn.commit()
+        return len(rows)
+
 
 class FundamentalsRepository:
     def __init__(self, db: Database):

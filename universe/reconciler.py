@@ -1,9 +1,16 @@
 import json
+from pathlib import Path
+from typing import Optional
+
+import yaml
 
 from storage.repository import SecuritiesRepository
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+_SUB_SECTORS_PATH = Path(__file__).parent.parent / "config" / "sub_sectors.yaml"
 
 
 def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
@@ -76,6 +83,11 @@ def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
         if deactivated:
             logger.warning("Deactivated %d delisted ticker(s) no longer in HKEX list", deactivated)
 
+    # Sub-sector resolution pass — runs over every active row in securities
+    # and writes sub_sector + effective_sector based on the config layered
+    # over yfinance's industry classification. Idempotent, ~1s.
+    sub_sector_summary = _reconcile_sub_sectors(securities_repo, watchlist)
+
     summary = {
         "total": securities_repo.count_all(),
         "watchlist": securities_repo.count_watchlist(),
@@ -83,6 +95,122 @@ def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
         "watchlist_in_yaml": watchlist_count,
         "missing_from_hkex": missing_from_hkex,
         "deactivated": deactivated,
+        **sub_sector_summary,
     }
     logger.info("Reconcile summary: %s", summary)
     return summary
+
+
+# ============================================================================
+# Sub-sector resolution
+# ============================================================================
+
+def _load_sub_sectors_config() -> dict:
+    """Load config/sub_sectors.yaml. Returns an empty dict (no overrides,
+    no industry mapping) if the file is missing — keeps the reconciler
+    backwards-compatible with deployments that haven't shipped the config yet."""
+    if not _SUB_SECTORS_PATH.exists():
+        logger.warning("config/sub_sectors.yaml missing — sub-sector "
+                       "resolution will leave all rows NULL")
+        return {}
+    with open(_SUB_SECTORS_PATH, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _build_watchlist_sub_sector_map(watchlist: dict) -> dict[str, str]:
+    """Index the watchlist YAML by ticker → sub_sector. Used as the highest
+    priority source in sub-sector resolution. Only includes entries that
+    have a `sub_sector` field set explicitly."""
+    out: dict[str, str] = {}
+    for entries in (watchlist.get("sectors") or {}).values():
+        for entry in entries:
+            sub = entry.get("sub_sector")
+            if sub:
+                out[entry["ticker"]] = sub
+    return out
+
+
+def _resolve_sub_sector(ticker: str, yf_industry: Optional[str],
+                         watchlist_sub_map: dict[str, str],
+                         ticker_overrides: dict,
+                         industry_map: dict) -> Optional[str]:
+    """Resolution priority (first match wins):
+      1. Watchlist YAML per-ticker `sub_sector`
+      2. ticker_overrides[ticker].sub_sector
+      3. industry_to_subsector[yf_industry]
+      4. None
+    """
+    if ticker in watchlist_sub_map:
+        return watchlist_sub_map[ticker]
+    override = ticker_overrides.get(ticker) or {}
+    if override.get("sub_sector"):
+        return override["sub_sector"]
+    if yf_industry and yf_industry in industry_map:
+        return industry_map[yf_industry]
+    return None
+
+
+def _resolve_effective_sector(ticker: str, watchlist_sector: Optional[str],
+                                yf_sector: Optional[str],
+                                ticker_overrides: dict) -> Optional[str]:
+    """Resolve the PARENT sector — what factor-scoring/analysis should treat
+    as the broad bucket. Priority:
+      1. ticker_overrides[ticker].parent_sector — explicit cross-sector
+         promotion / demotion (e.g. BYD: Consumer Cyclical → Technology).
+      2. yf_sector — yfinance's parent classification, the authoritative source.
+      3. watchlist_sector — last-resort fallback for tickers without
+         yfinance metadata. NOTE: watchlist_sector is now sub-sector-grained
+         (e.g. "Platforms & Cloud Infrastructure"), so using it as a parent
+         is a degradation but better than NULL.
+    """
+    override = ticker_overrides.get(ticker) or {}
+    if override.get("parent_sector"):
+        return override["parent_sector"]
+    return yf_sector or watchlist_sector
+
+
+def _reconcile_sub_sectors(securities_repo: SecuritiesRepository,
+                             watchlist: dict) -> dict:
+    """Walk every active security and write resolved (sub_sector,
+    effective_sector). Returns a small counts dict for the summary log."""
+    config = _load_sub_sectors_config()
+    industry_map: dict = config.get("industry_to_subsector") or {}
+    ticker_overrides: dict = config.get("ticker_overrides") or {}
+    watchlist_sub_map = _build_watchlist_sub_sector_map(watchlist)
+
+    active_rows = securities_repo.get_all_active()
+    updates: list[tuple] = []
+    n_sub_assigned = 0
+    n_effective_changed = 0
+    for row in active_rows:
+        ticker = row["ticker"]
+        sub_sector = _resolve_sub_sector(
+            ticker, row.get("yf_industry"),
+            watchlist_sub_map, ticker_overrides, industry_map,
+        )
+        effective_sector = _resolve_effective_sector(
+            ticker, row.get("watchlist_sector"), row.get("yf_sector"),
+            ticker_overrides,
+        )
+        # Only enqueue an update when something actually changed — keeps the
+        # transaction small and the per-row work minimal.
+        if (sub_sector != row.get("sub_sector")
+                or effective_sector != row.get("effective_sector")):
+            updates.append((ticker, sub_sector, effective_sector))
+        if sub_sector:
+            n_sub_assigned += 1
+        if effective_sector and effective_sector != (row.get("watchlist_sector")
+                                                       or row.get("yf_sector")):
+            n_effective_changed += 1
+
+    n_updated = securities_repo.bulk_set_sub_sector(updates)
+    logger.info(
+        "Sub-sector reconcile: %d active rows · %d sub_sector assigned · "
+        "%d effective_sector overridden · %d rows updated",
+        len(active_rows), n_sub_assigned, n_effective_changed, n_updated,
+    )
+    return {
+        "sub_sector_assigned": n_sub_assigned,
+        "effective_sector_overridden": n_effective_changed,
+        "sub_sector_rows_updated": n_updated,
+    }

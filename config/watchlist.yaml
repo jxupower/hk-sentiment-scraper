@@ -5,52 +5,72 @@ settings:
 
 # Each entry has a ticker (for yfinance price data), a name, and aliases used to
 # match articles that mention the company without the ticker symbol.
+#
+# Optional `sub_sector` field per entry overrides the yf_industry-based
+# mapping in config/sub_sectors.yaml (highest-priority winner in the
+# resolution chain). Use it when the watchlist's editorial classification
+# differs from yfinance's bucket — e.g. the 6 internet giants below are
+# "Software - Application" in yfinance but live in Platforms & Cloud
+# Infrastructure in our taxonomy.
 sectors:
-  Software Development:
+  Platforms & Cloud Infrastructure:
     - ticker: "9988.HK"
       name: "Alibaba"
+      sub_sector: "Platforms & Cloud Infrastructure"
       aliases: ["Taobao", "Tmall", "Alipay", "Alibaba Group", "AliCloud", "Alibaba Cloud"]
     - ticker: "9618.HK"
       name: "JD.com"
+      sub_sector: "Platforms & Cloud Infrastructure"
       aliases: ["JD", "Jingdong", "JD Logistics", "JD Health"]
     - ticker: "3690.HK"
       name: "Meituan"
+      sub_sector: "Platforms & Cloud Infrastructure"
       aliases: ["Meituan Dianping", "Meituan Waimai", "Keeta"]
     - ticker: "0700.HK"
       name: "Tencent"
+      sub_sector: "Platforms & Cloud Infrastructure"
       aliases: ["WeChat", "Tencent Holdings", "Tencent Music", "WeCom", "Tencent Games"]
     - ticker: "9999.HK"
       name: "NetEase"
+      sub_sector: "Platforms & Cloud Infrastructure"
       aliases: ["NetEase Games", "163.com", "NetEase Music"]
     - ticker: "9888.HK"
       name: "Baidu"
+      sub_sector: "Platforms & Cloud Infrastructure"
       aliases: ["Baidu AI", "ERNIE Bot", "Apollo autonomous", "Baidu Cloud", "Baidu search"]
 
-  Communications:
+  Telecom Services:
     - ticker: "0941.HK"
       name: "China Mobile"
+      sub_sector: "Telecom Services"
       aliases: ["China Mobile Communications", "China Mobile Limited", "ChinaMobile"]
     - ticker: "0728.HK"
       name: "China Telecom"
+      sub_sector: "Telecom Services"
       aliases: ["China Telecommunications", "China Telecom Corp", "ChinaTelecom"]
     - ticker: "0762.HK"
       name: "China Unicom"
+      sub_sector: "Telecom Services"
       aliases: ["China United Network", "China Unicom HK", "ChinaUnicom"]
 
-  IT Hardware:
+  Consumer Electronics & Devices:
     - ticker: "0992.HK"
       name: "Lenovo"
+      sub_sector: "Consumer Electronics & Devices"
       aliases: ["Lenovo Group", "ThinkPad", "IdeaPad", "Motorola Mobility"]
     - ticker: "1810.HK"
       name: "Xiaomi"
+      sub_sector: "Consumer Electronics & Devices"
       aliases: ["Xiaomi Corporation", "Redmi", "MIUI", "Poco", "Mi phone"]
 
-  Computer Transistors:
+  Semiconductors & Equipment:
     - ticker: "0981.HK"
       name: "SMIC"
+      sub_sector: "Semiconductors & Equipment"
       aliases: ["Semiconductor Manufacturing International", "SMIC semiconductor", "China foundry"]
     - ticker: "1347.HK"
       name: "Hua Hong Semiconductor"
+      sub_sector: "Semiconductors & Equipment"
       aliases: ["Hua Hong", "HHGrace", "Hua Hong Semiconductor International"]
 
   Banking:
@@ -129,6 +149,7 @@ sectors:
   Industrial Machinery:
     - ticker: "0669.HK"
       name: "Techtronic"
+      sub_sector: "Industrial Machinery"
       aliases: ["Techtronic Industries", "TTI", "Milwaukee Tool", "Ryobi", "AEG tools"]
 
   Textiles:
@@ -179,12 +200,14 @@ sectors:
       name: "Sinofert"
       aliases: ["Sinofert Holdings", "Sinochem fertilizer", "China fertilizer Sinofert"]
 
-  Construction Materials:
+  Building Products & Equipment:
     - ticker: "0914.HK"
       name: "Anhui Conch Cement"
+      sub_sector: "Building Products & Equipment"
       aliases: ["Conch Cement", "Anhui Conch", "Conch Group"]
     - ticker: "3323.HK"
       name: "CNBM"
+      sub_sector: "Building Products & Equipment"
       aliases: ["China National Building Material", "CNBM Group", "China building material"]
 
   Mining:
