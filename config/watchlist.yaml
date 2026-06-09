@@ -198,20 +198,25 @@ sectors:
   Oil & Gas:
     - ticker: "0857.HK"
       name: "PetroChina"
+      sub_sector: "Oil & Gas"
       aliases: ["PetroChina Company", "CNPC"]
     - ticker: "0883.HK"
       name: "CNOOC"
+      sub_sector: "Oil & Gas"
       aliases: ["CNOOC Limited", "China National Offshore Oil"]
     - ticker: "0386.HK"
       name: "Sinopec"
+      sub_sector: "Oil & Gas"
       aliases: ["China Petroleum", "Sinopec Corp", "China Petrochemical"]
 
   Coal:
     - ticker: "1088.HK"
       name: "China Shenhua Energy"
+      sub_sector: "Thermal Coal"
       aliases: ["Shenhua Energy", "China Shenhua", "Shenhua coal"]
     - ticker: "1898.HK"
       name: "China Coal Energy"
+      sub_sector: "Thermal Coal"
       aliases: ["China Coal", "Zhongmei Energy", "China Coal Group"]
 
   Chemicals:
@@ -254,13 +259,20 @@ sectors:
   Utilities:
     - ticker: "0002.HK"
       name: "CLP Holdings"
+      sub_sector: "Regulated Electric Utilities"
       aliases: ["CLP Power", "China Light and Power"]
     - ticker: "0003.HK"
       name: "HK China Gas"
+      sub_sector: "Regulated Gas Utilities"
       aliases: ["Hong Kong and China Gas", "Towngas"]
     - ticker: "1816.HK"
       name: "CGN Power"
+      sub_sector: "Independent Power Producers"
       aliases: ["China General Nuclear Power", "CGN", "China nuclear power"]
     - ticker: "0066.HK"
       name: "MTR"
+      # MTR is editorial under "Utilities" but yfinance classifies it as
+      # Railroads (Industrials). The industry mapping already routes it to
+      # Passenger & Air Transport; we explicitly tag here for clarity.
+      sub_sector: "Passenger & Air Transport"
       aliases: ["MTR Corporation", "Hong Kong MTR", "Mass Transit Railway"]

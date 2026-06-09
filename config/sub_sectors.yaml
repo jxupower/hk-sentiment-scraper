@@ -36,9 +36,10 @@ industry_to_subsector:
   Scientific & Technical Instruments:      Tech Components & Distribution
   Electronics & Computer Distribution:     Tech Components & Distribution
   Communication Equipment:                 Telecom Equipment
-  # Solar gets the new "Clean Energy" sub-sector AND is moved out of
-  # Technology entirely via the per-ticker overrides below.
-  Solar:                                   Clean Energy
+  # Solar gets the "Clean Energy & Nuclear" sub-sector AND is moved out of
+  # Technology entirely via the per-ticker overrides below. Uranium (mapped
+  # under Energy below) folds into the same bucket since nuclear is low-carbon.
+  Solar:                                   Clean Energy & Nuclear
 
   # ---- Industrials (12 sub-sectors covering all 25 yf_industry values) ----
   Engineering & Construction:              Engineering & Construction
@@ -139,6 +140,42 @@ industry_to_subsector:
   Beverages - Non-Alcoholic:               Beverages
   Beverages - Wineries & Distilleries:     Beverages
   Beverages - Brewers:                     Beverages
+
+  # ---- Communication Services (4 sub-sectors covering 7 yf_industry values) ----
+  # Note: Tencent/Baidu/NetEase are promoted to Technology via ticker_overrides
+  # below, so they leave the Comm Services effective count.
+  Telecom Services:                        Telecom Services
+  Internet Content & Information:          Internet Content & Gaming
+  Electronic Gaming & Multimedia:          Internet Content & Gaming
+  Entertainment:                           Media & Entertainment
+  Publishing:                              Media & Entertainment
+  Broadcasting:                            Media & Entertainment
+  Advertising Agencies:                    Advertising Agencies
+
+  # ---- Energy (3 sub-sectors covering all 8 yf_industry values) ----
+  # All 6 Oil & Gas sub-industries collapse into one. Thermal Coal (Energy)
+  # named distinctly from Coking Coal (Basic Materials — steel feedstock).
+  # Uranium folded into Clean Energy & Nuclear (nuclear is low-carbon).
+  # Solar tickers are already promoted from Technology to Energy/Clean Energy
+  # via the ticker_overrides below.
+  Oil & Gas Integrated:                    Oil & Gas
+  Oil & Gas E&P:                           Oil & Gas
+  Oil & Gas Refining & Marketing:          Oil & Gas
+  Oil & Gas Midstream:                     Oil & Gas
+  Oil & Gas Equipment & Services:          Oil & Gas
+  Oil & Gas Drilling:                      Oil & Gas
+  Thermal Coal:                            Thermal Coal
+  Uranium:                                 Clean Energy & Nuclear
+
+  # ---- Utilities (5 sub-sectors — 1:1 with yfinance, prefix dropped) ----
+  # All buckets clear the 5-ticker floor on their own. Distinct regulatory
+  # models (regulated rates vs merchant IPP) and fuel sources matter for
+  # peer comparison, so no merges.
+  Utilities - Regulated Electric:          Regulated Electric Utilities
+  Utilities - Regulated Gas:               Regulated Gas Utilities
+  Utilities - Regulated Water:             Regulated Water Utilities
+  Utilities - Independent Power Producers: Independent Power Producers
+  Utilities - Renewable:                   Renewable Utilities
 
   # ---- Real Estate (3 sub-sectors covering all 3 yf_industry values) ----
   # Cleanest 1:1 mapping in the universe — yfinance already gives us a clean
