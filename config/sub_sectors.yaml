@@ -124,6 +124,22 @@ industry_to_subsector:
   Insurance - Reinsurance:                 Insurance
   Financial Conglomerates:                 Financial Conglomerates
 
+  # ---- Consumer Defensive (5 sub-sectors covering 11 yf_industry values) ----
+  # Maximum-consolidation taxonomy per user choice. Confectioners + Tobacco
+  # folded into Packaged Foods (both small, conceptually adjacent). All 3
+  # Beverage sub-industries merged. All 3 food-chain sub-industries merged.
+  Packaged Foods:                          Packaged Foods
+  Confectioners:                           Packaged Foods
+  Tobacco:                                 Packaged Foods
+  Education & Training Services:           Education & Training Services
+  Farm Products:                           Food Production, Distribution & Retail
+  Food Distribution:                       Food Production, Distribution & Retail
+  Grocery Stores:                          Food Production, Distribution & Retail
+  Household & Personal Products:           Household & Personal Products
+  Beverages - Non-Alcoholic:               Beverages
+  Beverages - Wineries & Distilleries:     Beverages
+  Beverages - Brewers:                     Beverages
+
 # ============================================================================
 # ticker_overrides — per-ticker promotions, demotions, and renames
 # ============================================================================
