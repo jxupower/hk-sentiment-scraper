@@ -76,31 +76,39 @@ sectors:
   Banking:
     - ticker: "1398.HK"
       name: "ICBC"
+      sub_sector: "Banks"
       aliases: ["Industrial and Commercial Bank of China", "ICBC Bank"]
     - ticker: "0939.HK"
       name: "CCB"
+      sub_sector: "Banks"
       aliases: ["China Construction Bank", "CCB Bank"]
     - ticker: "3988.HK"
       name: "Bank of China"
+      sub_sector: "Banks"
       aliases: ["BOC", "Bank of China Group"]
     - ticker: "0005.HK"
       name: "HSBC"
+      sub_sector: "Banks"
       aliases: ["HSBC Holdings", "Hongkong and Shanghai Banking", "HSBC Bank"]
 
   Finance:
     - ticker: "0388.HK"
       name: "HKEX"
+      sub_sector: "Capital Markets"
       aliases: ["Hong Kong Exchanges", "Hong Kong Stock Exchange", "Stock Exchange of Hong Kong"]
     - ticker: "2070.HK"
       name: "Futu Holdings"
+      sub_sector: "Capital Markets"
       aliases: ["Futu", "Moomoo", "Futu Securities", "Futu Online"]
 
   Insurance:
     - ticker: "2318.HK"
       name: "Ping An"
+      sub_sector: "Insurance"
       aliases: ["Ping An Insurance", "Ping An Group", "Lufax", "OneConnect"]
     - ticker: "1299.HK"
       name: "AIA"
+      sub_sector: "Insurance"
       aliases: ["AIA Group", "American International Assurance"]
 
   Real Estate:

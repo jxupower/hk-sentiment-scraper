@@ -107,6 +107,23 @@ industry_to_subsector:
   Health Information Services:              Health Information Services
   Diagnostics & Research:                   Diagnostics & Research
 
+  # ---- Financial Services (6 sub-sectors covering 12 yf_industry values) ----
+  # Tiny yfinance buckets folded into adjacent ones (Mortgage Finance → Credit
+  # Services; Financial Data & Stock Exchanges → Capital Markets; Insurance
+  # Brokers + Reinsurance into the single Insurance bucket).
+  Banks - Diversified:                     Banks
+  Banks - Regional:                        Banks
+  Capital Markets:                         Capital Markets
+  Financial Data & Stock Exchanges:        Capital Markets
+  Credit Services:                         Credit Services
+  Mortgage Finance:                        Credit Services
+  Asset Management:                        Asset Management
+  Insurance - Life:                        Insurance
+  Insurance - Property & Casualty:         Insurance
+  Insurance Brokers:                       Insurance
+  Insurance - Reinsurance:                 Insurance
+  Financial Conglomerates:                 Financial Conglomerates
+
 # ============================================================================
 # ticker_overrides — per-ticker promotions, demotions, and renames
 # ============================================================================
