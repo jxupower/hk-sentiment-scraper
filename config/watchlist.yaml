@@ -114,20 +114,25 @@ sectors:
   Real Estate:
     - ticker: "1109.HK"
       name: "CR Land"
+      sub_sector: "Real Estate Developers"
       aliases: ["China Resources Land", "CR Mixc", "China Resources Property"]
     - ticker: "0960.HK"
       name: "Longfor"
+      sub_sector: "Real Estate Developers"
       aliases: ["Longfor Group", "Longfor Properties"]
     - ticker: "0016.HK"
       name: "Sun Hung Kai"
+      sub_sector: "Real Estate Developers"
       aliases: ["Sun Hung Kai Properties", "SHKP"]
     - ticker: "0012.HK"
       name: "Henderson Land"
+      sub_sector: "Diversified Real Estate"
       aliases: ["Henderson Land Development"]
 
   Property Management:
     - ticker: "1997.HK"
       name: "Wharf REIC"
+      sub_sector: "Property Management & Services"
       aliases: ["Wharf Real Estate", "Harbour City", "Times Square HK"]
 
   Healthcare:

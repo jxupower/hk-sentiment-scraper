@@ -140,6 +140,15 @@ industry_to_subsector:
   Beverages - Wineries & Distilleries:     Beverages
   Beverages - Brewers:                     Beverages
 
+  # ---- Real Estate (3 sub-sectors covering all 3 yf_industry values) ----
+  # Cleanest 1:1 mapping in the universe — yfinance already gives us a clean
+  # three-bucket split. Just labels are tightened. REITs (Link 0823, Champion
+  # 2778, Yuexiu 0405, etc.) are still missing from the universe — known gap
+  # documented in CLAUDE.md (requires parsing a separate HKEX xlsx sheet).
+  Real Estate - Development:               Real Estate Developers
+  Real Estate Services:                    Property Management & Services
+  Real Estate - Diversified:               Diversified Real Estate
+
   # ---- Basic Materials (8 sub-sectors covering 13 yf_industry values) ----
   # Mining split into precious vs base (gold tracks USD/rates; base metals
   # track industrial demand). Chemicals merged (commodity + specialty).
