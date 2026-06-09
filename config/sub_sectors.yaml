@@ -67,6 +67,34 @@ industry_to_subsector:
   Conglomerates:                           Conglomerates
   Aerospace & Defense:                     Aerospace & Defense
 
+  # ---- Consumer Cyclical (14 sub-sectors covering 23 yf_industry values) ----
+  Restaurants:                             Restaurants
+  Apparel Manufacturing:                   Apparel Manufacturing
+  Textile Manufacturing:                   Textiles & Footwear
+  Footwear & Accessories:                  Textiles & Footwear
+  Apparel Retail:                          Apparel & Specialty Retail
+  Specialty Retail:                        Apparel & Specialty Retail
+  Department Stores:                       Apparel & Specialty Retail
+  Luxury Goods:                            Luxury Goods
+  Lodging:                                 Travel & Hospitality
+  Travel Services:                         Travel & Hospitality
+  Leisure:                                 Travel & Hospitality
+  Resorts & Casinos:                       Gambling & Casinos
+  Gambling:                                Gambling & Casinos
+  Auto Manufacturers:                      Auto Manufacturers
+  Auto Parts:                              Auto Parts & Suppliers
+  Recreational Vehicles:                   Auto Parts & Suppliers
+  Auto & Truck Dealerships:                Auto Dealerships
+  Furnishings, Fixtures & Appliances:      Home Furnishings & Appliances
+  Home Improvement Retail:                 Home Furnishings & Appliances
+  Packaging & Containers:                  Packaging & Containers
+  Internet Retail:                         Internet Retail
+  Personal Services:                       Personal Services
+  # Residential Construction maps to Engineering & Construction as a
+  # fallback; the single HK ticker (3708.HK) is also fully promoted to
+  # Industrials parent via the ticker_override below.
+  Residential Construction:                Engineering & Construction
+
 # ============================================================================
 # ticker_overrides — per-ticker promotions, demotions, and renames
 # ============================================================================
@@ -143,3 +171,11 @@ ticker_overrides:
   # --------------------------------------------------------------------------
   0914.HK: { parent_sector: Industrials, sub_sector: Building Products & Equipment }   # Anhui Conch Cement
   3323.HK: { parent_sector: Industrials, sub_sector: Building Products & Equipment }   # CNBM
+
+  # --------------------------------------------------------------------------
+  # Residential Construction promotion (Consumer Cyclical → Industrials)
+  # The lone HK ticker yfinance classifies as Residential Construction is
+  # economically a builder, not a consumer-cyclical retailer/manufacturer.
+  # Slot it into the existing 163-name Engineering & Construction peer pool.
+  # --------------------------------------------------------------------------
+  3708.HK: { parent_sector: Industrials, sub_sector: Engineering & Construction }   # World Digi Econ (yf classifies as Residential Construction)
