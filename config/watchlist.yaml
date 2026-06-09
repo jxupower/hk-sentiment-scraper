@@ -212,9 +212,11 @@ sectors:
   Chemicals:
     - ticker: "3983.HK"
       name: "China BlueChemical"
+      sub_sector: "Chemicals"
       aliases: ["China Blue Chemical", "CNOOC Blue Chemical", "Blue Chemical"]
     - ticker: "0297.HK"
       name: "Sinofert"
+      sub_sector: "Agricultural Inputs"
       aliases: ["Sinofert Holdings", "Sinochem fertilizer", "China fertilizer Sinofert"]
 
   Building Products & Equipment:
@@ -230,12 +232,18 @@ sectors:
   Mining:
     - ticker: "2899.HK"
       name: "Zijin Mining"
+      sub_sector: "Base Metals & Mining"
       aliases: ["Zijin Mining Group", "Zijin Gold", "Zijin copper"]
     - ticker: "1772.HK"
       name: "Ganfeng Lithium"
+      # yfinance classifies Ganfeng under "Chemicals" but it's economically
+      # a lithium miner/processor. Editorial override to Base Metals & Mining
+      # so peer comparison goes against other industrial-metal names.
+      sub_sector: "Base Metals & Mining"
       aliases: ["Ganfeng Lithium Group", "GFL", "China lithium", "Ganfeng"]
     - ticker: "3993.HK"
       name: "China Molybdenum"
+      sub_sector: "Base Metals & Mining"
       aliases: ["China Moly", "CMOC Group", "CMOC"]
 
   Utilities:

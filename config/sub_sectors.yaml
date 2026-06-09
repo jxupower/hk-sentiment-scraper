@@ -140,6 +140,26 @@ industry_to_subsector:
   Beverages - Wineries & Distilleries:     Beverages
   Beverages - Brewers:                     Beverages
 
+  # ---- Basic Materials (8 sub-sectors covering 13 yf_industry values) ----
+  # Mining split into precious vs base (gold tracks USD/rates; base metals
+  # track industrial demand). Chemicals merged (commodity + specialty).
+  # Lumber + Paper merged into forest products. Building materials kept in
+  # Basic Materials as raw-commodity bucket; Conch + CNBM already promoted
+  # to Industrials/Building Products & Equipment via ticker_overrides.
+  Other Industrial Metals & Mining:        Base Metals & Mining
+  Copper:                                  Base Metals & Mining
+  Aluminum:                                Base Metals & Mining
+  Gold:                                    Precious Metals & Mining
+  Other Precious Metals & Mining:          Precious Metals & Mining
+  Chemicals:                               Chemicals
+  Specialty Chemicals:                     Chemicals
+  Building Materials:                      Building Materials & Cement
+  Steel:                                   Steel
+  Lumber & Wood Production:                Forest Products & Paper
+  Paper & Paper Products:                  Forest Products & Paper
+  Coking Coal:                             Coking Coal
+  Agricultural Inputs:                     Agricultural Inputs
+
 # ============================================================================
 # ticker_overrides — per-ticker promotions, demotions, and renames
 # ============================================================================
