@@ -95,6 +95,18 @@ industry_to_subsector:
   # Industrials parent via the ticker_override below.
   Residential Construction:                Engineering & Construction
 
+  # ---- Healthcare (7 sub-sectors covering 10 yf_industry values) ----
+  Biotechnology:                            Biotechnology
+  Drug Manufacturers - Specialty & Generic: Drug Manufacturing
+  Drug Manufacturers - General:             Drug Manufacturing
+  Medical Care Facilities:                  Medical Care Facilities
+  Medical Devices:                          Medical Devices & Instruments
+  Medical Instruments & Supplies:           Medical Devices & Instruments
+  Pharmaceutical Retailers:                 Pharmacy Retail & Distribution
+  Medical Distribution:                     Pharmacy Retail & Distribution
+  Health Information Services:              Health Information Services
+  Diagnostics & Research:                   Diagnostics & Research
+
 # ============================================================================
 # ticker_overrides — per-ticker promotions, demotions, and renames
 # ============================================================================

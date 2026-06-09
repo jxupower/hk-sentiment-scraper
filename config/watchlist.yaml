@@ -125,25 +125,31 @@ sectors:
   Healthcare:
     - ticker: "1099.HK"
       name: "Sinopharm"
+      sub_sector: "Pharmacy Retail & Distribution"
       aliases: ["Sinopharm Group", "China National Pharmaceutical", "Sinopharm distribution"]
     - ticker: "2196.HK"
       name: "Fosun Pharma"
+      sub_sector: "Drug Manufacturing"
       aliases: ["Fosun Pharmaceutical", "Shanghai Fosun Pharma", "Fosun Health"]
 
-  Pharmaceuticals:
+  Drug Manufacturing:
     - ticker: "1177.HK"
       name: "Sino Biopharmaceutical"
+      sub_sector: "Drug Manufacturing"
       aliases: ["Sino Biopharma", "Sino Pharma"]
     - ticker: "1093.HK"
       name: "CSPC Pharmaceutical"
+      sub_sector: "Drug Manufacturing"
       aliases: ["CSPC Pharma", "CSPC"]
 
   Biotech:
     - ticker: "2269.HK"
       name: "Wuxi Biologics"
+      sub_sector: "Diagnostics & Research"
       aliases: ["WuXi Biologics", "Wuxi Bio", "WuXi AppTec"]
     - ticker: "6160.HK"
       name: "BeiGene"
+      sub_sector: "Biotechnology"
       aliases: ["BeiGene Ltd", "Zanubrutinib", "Brukinsa", "Tislelizumab"]
 
   Industrial Machinery:
