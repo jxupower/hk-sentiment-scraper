@@ -1,12 +1,45 @@
 import sqlite3
 import time
-from statistics import median
+from statistics import mean, median
 
 import plotly.graph_objects as go
 from dash import Input, Output, State
 from dash.exceptions import PreventUpdate
 
 from dashboard import theme as T
+
+
+# Map of aggregation key -> (display name, function over list of (pe, market_cap) tuples).
+# Cap-weighted uses the index methodology: Σ market_cap / Σ earnings,
+# where earnings_i = market_cap_i / pe_i. This is what indices like the
+# S&P 500's reported P/E actually use — gives heavier weight to mega-caps.
+def _agg_median(items):
+    return median([pe for pe, _ in items])
+
+
+def _agg_mean(items):
+    return mean([pe for pe, _ in items])
+
+
+def _agg_cap_weighted(items):
+    """Σ market_cap / Σ earnings (index P/E methodology). Drops items
+    with missing/zero market_cap; returns None if the bucket has no
+    usable cap data (caller falls back to median in that case)."""
+    capped = [(pe, mc) for pe, mc in items if mc and mc > 0]
+    if not capped:
+        return None
+    total_cap = sum(mc for _, mc in capped)
+    total_earnings = sum(mc / pe for pe, mc in capped)
+    if total_earnings <= 0:
+        return None
+    return total_cap / total_earnings
+
+
+_AGG = {
+    "median":       ("Median",       _agg_median),
+    "mean":         ("Mean",         _agg_mean),
+    "cap_weighted": ("Cap-weighted", _agg_cap_weighted),
+}
 
 
 def register_screener_callbacks(app, db_path: str):
@@ -41,6 +74,8 @@ def register_screener_callbacks(app, db_path: str):
         Output("screener-row-count", "children"),
         Output("screener-sector-pe-chart", "figure"),
         Output("screener-subsector-pe-chart", "figure"),
+        Output("screener-sector-pe-header", "children"),
+        Output("screener-subsector-pe-header", "children"),
         Output("screener-sector-filter", "options"),
         Output("screener-subsector-filter", "options"),
         Input("screener-auto-refresh", "n_intervals"),
@@ -49,9 +84,10 @@ def register_screener_callbacks(app, db_path: str):
         Input("screener-subsector-filter", "value"),
         Input("screener-tier-filter", "value"),
         Input("screener-completeness-filter", "value"),
+        Input("screener-pe-aggregation", "value"),
     )
     def update_screener(_n, _clicks, sector_filter, subsector_filter,
-                          tier_filter, min_completeness):
+                          tier_filter, min_completeness, pe_aggregation):
         rows = _query_latest(db_path)
         total_universe = _count_universe(db_path)
         latest_date = max((r["snapshot_date"] for r in rows), default="—")
@@ -78,8 +114,12 @@ def register_screener_callbacks(app, db_path: str):
         subsector_set = sorted({r["sub_sector"] for r in rows if r.get("sub_sector")})
         subsector_options = [{"label": s, "value": s} for s in subsector_set]
 
-        chart = _build_sector_pe_chart(filtered)
-        subsector_chart = _build_subsector_pe_chart(filtered)
+        agg = pe_aggregation or "median"
+        chart = _build_sector_pe_chart(filtered, aggregation=agg)
+        subsector_chart = _build_subsector_pe_chart(filtered, aggregation=agg)
+        agg_label = _AGG.get(agg, _AGG["median"])[0]
+        sector_header = f"{agg_label} P/E by Sector"
+        subsector_header = f"{agg_label} P/E by Sub-Sector"
 
         return (
             table_data,
@@ -89,6 +129,8 @@ def register_screener_callbacks(app, db_path: str):
             f"{len(filtered):,} of {len(rows):,} matching filters",
             chart,
             subsector_chart,
+            sector_header,
+            subsector_header,
             sector_options,
             subsector_options,
         )
@@ -162,41 +204,59 @@ def _format_row(r: dict) -> dict:
     }
 
 
-def _build_sector_pe_chart(rows: list[dict]) -> go.Figure:
-    """Median trailing P/E per sector (only sectors with ≥3 tickers, P/E in 0-200 range)."""
+def _build_sector_pe_chart(rows: list[dict], aggregation: str = "median") -> go.Figure:
+    """Trailing P/E per sector (only sectors with ≥3 tickers, P/E in 0-200 range)."""
     return _build_pe_chart_by_key(
-        rows,
+        rows, aggregation=aggregation,
         bucket_key=lambda r: r.get("yf_sector") or r.get("watchlist_sector"),
         empty_message=("Need ≥3 tickers per sector with valid P/E. "
                        "Run 'fundamentals refresh --tickers ALL' to populate."),
     )
 
 
-def _build_subsector_pe_chart(rows: list[dict]) -> go.Figure:
-    """Median trailing P/E per SUB-SECTOR — finer-grained companion to the
-    sector chart above. Same filters (P/E in (0, 200], ≥3 tickers per bucket)
-    and same styling so the two charts read consistently. Tickers without a
-    sub_sector assignment (yfinance-metadata-NULL) are silently dropped."""
+def _build_subsector_pe_chart(rows: list[dict], aggregation: str = "median") -> go.Figure:
+    """Trailing P/E per SUB-SECTOR — finer-grained companion to the sector
+    chart above. Same filters (P/E in (0, 200], ≥3 tickers per bucket), same
+    styling, same aggregation as the sector chart (driven by a single toggle).
+    Tickers without a sub_sector assignment (yfinance-metadata-NULL) dropped."""
     return _build_pe_chart_by_key(
-        rows,
+        rows, aggregation=aggregation,
         bucket_key=lambda r: r.get("sub_sector"),
         empty_message=("Need ≥3 tickers per sub-sector with valid P/E. "
                        "Filter to a parent sector or backfill yfinance metadata."),
     )
 
 
-def _build_pe_chart_by_key(rows: list[dict], bucket_key, empty_message: str) -> go.Figure:
-    """Shared horizontal-bar median-P/E builder. `bucket_key` is a callable
-    taking a row and returning the string label to bucket on (or falsy to skip)."""
-    by_bucket: dict[str, list[float]] = {}
+def _build_pe_chart_by_key(rows: list[dict], bucket_key, empty_message: str,
+                             aggregation: str = "median") -> go.Figure:
+    """Shared horizontal-bar P/E chart builder. `bucket_key` is a callable
+    taking a row and returning the string label to bucket on (or falsy to
+    skip). `aggregation` is one of "median" / "mean" / "cap_weighted" —
+    see the _AGG dict at the top of the module. Each bucket stores
+    (pe, market_cap) tuples so cap-weighted aggregation has what it needs;
+    median/mean simply ignore the second tuple element."""
+    agg_label, agg_fn = _AGG.get(aggregation, _AGG["median"])
+
+    by_bucket: dict[str, list[tuple[float, float]]] = {}
     for r in rows:
         key = bucket_key(r)
         pe = r.get("trailing_pe")
         if not key or pe is None or pe <= 0 or pe > 200:
             continue
-        by_bucket.setdefault(key, []).append(float(pe))
+        mc = r.get("market_cap") or 0.0
+        by_bucket.setdefault(key, []).append((float(pe), float(mc)))
 
-    eligible = [(s, median(v)) for s, v in by_bucket.items() if len(v) >= 3]
+    eligible = []
+    for s, items in by_bucket.items():
+        if len(items) < 3:
+            continue
+        agg_value = agg_fn(items)
+        if agg_value is None:
+            # Cap-weighted may fall back to None if no tickers in the bucket
+            # have market_cap data; quietly degrade to median so the bar
+            # still renders rather than disappearing.
+            agg_value = _agg_median(items)
+        eligible.append((s, agg_value))
     eligible.sort(key=lambda x: x[1])
 
     if not eligible:
@@ -208,18 +268,18 @@ def _build_pe_chart_by_key(rows: list[dict], bucket_key, empty_message: str) -> 
         return fig
 
     buckets = [s for s, _ in eligible]
-    medians = [m for _, m in eligible]
+    values = [v for _, v in eligible]
     counts = [len(by_bucket[s]) for s in buckets]
 
     fig = go.Figure(go.Bar(
-        x=medians, y=buckets, orientation="h",
+        x=values, y=buckets, orientation="h",
         marker_color="#1976d2",
-        text=[f"{m:.1f} (n={c})" for m, c in zip(medians, counts)],
+        text=[f"{v:.1f} (n={c})" for v, c in zip(values, counts)],
         textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Median P/E: %{x:.1f}<br>Tickers: %{text}<extra></extra>",
+        hovertemplate=f"<b>%{{y}}</b><br>{agg_label} P/E: %{{x:.1f}}<br>Tickers: %{{text}}<extra></extra>",
     ))
     fig.update_layout(_dark_layout(""),
-                      xaxis_title="Median Trailing P/E",
+                      xaxis_title=f"{agg_label} Trailing P/E",
                       height=max(220, len(buckets) * 28 + 80),
                       margin=dict(l=220, r=80, t=20, b=40))
     return fig

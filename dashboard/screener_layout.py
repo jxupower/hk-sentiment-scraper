@@ -75,9 +75,39 @@ def build_screener_tab() -> html.Div:
             ]),
         ], style=T.CARD_STYLE, className="mb-3"),
 
-        # Sector summary chart (median P/E per sector)
+        # P/E aggregation toggle — single control feeds both charts below.
+        # Median is the default (robust to outliers). Mean is a simple
+        # arithmetic average. Cap-weighted uses the index methodology
+        # (Σ market_cap / Σ earnings), giving more weight to mega-caps.
         dbc.Card([
-            dbc.CardHeader("Median P/E by Sector"),
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("P/E aggregation",
+                                    className="stat-label mb-1"),
+                        dbc.RadioItems(
+                            id="screener-pe-aggregation",
+                            options=[
+                                {"label": "Median", "value": "median"},
+                                {"label": "Mean", "value": "mean"},
+                                {"label": "Cap-weighted", "value": "cap_weighted"},
+                            ],
+                            value="median",
+                            inline=True,
+                            className="btn-group sr-period-radio",
+                            inputClassName="btn-check",
+                            labelClassName="btn btn-outline-primary btn-sm",
+                            labelCheckedClassName="active",
+                        ),
+                    ], xs=12),
+                ]),
+            ], style={"padding": "12px 16px"}),
+        ], style=T.CARD_STYLE, className="mb-2"),
+
+        # Sector summary chart — aggregation method comes from the toggle above
+        dbc.Card([
+            dbc.CardHeader(id="screener-sector-pe-header",
+                            children="Median P/E by Sector"),
             dbc.CardBody([
                 dcc.Graph(id="screener-sector-pe-chart",
                           config={"displayModeBar": False}, figure={}),
@@ -88,7 +118,8 @@ def build_screener_tab() -> html.Div:
         # Auto-narrows when the user filters to a parent sector (e.g. picking
         # Technology shows the 8 Tech sub-sector medians only).
         dbc.Card([
-            dbc.CardHeader("Median P/E by Sub-Sector"),
+            dbc.CardHeader(id="screener-subsector-pe-header",
+                            children="Median P/E by Sub-Sector"),
             dbc.CardBody([
                 dcc.Graph(id="screener-subsector-pe-chart",
                           config={"displayModeBar": False}, figure={}),
