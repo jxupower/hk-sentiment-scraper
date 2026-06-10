@@ -40,6 +40,7 @@ def register_screener_callbacks(app, db_path: str):
         Output("screener-stat-latest", "children"),
         Output("screener-row-count", "children"),
         Output("screener-sector-pe-chart", "figure"),
+        Output("screener-subsector-pe-chart", "figure"),
         Output("screener-sector-filter", "options"),
         Output("screener-subsector-filter", "options"),
         Input("screener-auto-refresh", "n_intervals"),
@@ -78,6 +79,7 @@ def register_screener_callbacks(app, db_path: str):
         subsector_options = [{"label": s, "value": s} for s in subsector_set]
 
         chart = _build_sector_pe_chart(filtered)
+        subsector_chart = _build_subsector_pe_chart(filtered)
 
         return (
             table_data,
@@ -86,6 +88,7 @@ def register_screener_callbacks(app, db_path: str):
             latest_date,
             f"{len(filtered):,} of {len(rows):,} matching filters",
             chart,
+            subsector_chart,
             sector_options,
             subsector_options,
         )
@@ -161,32 +164,55 @@ def _format_row(r: dict) -> dict:
 
 def _build_sector_pe_chart(rows: list[dict]) -> go.Figure:
     """Median trailing P/E per sector (only sectors with ≥3 tickers, P/E in 0-200 range)."""
-    by_sector: dict[str, list[float]] = {}
-    for r in rows:
-        sector = r.get("yf_sector") or r.get("watchlist_sector")
-        pe = r.get("trailing_pe")
-        if not sector or pe is None or pe <= 0 or pe > 200:
-            continue
-        by_sector.setdefault(sector, []).append(float(pe))
+    return _build_pe_chart_by_key(
+        rows,
+        bucket_key=lambda r: r.get("yf_sector") or r.get("watchlist_sector"),
+        empty_message=("Need ≥3 tickers per sector with valid P/E. "
+                       "Run 'fundamentals refresh --tickers ALL' to populate."),
+    )
 
-    eligible = [(s, median(v)) for s, v in by_sector.items() if len(v) >= 3]
+
+def _build_subsector_pe_chart(rows: list[dict]) -> go.Figure:
+    """Median trailing P/E per SUB-SECTOR — finer-grained companion to the
+    sector chart above. Same filters (P/E in (0, 200], ≥3 tickers per bucket)
+    and same styling so the two charts read consistently. Tickers without a
+    sub_sector assignment (yfinance-metadata-NULL) are silently dropped."""
+    return _build_pe_chart_by_key(
+        rows,
+        bucket_key=lambda r: r.get("sub_sector"),
+        empty_message=("Need ≥3 tickers per sub-sector with valid P/E. "
+                       "Filter to a parent sector or backfill yfinance metadata."),
+    )
+
+
+def _build_pe_chart_by_key(rows: list[dict], bucket_key, empty_message: str) -> go.Figure:
+    """Shared horizontal-bar median-P/E builder. `bucket_key` is a callable
+    taking a row and returning the string label to bucket on (or falsy to skip)."""
+    by_bucket: dict[str, list[float]] = {}
+    for r in rows:
+        key = bucket_key(r)
+        pe = r.get("trailing_pe")
+        if not key or pe is None or pe <= 0 or pe > 200:
+            continue
+        by_bucket.setdefault(key, []).append(float(pe))
+
+    eligible = [(s, median(v)) for s, v in by_bucket.items() if len(v) >= 3]
     eligible.sort(key=lambda x: x[1])
 
     if not eligible:
         fig = go.Figure()
-        fig.add_annotation(text="Need ≥3 tickers per sector with valid P/E. "
-                                "Run 'fundamentals refresh --tickers ALL' to populate.",
+        fig.add_annotation(text=empty_message,
                            xref="paper", yref="paper", x=0.5, y=0.5,
                            showarrow=False, font=dict(size=13, color="#90a4ae"))
         fig.update_layout(_dark_layout(""), height=180)
         return fig
 
-    sectors = [s for s, _ in eligible]
+    buckets = [s for s, _ in eligible]
     medians = [m for _, m in eligible]
-    counts = [len(by_sector[s]) for s in sectors]
+    counts = [len(by_bucket[s]) for s in buckets]
 
     fig = go.Figure(go.Bar(
-        x=medians, y=sectors, orientation="h",
+        x=medians, y=buckets, orientation="h",
         marker_color="#1976d2",
         text=[f"{m:.1f} (n={c})" for m, c in zip(medians, counts)],
         textposition="outside",
@@ -194,8 +220,8 @@ def _build_sector_pe_chart(rows: list[dict]) -> go.Figure:
     ))
     fig.update_layout(_dark_layout(""),
                       xaxis_title="Median Trailing P/E",
-                      height=max(220, len(sectors) * 28 + 80),
-                      margin=dict(l=180, r=80, t=20, b=40))
+                      height=max(220, len(buckets) * 28 + 80),
+                      margin=dict(l=220, r=80, t=20, b=40))
     return fig
 
 

@@ -84,6 +84,17 @@ def build_screener_tab() -> html.Div:
             ]),
         ], style=T.CARD_STYLE, className="mb-3"),
 
+        # Sub-sector summary chart — same statistic at finer granularity.
+        # Auto-narrows when the user filters to a parent sector (e.g. picking
+        # Technology shows the 8 Tech sub-sector medians only).
+        dbc.Card([
+            dbc.CardHeader("Median P/E by Sub-Sector"),
+            dbc.CardBody([
+                dcc.Graph(id="screener-subsector-pe-chart",
+                          config={"displayModeBar": False}, figure={}),
+            ]),
+        ], style=T.CARD_STYLE, className="mb-3"),
+
         # The big table
         dbc.Card([
             dbc.CardHeader([
