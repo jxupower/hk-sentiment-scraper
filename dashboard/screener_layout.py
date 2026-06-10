@@ -35,7 +35,18 @@ def build_screener_tab() -> html.Div:
 
         # Filters row
         dbc.Card([
-            dbc.CardHeader("Filters"),
+            dbc.CardHeader(
+                dbc.Row([
+                    dbc.Col(html.Span("Filters", className="fw-bold"),
+                            width="auto"),
+                    dbc.Col(
+                        dbc.Button("Clear filters",
+                                    id="screener-clear-filters-btn",
+                                    color="secondary", outline=True, size="sm"),
+                        className="text-end",
+                    ),
+                ], align="center", className="g-0"),
+            ),
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([

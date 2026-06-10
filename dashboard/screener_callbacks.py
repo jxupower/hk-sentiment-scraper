@@ -79,6 +79,21 @@ def register_screener_callbacks(app, db_path: str):
         # same ticker still produce a new dict so render_report re-fires.
         return "tab-stock-research", {"ticker": ticker, "ts": int(time.time() * 1000)}
 
+    # Clear filters button — resets the 4 user-driven filters back to their
+    # defaults: Sector + Sub-sector dropdowns cleared, View back to "all
+    # universe", Completeness back to 0.5. Does NOT reset the P/E
+    # aggregation toggle (that's a display choice, not a filter).
+    @app.callback(
+        Output("screener-sector-filter", "value", allow_duplicate=True),
+        Output("screener-subsector-filter", "value", allow_duplicate=True),
+        Output("screener-tier-filter", "value", allow_duplicate=True),
+        Output("screener-completeness-filter", "value", allow_duplicate=True),
+        Input("screener-clear-filters-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def clear_screener_filters(_n):
+        return [], [], "all", 0.5
+
     # Click-to-filter on the sector P/E chart. Two click sources, same handler:
     #   * Bar click -> Dash fires `clickData`
     #   * Label click -> Dash fires `clickAnnotationData` (the y-axis labels
