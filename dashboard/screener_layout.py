@@ -25,10 +25,22 @@ def build_screener_tab() -> html.Div:
                     dbc.Col(_stat_block("With fundamentals", "screener-stat-with-data",
                                           value_color=T.PRIMARY), width=3),
                     dbc.Col(_stat_block("Latest snapshot", "screener-stat-latest"), width=4),
-                    dbc.Col(
-                        dbc.Button("Refresh", id="screener-refresh-btn", color="primary",
-                                   size="sm", className="float-end mt-2"),
-                        width=2),
+                    dbc.Col([
+                        # Two refresh actions side-by-side:
+                        # * "Refresh" re-reads the cached DB (fast, no API call)
+                        # * "Refresh prices now" pulls fresh bars from yfinance
+                        #   in a background thread (~5-10 min on full universe)
+                        dbc.Button("Refresh", id="screener-refresh-btn",
+                                    color="primary", size="sm",
+                                    className="float-end mt-2"),
+                        dbc.Button("Refresh prices now",
+                                    id="screener-refresh-prices-btn",
+                                    color="warning", outline=True, size="sm",
+                                    className="float-end mt-2 me-2"),
+                        html.Div(id="screener-refresh-prices-status",
+                                  className="text-end small text-muted mt-1",
+                                  style={"clear": "both", "fontSize": "0.72rem"}),
+                    ], width=2),
                 ], align="center"),
             ], style={"padding": "20px 24px"}),
         ], style=T.CARD_STYLE, className="mb-3"),

@@ -62,6 +62,8 @@ class JobRunner:
         # truly need a daily snapshot history beyond what's cached on demand.
         # Backtest infrastructure refresh — only registered if securities_repo wired
         if self._securities_repo is not None:
+            # Weekly full-window catch-up (Sundays 04:00 UTC, period=1y) — heals
+            # any tickers that the daily run failed on across the week.
             self._scheduler.add_job(
                 func=self._refresh_historical_prices,
                 trigger="cron",
@@ -69,6 +71,18 @@ class JobRunner:
                 hour=4,
                 id="historical_prices_refresh",
                 max_instances=1,
+            )
+            # Daily EOD price refresh — weekdays 14:00 UTC (22:00 HKT), 6 hours
+            # after HK market close so yfinance has settled the day's bar.
+            # Short 5-day window keeps the run under ~10 minutes.
+            self._scheduler.add_job(
+                func=self._refresh_historical_prices_daily,
+                trigger="cron",
+                day_of_week="mon-fri",
+                hour=14,
+                id="historical_prices_daily",
+                max_instances=1,
+                coalesce=True,
             )
             self._scheduler.add_job(
                 func=self._reoptimize_parameters,
@@ -236,6 +250,21 @@ class JobRunner:
             price_fetch_many(tickers, prices_repo, period="1y")
         except Exception as e:
             logger.error("Weekly historical price refresh failed: %s", e)
+
+    def _refresh_historical_prices_daily(self):
+        """Daily EOD yfinance price refresh — weekdays at 22:00 HKT (14:00 UTC).
+        Short 5-day window keeps the run to ~5-10 min on ~2,778 tickers; UPSERT
+        no-ops on dates already present. Same fetch_many path as the weekly
+        Sunday job, just a tighter window for everyday top-up."""
+        from storage.factory import get_prices_repo
+        from scrapers.historical_price_scraper import fetch_many as price_fetch_many
+        try:
+            tickers = [s["ticker"] for s in self._securities_repo.get_universe()]
+            prices_repo = get_prices_repo(self._securities_repo.db)
+            summary = price_fetch_many(tickers, prices_repo, period="5d")
+            logger.info("Daily price refresh: %s", summary)
+        except Exception as e:
+            logger.error("Daily historical price refresh failed: %s", e)
 
     def _reoptimize_parameters(self):
         """Monthly walk-forward CV re-optimization for each non-distress screen.

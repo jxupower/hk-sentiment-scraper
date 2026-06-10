@@ -1,5 +1,7 @@
 import sqlite3
+import threading
 import time
+from datetime import datetime
 from statistics import mean, median
 
 import plotly.graph_objects as go
@@ -7,6 +9,12 @@ from dash import Input, Output, State, callback_context
 from dash.exceptions import PreventUpdate
 
 from dashboard import theme as T
+
+
+# Module-level lock prevents the manual "Refresh prices now" button from
+# spawning concurrent yfinance pulls. APScheduler's own jobs use
+# max_instances=1 / coalesce=True; this lock guards the dashboard path.
+_manual_price_refresh_lock = threading.Lock()
 
 
 def _extract_clicked_bucket(click_bar, click_ann):
@@ -93,6 +101,37 @@ def register_screener_callbacks(app, db_path: str):
     )
     def clear_screener_filters(_n):
         return [], [], "all", 0.5
+
+    # "Refresh prices now" button — kicks off the same yfinance pull as the
+    # daily cron (period='5d' over the full active universe) in a background
+    # daemon thread. Returns immediately so the dashboard stays responsive.
+    # The status text shows "Started at HH:MM"; the next auto-refresh tick
+    # (every 5 min) re-queries the DB so new bars surface naturally.
+    @app.callback(
+        Output("screener-refresh-prices-status", "children"),
+        Input("screener-refresh-prices-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def refresh_prices_manually(_n):
+        if not _manual_price_refresh_lock.acquire(blocking=False):
+            return "Already running — please wait."
+        started = datetime.now().strftime("%H:%M:%S")
+
+        def _run():
+            try:
+                from storage.database import Database
+                from storage.factory import get_prices_repo
+                from storage.repository import SecuritiesRepository
+                from scrapers.historical_price_scraper import fetch_many
+                db = Database(db_path)
+                tickers = [s["ticker"] for s in SecuritiesRepository(db).get_universe()]
+                fetch_many(tickers, get_prices_repo(db), period="5d")
+            finally:
+                _manual_price_refresh_lock.release()
+
+        threading.Thread(target=_run, daemon=True).start()
+        return (f"Refresh started at {started} — completes in ~5-10 min. "
+                "Dashboard auto-refresh will pick up new data.")
 
     # Click-to-filter on the sector P/E chart. Two click sources, same handler:
     #   * Bar click -> Dash fires `clickData`
