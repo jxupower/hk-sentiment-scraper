@@ -66,6 +66,44 @@ def register_screener_callbacks(app, db_path: str):
         # same ticker still produce a new dict so render_report re-fires.
         return "tab-stock-research", {"ticker": ticker, "ts": int(time.time() * 1000)}
 
+    # Bar-click on the sector P/E chart -> append the clicked sector to the
+    # Sector multi-select filter. Append-mode (locked decision): a second click
+    # on the same bar is a no-op (already in the filter); to remove, use the
+    # dropdown's × button. The downstream cascade (update_screener) re-fires
+    # automatically because the dropdown value is its Input.
+    @app.callback(
+        Output("screener-sector-filter", "value", allow_duplicate=True),
+        Input("screener-sector-pe-chart", "clickData"),
+        State("screener-sector-filter", "value"),
+        prevent_initial_call=True,
+    )
+    def append_sector_filter_on_bar_click(click_data, current):
+        if not click_data:
+            raise PreventUpdate
+        clicked = click_data["points"][0]["y"]   # y-axis label == bucket name
+        current = list(current or [])
+        if clicked in current:
+            raise PreventUpdate
+        return current + [clicked]
+
+    # Bar-click on the sub-sector P/E chart -> append to the Sub-sector filter.
+    # Self-contained (locked decision): does NOT also fill the parent Sector
+    # dropdown; the sub-sector filter alone narrows the table sufficiently.
+    @app.callback(
+        Output("screener-subsector-filter", "value", allow_duplicate=True),
+        Input("screener-subsector-pe-chart", "clickData"),
+        State("screener-subsector-filter", "value"),
+        prevent_initial_call=True,
+    )
+    def append_subsector_filter_on_bar_click(click_data, current):
+        if not click_data:
+            raise PreventUpdate
+        clicked = click_data["points"][0]["y"]
+        current = list(current or [])
+        if clicked in current:
+            raise PreventUpdate
+        return current + [clicked]
+
     @app.callback(
         Output("screener-table", "data"),
         Output("screener-stat-total", "children"),
