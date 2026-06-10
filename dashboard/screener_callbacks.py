@@ -3,10 +3,23 @@ import time
 from statistics import mean, median
 
 import plotly.graph_objects as go
-from dash import Input, Output, State
+from dash import Input, Output, State, callback_context
 from dash.exceptions import PreventUpdate
 
 from dashboard import theme as T
+
+
+def _extract_clicked_bucket(click_bar, click_ann):
+    """Pull the bucket name out of whichever click event just fired.
+    Bar clicks expose it as `points[0].y`; annotation clicks as
+    `annotation.text`. Uses callback_context.triggered to know which one."""
+    triggered = callback_context.triggered or []
+    prop_id = triggered[0]["prop_id"] if triggered else ""
+    if prop_id.endswith("clickData") and click_bar:
+        return click_bar["points"][0]["y"]
+    if prop_id.endswith("clickAnnotationData") and click_ann:
+        return click_ann["annotation"]["text"]
+    return None
 
 
 # Map of aggregation key -> (display name, function over list of (pe, market_cap) tuples).
@@ -66,39 +79,45 @@ def register_screener_callbacks(app, db_path: str):
         # same ticker still produce a new dict so render_report re-fires.
         return "tab-stock-research", {"ticker": ticker, "ts": int(time.time() * 1000)}
 
-    # Bar-click on the sector P/E chart -> append the clicked sector to the
-    # Sector multi-select filter. Append-mode (locked decision): a second click
-    # on the same bar is a no-op (already in the filter); to remove, use the
-    # dropdown's × button. The downstream cascade (update_screener) re-fires
-    # automatically because the dropdown value is its Input.
+    # Click-to-filter on the sector P/E chart. Two click sources, same handler:
+    #   * Bar click -> Dash fires `clickData`
+    #   * Label click -> Dash fires `clickAnnotationData` (the y-axis labels
+    #     are rendered as Plotly annotations with captureevents=True; default
+    #     y-tick labels are hidden in _build_pe_chart_by_key).
+    # Append-mode (locked): a second click on the same bucket is a no-op;
+    # to remove, use the dropdown's × button. The downstream cascade
+    # (update_screener) re-fires automatically because the dropdown value
+    # is its Input.
     @app.callback(
         Output("screener-sector-filter", "value", allow_duplicate=True),
         Input("screener-sector-pe-chart", "clickData"),
+        Input("screener-sector-pe-chart", "clickAnnotationData"),
         State("screener-sector-filter", "value"),
         prevent_initial_call=True,
     )
-    def append_sector_filter_on_bar_click(click_data, current):
-        if not click_data:
+    def append_sector_filter_on_chart_click(click_bar, click_ann, current):
+        clicked = _extract_clicked_bucket(click_bar, click_ann)
+        if not clicked:
             raise PreventUpdate
-        clicked = click_data["points"][0]["y"]   # y-axis label == bucket name
         current = list(current or [])
         if clicked in current:
             raise PreventUpdate
         return current + [clicked]
 
-    # Bar-click on the sub-sector P/E chart -> append to the Sub-sector filter.
-    # Self-contained (locked decision): does NOT also fill the parent Sector
-    # dropdown; the sub-sector filter alone narrows the table sufficiently.
+    # Same pattern for the sub-sector chart. Self-contained (locked): does
+    # NOT also fill the parent Sector dropdown; the sub-sector filter alone
+    # narrows the table sufficiently.
     @app.callback(
         Output("screener-subsector-filter", "value", allow_duplicate=True),
         Input("screener-subsector-pe-chart", "clickData"),
+        Input("screener-subsector-pe-chart", "clickAnnotationData"),
         State("screener-subsector-filter", "value"),
         prevent_initial_call=True,
     )
-    def append_subsector_filter_on_bar_click(click_data, current):
-        if not click_data:
+    def append_subsector_filter_on_chart_click(click_bar, click_ann, current):
+        clicked = _extract_clicked_bucket(click_bar, click_ann)
+        if not clicked:
             raise PreventUpdate
-        clicked = click_data["points"][0]["y"]
         current = list(current or [])
         if clicked in current:
             raise PreventUpdate
@@ -309,6 +328,25 @@ def _build_pe_chart_by_key(rows: list[dict], bucket_key, empty_message: str,
     values = [v for _, v in eligible]
     counts = [len(by_bucket[s]) for s in buckets]
 
+    # Replace the default y-axis tick labels with clickable annotations.
+    # Plotly tick labels don't fire clickData; annotations with captureevents=True
+    # fire clickAnnotationData, which Dash exposes as a `dcc.Graph` prop. Same
+    # text and styling as default ticks so the visual is unchanged.
+    label_annotations = [
+        dict(
+            x=0, y=bucket,
+            xref="x", yref="y",
+            text=bucket,
+            showarrow=False,
+            xanchor="right", yanchor="middle",
+            xshift=-8,
+            font=dict(size=11, color=T.TEXT),
+            captureevents=True,
+            hovertext=f"Click to filter to: {bucket}",
+        )
+        for bucket in buckets
+    ]
+
     fig = go.Figure(go.Bar(
         x=values, y=buckets, orientation="h",
         marker_color="#1976d2",
@@ -318,6 +356,8 @@ def _build_pe_chart_by_key(rows: list[dict], bucket_key, empty_message: str,
     ))
     fig.update_layout(_dark_layout(""),
                       xaxis_title=f"{agg_label} Trailing P/E",
+                      yaxis=dict(showticklabels=False),  # hidden — annotations above are the visible (clickable) labels
+                      annotations=label_annotations,
                       height=max(220, len(buckets) * 28 + 80),
                       margin=dict(l=220, r=80, t=20, b=40))
     return fig
