@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from utils.logger import get_logger
 
@@ -75,6 +75,8 @@ class JobRunner:
             # Daily EOD price refresh — weekdays 14:00 UTC (22:00 HKT), 6 hours
             # after HK market close so yfinance has settled the day's bar.
             # Short 5-day window keeps the run under ~10 minutes.
+            # misfire_grace_time=3600 means a missed firing within an hour
+            # (e.g. dashboard restarted at 14:30 UTC) still executes.
             self._scheduler.add_job(
                 func=self._refresh_historical_prices_daily,
                 trigger="cron",
@@ -83,6 +85,19 @@ class JobRunner:
                 id="historical_prices_daily",
                 max_instances=1,
                 coalesce=True,
+                misfire_grace_time=3600,
+            )
+            # Startup freshness check — fires once ~30s after dashboard start.
+            # If historical_prices is more than 1 calendar day stale (e.g.
+            # because the cron didn't fire when the dashboard was offline),
+            # triggers an immediate refresh. Keeps the user from having to
+            # wait until the next 14:00 UTC cron firing for fresh data.
+            self._scheduler.add_job(
+                func=self._refresh_prices_if_stale,
+                trigger="date",
+                run_date=datetime.utcnow() + timedelta(seconds=30),
+                id="historical_prices_startup_check",
+                max_instances=1,
             )
             self._scheduler.add_job(
                 func=self._reoptimize_parameters,
@@ -265,6 +280,46 @@ class JobRunner:
             logger.info("Daily price refresh: %s", summary)
         except Exception as e:
             logger.error("Daily historical price refresh failed: %s", e)
+
+    def _refresh_prices_if_stale(self):
+        """Run ~30s after dashboard startup. If historical_prices is more than
+        1 calendar day stale (e.g. because the 14:00 UTC cron didn't fire
+        while the dashboard was offline), trigger an immediate refresh so the
+        user has fresh data within ~5-10 min of starting the dashboard,
+        without having to wait for the next scheduled firing.
+
+        Uses Tencent (0700.HK) as the freshness probe — a liquid name that
+        always trades when the HK market is open, so its latest bar is a
+        reliable proxy for the table's overall freshness."""
+        from storage.factory import get_prices_repo
+        try:
+            prices_repo = get_prices_repo(self._securities_repo.db)
+            probe_ticker = "0700.HK"
+            latest_str = (prices_repo.latest_date(probe_ticker)
+                            if hasattr(prices_repo, "latest_date") else None)
+            if not latest_str:
+                logger.info("Startup freshness check: no bars for %s — "
+                            "triggering daily refresh", probe_ticker)
+                self._refresh_historical_prices_daily()
+                return
+            try:
+                latest = date.fromisoformat(latest_str[:10])
+            except ValueError:
+                logger.warning("Startup freshness check: unparseable date %r — "
+                                "skipping refresh", latest_str)
+                return
+            days_stale = (date.today() - latest).days
+            if days_stale <= 1:
+                logger.info("Startup freshness check: %s last bar %s (%d days "
+                            "stale) — fresh enough, skipping",
+                            probe_ticker, latest, days_stale)
+                return
+            logger.info("Startup freshness check: %s last bar %s (%d days "
+                        "stale) — triggering daily refresh now",
+                        probe_ticker, latest, days_stale)
+            self._refresh_historical_prices_daily()
+        except Exception as e:
+            logger.error("Startup freshness check failed: %s", e)
 
     def _reoptimize_parameters(self):
         """Monthly walk-forward CV re-optimization for each non-distress screen.
