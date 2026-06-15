@@ -2,11 +2,14 @@ import math
 import os
 
 import plotly.graph_objects as go
-from dash import Input, Output, html
 import dash_bootstrap_components as dbc
+from dash import Input, Output, State, html
+from dash.exceptions import PreventUpdate
 
 from analysis.factor_scores import FactorScoringEngine
 from dashboard import theme as T
+# Reused single-ticker fast path for the lazy "Get price" cell.
+from dashboard.screener_callbacks import _fetch_one_price
 
 FLAG_COLORS = {"high": T.DANGER, "medium": T.WARNING, "low": T.INFO}
 
@@ -65,8 +68,6 @@ def register_recommendations_callbacks(app, db_path: str):
                 continue
             if r.flags and "include_flagged" not in show_filter:
                 continue
-            if "watchlist" in show_filter and not r.is_watchlist:
-                continue
             if not r.disqualified:
                 if r.composite_pctile is None or r.composite_pctile < min_composite:
                     continue
@@ -104,6 +105,29 @@ def register_recommendations_callbacks(app, db_path: str):
             sector_options,
         )
 
+    # Per-row lazy "Get price" — mirrors the Screener handler.
+    @app.callback(
+        Output("rec-table", "data", allow_duplicate=True),
+        Input("rec-table", "active_cell"),
+        State("rec-table", "data"),
+        prevent_initial_call=True,
+    )
+    def fetch_price_on_click(active_cell, table_rows):
+        if not active_cell or active_cell.get("column_id") != "current_price":
+            raise PreventUpdate
+        try:
+            row = table_rows[active_cell["row"]]
+        except (IndexError, TypeError):
+            raise PreventUpdate
+        if row.get("current_price") != "Get price":
+            raise PreventUpdate
+        ticker = row.get("ticker")
+        if not ticker:
+            raise PreventUpdate
+        price = _fetch_one_price(db_path, ticker)
+        row["current_price"] = round(price, 2) if price is not None else "—"
+        return table_rows
+
 
 def _format_row(r) -> dict:
     def rnd(v, n=1):
@@ -125,8 +149,6 @@ def _format_row(r) -> dict:
         sev_order = {"high": 0, "medium": 1, "low": 2}
         worst = sorted(r.flags, key=lambda f: sev_order.get(f.severity, 99))[0]
         status = f"FLAG: {worst.label[:36]}"
-    elif r.is_watchlist:
-        status = "★ WL"
     else:
         status = "OK"
 
@@ -134,6 +156,9 @@ def _format_row(r) -> dict:
         "ticker": r.ticker,
         "name": (r.name or "")[:30],
         "sector": (r.sector or "—")[:25],
+        # Lazy-fetched: click the cell to populate. See the screener's
+        # fetch_price_on_click handler for the matching pattern.
+        "current_price": "Get price",
         "composite_pctile": rnd(r.composite_pctile, 1),
         "value_pctile": rnd(r.value_pctile, 1),
         "quality_pctile": rnd(r.quality_pctile, 1),

@@ -99,7 +99,10 @@ class SectorSignalGenerator:
                               price_dfs: dict[str, pd.DataFrame]) -> SectorSignal:
         avg_24h = self._avg_score(scores_24h)
         avg_7d = self._avg_score(scores_7d)
-        count_24h = len(set(s["ticker"] for s in scores_24h if scores_24h))
+        # After the per-article dedup in storage/repository.py, scores_24h has
+        # one row per article (not per (article, ticker)), so len() IS the
+        # article count. No need for the old set-based dedup that didn't
+        # actually dedup (the truthy check was on the list, not the row).
         avg_momentum = self._avg_price_momentum(price_dfs)
         direction = self._determine_direction(avg_24h, avg_momentum)
         # Confidence: scales with article count and score strength

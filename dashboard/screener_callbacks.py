@@ -4,17 +4,44 @@ import time
 from datetime import datetime
 from statistics import mean, median
 
+import dash
 import plotly.graph_objects as go
 from dash import Input, Output, State, callback_context
 from dash.exceptions import PreventUpdate
 
 from dashboard import theme as T
+from dashboard.screener_layout import NUMERIC_FILTERS
 
 
 # Module-level lock prevents the manual "Refresh prices now" button from
 # spawning concurrent yfinance pulls. APScheduler's own jobs use
 # max_instances=1 / coalesce=True; this lock guards the dashboard path.
 _manual_price_refresh_lock = threading.Lock()
+
+
+# Transform helpers for the NUMERIC_FILTERS table. Each row's raw fundamentals
+# value gets adapted to the unit shown in the slider (e.g. ROE 0.18 -> 18.0%).
+def _xform_value(xform_key, raw):
+    if raw is None:
+        return None
+    if xform_key == "roe_pct":
+        return raw * 100
+    if xform_key == "mcap_b":
+        return raw / 1e9 if raw else None
+    return raw
+
+
+def _in_range(v, lo, hi):
+    """A row passes if value is missing (treat as 'unknown' — don't exclude)
+    OR falls inside [lo, hi]. Matches the existing completeness filter's
+    permissive semantics."""
+    if v is None:
+        return True
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return True
+    return lo <= f <= hi
 
 
 def _extract_clicked_bucket(click_bar, click_ann):
@@ -87,20 +114,62 @@ def register_screener_callbacks(app, db_path: str):
         # same ticker still produce a new dict so render_report re-fires.
         return "tab-stock-research", {"ticker": ticker, "ts": int(time.time() * 1000)}
 
-    # Clear filters button — resets the 4 user-driven filters back to their
-    # defaults: Sector + Sub-sector dropdowns cleared, View back to "all
-    # universe", Completeness back to 0.5. Does NOT reset the P/E
-    # aggregation toggle (that's a display choice, not a filter).
+    # Cell-click on the current_price column → fetch that one ticker's latest
+    # adj_close and replace the "Get price" placeholder in just that row.
+    # Lazy-loading per row avoids the ~20s Supabase bulk pull at page-load —
+    # the user pays the cost only for tickers they care about.
     @app.callback(
+        Output("screener-table", "data", allow_duplicate=True),
+        Input("screener-table", "active_cell"),
+        State("screener-table", "data"),
+        prevent_initial_call=True,
+    )
+    def fetch_price_on_click(active_cell, table_rows):
+        if not active_cell or active_cell.get("column_id") != "current_price":
+            raise PreventUpdate
+        row_idx = active_cell["row"]
+        try:
+            row = table_rows[row_idx]
+        except (IndexError, TypeError):
+            raise PreventUpdate
+        # Don't refetch — once a row holds a number (or the "—" miss marker),
+        # leave it. Clicking again would be a no-op tax on Supabase.
+        if row.get("current_price") != "Get price":
+            raise PreventUpdate
+        ticker = row.get("ticker")
+        if not ticker:
+            raise PreventUpdate
+        price = _fetch_one_price(db_path, ticker)
+        row["current_price"] = round(price, 2) if price is not None else "—"
+        return table_rows
+
+    # Clear filters button — resets ALL user-driven filters back to their
+    # defaults across the 5 accordion groups. Does NOT reset the P/E
+    # aggregation toggle (that's a display choice, not a filter), and does
+    # NOT collapse the sub-sector chart once loaded (per-session decision).
+    clear_outputs = [
         Output("screener-sector-filter", "value", allow_duplicate=True),
         Output("screener-subsector-filter", "value", allow_duplicate=True),
-        Output("screener-tier-filter", "value", allow_duplicate=True),
         Output("screener-completeness-filter", "value", allow_duplicate=True),
+        Output("screener-ticker-search", "value", allow_duplicate=True),
+        Output("screener-name-search", "value", allow_duplicate=True),
+    ]
+    # Append the slider Outputs for every numeric filter. The slider→inputs
+    # sync callback then propagates the reset into the number boxes.
+    for _label, slug, lo, hi, _step, _key, _xform in NUMERIC_FILTERS:
+        clear_outputs.append(
+            Output(f"screener-{slug}-slider", "value", allow_duplicate=True)
+        )
+
+    @app.callback(
+        *clear_outputs,
         Input("screener-clear-filters-btn", "n_clicks"),
         prevent_initial_call=True,
     )
     def clear_screener_filters(_n):
-        return [], [], "all", 0.5
+        slider_defaults = [[lo, hi] for _l, _s, lo, hi, _st, _k, _x in NUMERIC_FILTERS]
+        # Order matches clear_outputs above.
+        return ([], [], 0.5, "", "", *slider_defaults)
 
     # "Refresh prices now" button — kicks off the same yfinance pull as the
     # daily cron (period='5d' over the full active universe) in a background
@@ -177,6 +246,50 @@ def register_screener_callbacks(app, db_path: str):
             raise PreventUpdate
         return current + [clicked]
 
+    # "Load Sub-Sector P/E Chart" button — flips the Store flag and reveals
+    # the Graph. Idempotent (multiple clicks no-op). Once loaded, the chart
+    # stays reactive to filter changes for the rest of the session.
+    @app.callback(
+        Output("screener-subsector-chart-loaded", "data"),
+        Output("screener-subsector-chart-loader", "style"),
+        Output("screener-subsector-pe-chart", "style"),
+        Input("screener-load-subsector-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def reveal_subsector_chart(_n):
+        return True, {"display": "none"}, {"display": "block"}
+
+    # --- Slider ↔ number-input sync, registered in a loop ---
+    # For each numeric filter: two tiny callbacks. Slider value drives the
+    # number boxes; number boxes drive the slider (clamped + reordered).
+    # `prevent_initial_call=True` + `allow_duplicate=True` stops loops on
+    # initial render. Equal-value-no-op guard inside each handler keeps the
+    # second-leg of a slider->box->slider chain from firing.
+    for _label, slug, lo, hi, _step, _key, _xform in NUMERIC_FILTERS:
+        _register_range_sync(app, slug, lo, hi)
+
+    # --- Main update callback ---
+    # Inputs ordering matters; positional unpacking on the function side has
+    # to match exactly. Number-input boxes are NOT Inputs here (slider is
+    # the canonical source via the sync callbacks above).
+    update_inputs = [
+        Input("screener-auto-refresh", "n_intervals"),
+        Input("screener-refresh-btn", "n_clicks"),
+        Input("screener-sector-filter", "value"),
+        Input("screener-subsector-filter", "value"),
+        Input("screener-completeness-filter", "value"),
+        Input("screener-pe-aggregation", "value"),
+        Input("screener-ticker-search", "value"),
+        Input("screener-name-search", "value"),
+    ]
+    for _label, slug, _lo, _hi, _step, _key, _xform in NUMERIC_FILTERS:
+        update_inputs.append(Input(f"screener-{slug}-slider", "value"))
+    # Store flag is now an Input (was State): clicking "Load Sub-Sector P/E
+    # Chart" flips it False→True, which fires update_screener and actually
+    # builds the chart. Previously the flag was State, so the chart only
+    # appeared on the *next* filter change after Load was clicked.
+    update_inputs.append(Input("screener-subsector-chart-loaded", "data"))
+
     @app.callback(
         Output("screener-table", "data"),
         Output("screener-stat-total", "children"),
@@ -189,33 +302,57 @@ def register_screener_callbacks(app, db_path: str):
         Output("screener-subsector-pe-header", "children"),
         Output("screener-sector-filter", "options"),
         Output("screener-subsector-filter", "options"),
-        Input("screener-auto-refresh", "n_intervals"),
-        Input("screener-refresh-btn", "n_clicks"),
-        Input("screener-sector-filter", "value"),
-        Input("screener-subsector-filter", "value"),
-        Input("screener-tier-filter", "value"),
-        Input("screener-completeness-filter", "value"),
-        Input("screener-pe-aggregation", "value"),
+        *update_inputs,
     )
     def update_screener(_n, _clicks, sector_filter, subsector_filter,
-                          tier_filter, min_completeness, pe_aggregation):
+                          min_completeness, pe_aggregation,
+                          ticker_query, name_query, *slider_values_then_loaded):
+        # Last positional arg is the load-flag Input; everything before it is
+        # the slider [lo, hi] for each NUMERIC_FILTERS entry, in declaration order.
+        subsector_loaded = slider_values_then_loaded[-1]
+        slider_values = slider_values_then_loaded[:-1]
+
         rows = _query_latest(db_path)
         total_universe = _count_universe(db_path)
-        latest_date = max((r["snapshot_date"] for r in rows), default="—")
+        # "Latest snapshot" reflects the freshest *price* date in the
+        # historical_prices store — that's what the daily EOD refresh job
+        # actually moves. Fundamentals snapshots refresh on a separate
+        # (slower) cadence and are not what users read as "data freshness".
+        latest_date = _latest_price_date(db_path) or "—"
 
         # Apply filters in Python (small dataset, simpler than SQL string construction)
         filtered = [r for r in rows
                     if (r.get("data_completeness") or 0) >= (min_completeness or 0)]
-        if tier_filter == "watchlist":
-            filtered = [r for r in filtered if r.get("is_watchlist") == 1]
-        elif tier_filter == "universe":
-            filtered = [r for r in filtered if not r.get("is_watchlist")]
         if sector_filter:
             chosen = set(sector_filter)
             filtered = [r for r in filtered if r.get("yf_sector") in chosen]
         if subsector_filter:
             chosen_sub = set(subsector_filter)
             filtered = [r for r in filtered if r.get("sub_sector") in chosen_sub]
+
+        # Text searches — case-insensitive substring match. Empty query = no-op.
+        if ticker_query:
+            q = ticker_query.strip().lower()
+            if q:
+                filtered = [r for r in filtered
+                            if q in (r.get("ticker") or "").lower()]
+        if name_query:
+            q = name_query.strip().lower()
+            if q:
+                filtered = [r for r in filtered
+                            if q in (r.get("name") or "").lower()]
+
+        # Numeric range filters — skip ones at their full default range so
+        # rows with missing data don't get excluded by un-touched filters.
+        for i, (_label, _slug, lo_default, hi_default, _step,
+                key, xform_key) in enumerate(NUMERIC_FILTERS):
+            slider = slider_values[i] or [lo_default, hi_default]
+            lo, hi = slider[0], slider[1]
+            if lo == lo_default and hi == hi_default:
+                continue
+            filtered = [r for r in filtered
+                        if _in_range(_xform_value(xform_key, r.get(key)),
+                                      lo, hi)]
 
         table_data = [_format_row(r) for r in filtered]
 
@@ -227,7 +364,10 @@ def register_screener_callbacks(app, db_path: str):
 
         agg = pe_aggregation or "median"
         chart = _build_sector_pe_chart(filtered, aggregation=agg)
-        subsector_chart = _build_subsector_pe_chart(filtered, aggregation=agg)
+        # Sub-sector chart only builds when the user has clicked "Load chart"
+        # at least once this session. Saves ~1s per filter change before then.
+        subsector_chart = (_build_subsector_pe_chart(filtered, aggregation=agg)
+                            if subsector_loaded else dash.no_update)
         agg_label = _AGG.get(agg, _AGG["median"])[0]
         sector_header = f"{agg_label} P/E by Sector"
         subsector_header = f"{agg_label} P/E by Sub-Sector"
@@ -245,6 +385,46 @@ def register_screener_callbacks(app, db_path: str):
             sector_options,
             subsector_options,
         )
+
+
+def _register_range_sync(app, slug: str, lo: float, hi: float):
+    """Two-way slider ↔ number-input sync for one numeric filter. Slider is
+    canonical (it's the Input on update_screener); inputs are display +
+    typed-entry. The equality guard inside each handler prevents
+    a slider->inputs->slider ping-pong from re-firing the main update."""
+    @app.callback(
+        Output(f"screener-{slug}-min", "value", allow_duplicate=True),
+        Output(f"screener-{slug}-max", "value", allow_duplicate=True),
+        Input(f"screener-{slug}-slider", "value"),
+        State(f"screener-{slug}-min", "value"),
+        State(f"screener-{slug}-max", "value"),
+        prevent_initial_call=True,
+    )
+    def _slider_to_inputs(v, cur_min, cur_max):
+        if not v:
+            raise PreventUpdate
+        new_min, new_max = v[0], v[1]
+        # Equality guard — bail out if both inputs already match so we don't
+        # trigger _inputs_to_slider unnecessarily.
+        if cur_min == new_min and cur_max == new_max:
+            raise PreventUpdate
+        return new_min, new_max
+
+    @app.callback(
+        Output(f"screener-{slug}-slider", "value", allow_duplicate=True),
+        Input(f"screener-{slug}-min", "value"),
+        Input(f"screener-{slug}-max", "value"),
+        State(f"screener-{slug}-slider", "value"),
+        prevent_initial_call=True,
+    )
+    def _inputs_to_slider(mn, mx, cur):
+        mn_c = lo if mn is None else max(lo, min(hi, mn))
+        mx_c = hi if mx is None else max(lo, min(hi, mx))
+        if mn_c > mx_c:
+            mn_c, mx_c = mx_c, mn_c
+        if cur and cur[0] == mn_c and cur[1] == mx_c:
+            raise PreventUpdate
+        return [mn_c, mx_c]
 
 
 def _query_latest(db_path: str) -> list[dict]:
@@ -278,6 +458,34 @@ def _count_universe(db_path: str) -> int:
         ).fetchone()[0]
 
 
+def _latest_price_date(db_path: str) -> str | None:
+    """Freshest date in historical_prices, routed through the SQLite/cloud
+    factory so the pill reflects whichever backend the dashboard is actually
+    reading prices from (Supabase when USE_CLOUD_DB=true)."""
+    try:
+        from storage.database import Database
+        from storage.factory import get_prices_repo
+        repo = get_prices_repo(Database(db_path))
+        return repo.latest_date_any()
+    except Exception:
+        # Fail soft — the pill just shows "—" if the lookup errors. The
+        # screener table itself doesn't depend on this value.
+        return None
+
+
+def _fetch_one_price(db_path: str, ticker: str) -> float | None:
+    """Single-ticker latest adj_close — backs the per-row 'Get price' click.
+    Routes through the factory so it hits Supabase under USE_CLOUD_DB=true.
+    Indexed lookup; sub-second even on the pooler."""
+    try:
+        from storage.database import Database
+        from storage.factory import get_prices_repo
+        repo = get_prices_repo(Database(db_path))
+        return repo.latest_price(ticker)
+    except Exception:
+        return None
+
+
 def _format_row(r: dict) -> dict:
     """Apply display formatting (rounding, ROE→%, market cap→billions, watchlist star)."""
     import math
@@ -301,6 +509,10 @@ def _format_row(r: dict) -> dict:
         "name": (r.get("name") or "")[:30],
         "yf_sector": r.get("yf_sector") or r.get("watchlist_sector") or "—",
         "sub_sector": r.get("sub_sector") or "—",
+        # Lazy-fetched: click the cell to populate. Avoids the ~20s Supabase
+        # bulk pull at page-load and lets the user pay the cost only for
+        # tickers they care about.
+        "current_price": "Get price",
         "market_cap_b": rnd(market_cap / 1e9, 1) if market_cap else None,
         "trailing_pe": rnd(r.get("trailing_pe"), 1),
         "forward_pe": rnd(r.get("forward_pe"), 1),
@@ -311,7 +523,6 @@ def _format_row(r: dict) -> dict:
         "debt_to_equity": rnd(r.get("debt_to_equity"), 1),
         "beta": rnd(r.get("beta"), 2),
         "completeness_pct": rnd((completeness or 0) * 100, 0),
-        "watchlist_flag": "★" if r.get("is_watchlist") else "",
     }
 
 
@@ -329,17 +540,24 @@ def _build_subsector_pe_chart(rows: list[dict], aggregation: str = "median") -> 
     """Trailing P/E per SUB-SECTOR — finer-grained companion to the sector
     chart above. Same filters (P/E in (0, 200], ≥3 tickers per bucket), same
     styling, same aggregation as the sector chart (driven by a single toggle).
-    Tickers without a sub_sector assignment (yfinance-metadata-NULL) dropped."""
+    Tickers without a sub_sector assignment (yfinance-metadata-NULL) dropped.
+
+    `clickable_labels=False` — with ~75 buckets, the captureevents annotations
+    used to make y-tick labels clickable were the dominant client-side render
+    cost (each annotation = an SVG element with event listeners). Bars stay
+    clickable for filtering; only the text label loses click affordance."""
     return _build_pe_chart_by_key(
         rows, aggregation=aggregation,
         bucket_key=lambda r: r.get("sub_sector"),
         empty_message=("Need ≥3 tickers per sub-sector with valid P/E. "
                        "Filter to a parent sector or backfill yfinance metadata."),
+        clickable_labels=False,
     )
 
 
 def _build_pe_chart_by_key(rows: list[dict], bucket_key, empty_message: str,
-                             aggregation: str = "median") -> go.Figure:
+                             aggregation: str = "median",
+                             clickable_labels: bool = True) -> go.Figure:
     """Shared horizontal-bar P/E chart builder. `bucket_key` is a callable
     taking a row and returning the string label to bucket on (or falsy to
     skip). `aggregation` is one of "median" / "mean" / "cap_weighted" —
@@ -382,24 +600,32 @@ def _build_pe_chart_by_key(rows: list[dict], bucket_key, empty_message: str,
     values = [v for _, v in eligible]
     counts = [len(by_bucket[s]) for s in buckets]
 
-    # Replace the default y-axis tick labels with clickable annotations.
-    # Plotly tick labels don't fire clickData; annotations with captureevents=True
-    # fire clickAnnotationData, which Dash exposes as a `dcc.Graph` prop. Same
-    # text and styling as default ticks so the visual is unchanged.
-    label_annotations = [
-        dict(
-            x=0, y=bucket,
-            xref="x", yref="y",
-            text=bucket,
-            showarrow=False,
-            xanchor="right", yanchor="middle",
-            xshift=-8,
-            font=dict(size=11, color=T.TEXT),
-            captureevents=True,
-            hovertext=f"Click to filter to: {bucket}",
-        )
-        for bucket in buckets
-    ]
+    # When clickable_labels=True, replace the default y-axis tick labels with
+    # captureevents annotations (each fires clickAnnotationData). This makes
+    # the text labels themselves clickable for filtering. For large bucket
+    # counts (e.g. the 75-bucket sub-sector chart), the per-annotation event
+    # listeners dominate client-side render time, so we fall back to plain
+    # tick labels — the bars themselves stay clickable via clickData.
+    if clickable_labels:
+        label_annotations = [
+            dict(
+                x=0, y=bucket,
+                xref="x", yref="y",
+                text=bucket,
+                showarrow=False,
+                xanchor="right", yanchor="middle",
+                xshift=-8,
+                font=dict(size=11, color=T.TEXT),
+                captureevents=True,
+                hovertext=f"Click to filter to: {bucket}",
+            )
+            for bucket in buckets
+        ]
+        yaxis_kwargs = dict(showticklabels=False)
+    else:
+        label_annotations = []
+        yaxis_kwargs = dict(showticklabels=True,
+                            tickfont=dict(size=11, color=T.TEXT))
 
     fig = go.Figure(go.Bar(
         x=values, y=buckets, orientation="h",
@@ -410,10 +636,14 @@ def _build_pe_chart_by_key(rows: list[dict], bucket_key, empty_message: str,
     ))
     fig.update_layout(_dark_layout(""),
                       xaxis_title=f"{agg_label} Trailing P/E",
-                      yaxis=dict(showticklabels=False),  # hidden — annotations above are the visible (clickable) labels
+                      yaxis=yaxis_kwargs,
                       annotations=label_annotations,
                       height=max(220, len(buckets) * 28 + 80),
-                      margin=dict(l=220, r=80, t=20, b=40))
+                      margin=dict(l=220, r=80, t=20, b=40),
+                      # Stable uirevision lets Plotly diff-render rather than
+                      # rebuilding the whole SVG on filter changes — big win
+                      # when only a couple of buckets shift values.
+                      uirevision="pe-chart")
     return fig
 
 

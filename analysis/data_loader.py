@@ -573,3 +573,123 @@ def _fetch_yfinance_info(ticker: str) -> Optional[dict]:
     except Exception as e:
         log.warning("yfinance .info failed for %s: %s", ticker, e)
         return None
+
+
+# ============== Analyst forward-growth cache (Section 5 default tier 2) ==============
+
+ANALYST_GROWTH_STALE_DAYS = 7
+
+
+def get_or_fetch_analyst_growth(ticker: str, db: Database) -> Optional[float]:
+    """Return yfinance's "+5y" analyst growth estimate as a fraction (e.g. 0.12).
+    Cache-aside against the local `analyst_growth_cache` SQLite table with a
+    7-day TTL — analyst estimates don't move daily, and yfinance often returns
+    nothing for HK names so the cache also stops us from hammering the API.
+
+    Returns None when yfinance has no estimate for the ticker (the None is
+    cached too, so the next call returns quickly)."""
+    # 1. Cache read
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT growth_5y, fetched_at FROM analyst_growth_cache WHERE ticker = ?",
+                (ticker,),
+            ).fetchone()
+    except Exception as e:
+        log.warning("analyst_growth_cache read failed for %s: %s", ticker, e)
+        row = None
+    if row is not None:
+        # sqlite3 row tuple OR Row object — both indexable
+        growth_5y = row[0] if not hasattr(row, "keys") else row["growth_5y"]
+        fetched_at = row[1] if not hasattr(row, "keys") else row["fetched_at"]
+        if not _analyst_stale(fetched_at):
+            return float(growth_5y) if growth_5y is not None else None
+
+    # 2. Live fetch (yfinance Ticker.growth_estimates)
+    growth_5y = _fetch_yfinance_growth_5y(ticker)
+
+    # 3. Cache write (including the miss)
+    try:
+        with db.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO analyst_growth_cache (ticker, growth_5y, fetched_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    growth_5y = excluded.growth_5y,
+                    fetched_at = CURRENT_TIMESTAMP
+            """, (ticker, growth_5y))
+            conn.commit()
+    except Exception as e:
+        log.warning("analyst_growth_cache write failed for %s: %s", ticker, e)
+    return growth_5y
+
+
+def _analyst_stale(fetched_at_str) -> bool:
+    if not fetched_at_str:
+        return True
+    try:
+        ts = (fetched_at_str if isinstance(fetched_at_str, datetime)
+                else datetime.fromisoformat(str(fetched_at_str).replace(" ", "T")))
+        return (datetime.utcnow() - ts).days > ANALYST_GROWTH_STALE_DAYS
+    except (TypeError, ValueError):
+        return True
+
+
+def _fetch_yfinance_growth_5y(ticker: str) -> Optional[float]:
+    """Probe Ticker.growth_estimates for the '+5y' analyst consensus column.
+    yfinance schema has shifted over versions — some installs expose a
+    DataFrame indexed by period (e.g. '+5y'), some return None entirely for
+    HK names. We try a couple of column-name conventions and silently return
+    None on any mismatch."""
+    try:
+        import yfinance as yf
+        ge = yf.Ticker(ticker).growth_estimates
+    except Exception as e:
+        log.debug("yfinance growth_estimates failed for %s: %s", ticker, e)
+        return None
+    if ge is None:
+        return None
+    try:
+        # DataFrame: rows = ['0q','+1q','0y','+1y','+5y','-5y']; columns vary
+        # by yfinance version. We try the most common cells in order.
+        if hasattr(ge, "loc"):
+            for row_key in ("+5y", "5y", "+5Y"):
+                if row_key in ge.index:
+                    row = ge.loc[row_key]
+                    for col in ("stockTrend", "stock_trend",
+                                  "growthEstimate", "growth_estimate"):
+                        if col in row.index:
+                            v = row[col]
+                            return _coerce_growth(v)
+                    # Fallback: first numeric cell in the row
+                    for v in row.values:
+                        out = _coerce_growth(v)
+                        if out is not None:
+                            return out
+        elif isinstance(ge, dict):
+            for k in ("+5y", "5y"):
+                v = ge.get(k)
+                out = _coerce_growth(v)
+                if out is not None:
+                    return out
+    except Exception as e:
+        log.debug("growth_estimates parse failed for %s: %s", ticker, e)
+    return None
+
+
+def _coerce_growth(v) -> Optional[float]:
+    """yfinance reports growth as either a fraction (0.12) or a percent (12.0).
+    Detect & normalise to a fraction; reject NaN / non-numeric."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    import math as _math
+    if _math.isnan(f) or _math.isinf(f):
+        return None
+    # If the value looks like a percent (>1.5 in magnitude), divide by 100.
+    if abs(f) > 1.5:
+        f = f / 100.0
+    return f

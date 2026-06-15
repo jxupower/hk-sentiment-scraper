@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from analysis.cagr import multi_horizon_cagr, yoy_growth_series
-from analysis.dcf import DCFInputs, DCFResult, compute_dcf, default_inputs_from_snapshot
+from analysis.dcf import (DCFInputs, DCFResult, GrowthProvenance,
+                           compute_dcf, default_inputs_from_snapshot)
 from analysis.factor_scores import FactorResult, Flag
 from analysis.forensic import RedFlag, detect_red_flags
 from analysis.peer_comparison import PeerScorecard, build_peer_scorecard
@@ -84,6 +85,7 @@ class ResearchReport:
     # Section 5 — Valuation
     default_dcf: Optional[DCFResult]
     dcf_inputs_default: Optional[DCFInputs]
+    dcf_growth_provenance: Optional[GrowthProvenance] = None
 
     # Section 6 — Notes & Review (handled via saved_notes)
 
@@ -197,35 +199,46 @@ def build_research_report(ticker: str, db_path: str,
     # Peer scorecard
     peer_scorecard = build_peer_scorecard(ticker, db_path)
 
-    # Default DCF — use the most recent snapshot that HAS per-share data.
-    # Today's yfinance snapshots often have eps_ttm=None because per-share
-    # fields are pulled less reliably than ratios; the akshare historical rows
-    # always have them. Fall back through history newest→oldest until we find
-    # a snapshot with usable per-share data.
+    # Default DCF — feed the 3-tier resolver in analysis/dcf.py.
+    # Tier 1 (preferred): median of available 5y CAGRs across earnings,
+    # revenue, and book value per share — already computed above for Section 3.
+    # Tier 2: forward analyst consensus from yfinance (cache-aside, 7d TTL).
+    # Tier 3: trailing earnings_growth from the latest snapshot (yfinance YoY,
+    # i.e. the same value we used to feed the OLD default flow).
+    # Tier 4: 8% hardcoded floor inside the resolver.
+    #
+    # We still need a snapshot dict with at least eps_ttm + shares_outstanding
+    # to build base_fcf — walk history newest→oldest until we find one.
     snap_for_dcf = None
     for h in reversed(history):
         if h.eps_ttm is not None and h.shares_outstanding is not None:
-            # Dampen the default growth assumption using median of last 3-5y
-            # earnings_growth, not just the most recent year (which can be wildly
-            # negative or one-off positive). User can override via UI sliders.
-            recent_growths = [hh.earnings_growth for hh in history[-5:]
-                              if hh.earnings_growth is not None]
-            if recent_growths:
-                sorted_g = sorted(recent_growths)
-                median_g = sorted_g[len(sorted_g) // 2]
-            else:
-                median_g = 0.08
-            # Clip to a reasonable band: perpetual growth above 25% is unrealistic;
-            # perpetual decline below -10% would compute an absurdly low intrinsic
-            default_growth = max(-0.05, min(0.20, median_g))
             snap_for_dcf = {
                 "eps_ttm": h.eps_ttm,
                 "shares_outstanding": h.shares_outstanding,
-                "earnings_growth": default_growth,
+                # Trailing YoY for the resolver's tier 3. Median of last few
+                # years smooths one-off jumps; the resolver will use it only
+                # if neither CAGR nor analyst consensus is available.
+                "earnings_growth": _median_trailing_growth(history),
                 "last_price": current_price,
             }
             break
-    dcf_inputs_default = default_inputs_from_snapshot(snap_for_dcf) if snap_for_dcf else None
+    dcf_inputs_default = None
+    dcf_growth_provenance: Optional[GrowthProvenance] = None
+    if snap_for_dcf:
+        try:
+            from analysis.data_loader import get_or_fetch_analyst_growth
+            analyst_5y = get_or_fetch_analyst_growth(ticker, db)
+        except Exception:
+            analyst_5y = None
+        resolved = default_inputs_from_snapshot(
+            snap_for_dcf,
+            cagr_earnings_5y=cagr_earnings.get(5),
+            cagr_revenue_5y=cagr_revenue.get(5),
+            cagr_bps_5y=cagr_bps.get(5),
+            analyst_growth_5y=analyst_5y,
+        )
+        if resolved:
+            dcf_inputs_default, dcf_growth_provenance = resolved
     if user_dcf_inputs and dcf_inputs_default:
         # Apply user overrides on top of defaults
         d = dcf_inputs_default.__dict__.copy()
@@ -253,6 +266,7 @@ def build_research_report(ticker: str, db_path: str,
         peer_scorecard=peer_scorecard,
         default_dcf=default_dcf,
         dcf_inputs_default=dcf_inputs_default,
+        dcf_growth_provenance=dcf_growth_provenance,
         financial_statements=(_load_financial_statements(ticker, db)
                               if not skip_financial_statements
                               else {"income": [], "balance": [], "cashflow": []}),
@@ -280,6 +294,19 @@ def _to_float(v):
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _median_trailing_growth(history: list[HistoryPoint]) -> Optional[float]:
+    """Median earnings_growth over the last 5 historical rows. Used as the
+    'trailing' tier-3 input to the DCF growth resolver — smooths over one-off
+    jumps that the most-recent year may show, without going as deep as a
+    full 5y CAGR (which is computed separately and feeds tier 1)."""
+    recent = [h.earnings_growth for h in history[-5:]
+                if h.earnings_growth is not None]
+    if not recent:
+        return None
+    sorted_g = sorted(recent)
+    return sorted_g[len(sorted_g) // 2]
 
 
 def _cagr_from_growth_series(history: list[HistoryPoint]) -> dict[int, Optional[float]]:

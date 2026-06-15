@@ -201,6 +201,27 @@ class CloudHistoricalPricesRepository:
             row = cur.fetchone()
             return str(row[0]) if row and row[0] else None
 
+    def latest_date_any(self) -> Optional[str]:
+        """Freshest price date across all tickers — used by the Screener
+        header pill to show 'data as-of'."""
+        with cursor() as cur:
+            cur.execute("SELECT MAX(date) FROM historical_prices")
+            row = cur.fetchone()
+            return str(row[0]) if row and row[0] else None
+
+    def latest_price(self, ticker: str) -> Optional[float]:
+        """Single-ticker latest adj_close — backs the Screener/Discovery
+        per-row lazy 'Get price' click handler. Indexed lookup, fast
+        even over the pooler (single round-trip)."""
+        with cursor() as cur:
+            cur.execute(
+                "SELECT adj_close FROM historical_prices WHERE ticker = %s "
+                "AND adj_close IS NOT NULL ORDER BY date DESC LIMIT 1",
+                (ticker,),
+            )
+            row = cur.fetchone()
+            return float(row[0]) if row else None
+
     def distinct_tickers(self) -> list[str]:
         """All tickers with at least one price row — used by seed scripts to
         skip already-loaded tickers."""

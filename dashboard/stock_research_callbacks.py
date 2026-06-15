@@ -24,7 +24,9 @@ from dash import Input, Output, State, dcc, html, no_update
 import dash_bootstrap_components as dbc
 
 from analysis.dcf import DCFInputs, compute_dcf, sensitivity_table
+from analysis.factor_scores import FactorScoringEngine
 from analysis.research_orchestrator import build_research_report
+from dash.exceptions import PreventUpdate
 from dashboard import theme as T
 from dashboard import financial_statement_tables as fst
 from dashboard.charts import (
@@ -36,6 +38,11 @@ from dashboard.charts import (
 def register_stock_research_callbacks(app, db_path: str):
     sector_risk_path = os.path.join(os.path.dirname(__file__), "..", "config",
                                      "sector_risk.yaml")
+    # Lazy engine used by the V/Q/G bar click-through drawer. We re-instantiate
+    # here rather than reuse the one inside build_research_report because the
+    # orchestrator's engine isn't exposed at module scope; the cost of one extra
+    # FactorScoringEngine is trivial (no state besides path strings).
+    factor_engine = FactorScoringEngine(db_path, sector_risk_path)
 
     # ----- Autocomplete dropdown options -----
     # Critical: must always include the currently-selected `value` in the
@@ -120,6 +127,7 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-dcf-g610", "value"),
         Output("sr-dcf-tg", "value"),
         Output("sr-dcf-wacc", "value"),
+        Output("sr-dcf-g15-provenance", "children"),
         # Mirror the active ticker back into the dropdown so cross-tab nav
         # (Screener cell click → Research tab) updates the visible selection.
         Output("sr-ticker-select", "value", allow_duplicate=True),
@@ -156,7 +164,7 @@ def register_stock_research_callbacks(app, db_path: str):
                 "(no data)", "", "", "", "", [],
                 [], {}, {}, {}, [],
                 "", "", "", None,
-                10, 5, 2.5, 9,
+                10, 5, 2.5, 9, "",
                 ticker, opts,  # mirror selection back to dropdown
             )
 
@@ -221,6 +229,7 @@ def register_stock_research_callbacks(app, db_path: str):
             wacc = round(d.wacc * 100)
         else:
             g15, g610, tg, wacc = 10, 5, 2.5, 9
+        g15_provenance = _provenance_subtitle(r.dcf_growth_provenance)
 
         return (
             {"display": "none"}, {"display": "block"},
@@ -229,7 +238,7 @@ def register_stock_research_callbacks(app, db_path: str):
             business_summary, s_swot, w_swot, o_swot, t_swot, article_feed,
             cagr_table, eps_fig, rev_fig, peer_fig, forensic,
             strat_notes, val_notes, thesis, status,
-            g15, g610, tg, wacc,
+            g15, g610, tg, wacc, g15_provenance,
             ticker, opts,  # mirror selection back to dropdown
         )
 
@@ -364,6 +373,7 @@ def register_stock_research_callbacks(app, db_path: str):
     @app.callback(
         Output("sr-dcf-result", "children"),
         Output("sr-dcf-sensitivity", "figure"),
+        Output("sr-dcf-walkthrough", "children"),
         Input("sr-dcf-g15", "value"),
         Input("sr-dcf-g610", "value"),
         Input("sr-dcf-tg", "value"),
@@ -373,11 +383,13 @@ def register_stock_research_callbacks(app, db_path: str):
     )
     def recompute_dcf(g15, g610, tg, wacc, ticker):
         if not ticker:
-            return "", {}
+            return "", {}, ""
         dcf_inputs = _load_dcf_inputs_only(db_path, ticker)
         if dcf_inputs is None:
-            return html.Span("Insufficient per-share data for DCF.",
-                              className="text-warning small"), {}
+            return (html.Span("Insufficient per-share data for DCF.",
+                              className="text-warning small"), {},
+                    html.Div("No EPS / shares data — walkthrough unavailable.",
+                              className="text-muted small"))
 
         inputs = DCFInputs(
             base_fcf=dcf_inputs.base_fcf,
@@ -390,8 +402,10 @@ def register_stock_research_callbacks(app, db_path: str):
         )
         result = compute_dcf(inputs)
         if result.error:
-            return html.Span(f"DCF error: {result.error}",
-                              className="text-danger small"), {}
+            return (html.Span(f"DCF error: {result.error}",
+                              className="text-danger small"), {},
+                    html.Div(f"DCF error: {result.error}",
+                              className="text-danger small"))
 
         mos_color = "success" if (result.margin_of_safety or 0) > 0 else "danger"
         mos_str = f"{result.margin_of_safety*100:+.1f}%" if result.margin_of_safety is not None else "NA"
@@ -410,6 +424,8 @@ def register_stock_research_callbacks(app, db_path: str):
                    className="text-muted small mt-2 mb-0"),
         ])
 
+        walkthrough = _render_dcf_walkthrough(inputs, result, dcf_inputs)
+
         # Sensitivity heatmap: vary growth_y1_5 and wacc
         g_grid = [g15/100 - 0.04, g15/100 - 0.02, g15/100, g15/100 + 0.02, g15/100 + 0.04]
         wacc_grid = [wacc/100 - 0.02, wacc/100 - 0.01, wacc/100,
@@ -421,7 +437,7 @@ def register_stock_research_callbacks(app, db_path: str):
         except Exception:
             sens_fig = {}
 
-        return result_html, sens_fig
+        return result_html, sens_fig, walkthrough
 
     # ----- Save all notes back to DB -----
     @app.callback(
@@ -497,6 +513,31 @@ def register_stock_research_callbacks(app, db_path: str):
         md = _report_to_markdown(r, s, w, o, t, strat, val, thesis)
         return dict(content=md, filename=f"{ticker}_research.md")
 
+    # ----- Click-to-explain V/Q/G bars -----
+    # Clicking any of the three V/Q/G bars on the Section 1 percentile chart
+    # opens a side drawer showing exactly which fundamentals fed the composite
+    # signal, the sub-sector peer distribution, and the target's rank position.
+    # Sentiment bars are no-ops (sentiment is universe-wide; no breakdown).
+    @app.callback(
+        Output("sr-factor-breakdown-drawer", "is_open"),
+        Output("sr-factor-breakdown-body", "children"),
+        Input("sr-factor-bars", "clickData"),
+        State("sr-ticker-select", "value"),
+        prevent_initial_call=True,
+    )
+    def open_factor_breakdown_drawer(click, ticker):
+        if not click or not ticker:
+            raise PreventUpdate
+        label = click["points"][0].get("y")
+        if label not in {"Value", "Quality", "Growth"}:
+            raise PreventUpdate                      # Sentiment / unknown — no breakdown
+        factor = label.lower()
+        breakdown = factor_engine.breakdown_for(ticker, factor)
+        if breakdown is None:
+            return True, html.Div(f"{ticker} not found in fundamentals snapshot.",
+                                   className="text-muted")
+        return True, _render_factor_breakdown(breakdown)
+
 
 # ============== helper functions ==============
 
@@ -507,18 +548,508 @@ def _factor_bar_chart(fr) -> go.Figure:
     values = [fr.value_pctile or 0, fr.quality_pctile or 0,
               fr.growth_pctile or 0, fr.sentiment_pctile or 0]
     colors = [T.SUCCESS if v >= 70 else (T.WARNING if v < 30 else T.INFO) for v in values]
+    # Hover hint: V/Q/G are click-through to a breakdown drawer; Sentiment is not.
+    hover = [
+        "<b>Value: %{x:.0f}</b><br>Click for component breakdown<extra></extra>",
+        "<b>Quality: %{x:.0f}</b><br>Click for component breakdown<extra></extra>",
+        "<b>Growth: %{x:.0f}</b><br>Click for component breakdown<extra></extra>",
+        "<b>Sentiment: %{x:.0f}</b><br>(universe-wide; no breakdown)<extra></extra>",
+    ]
     fig = go.Figure(go.Bar(x=values, y=metrics, orientation="h",
                             marker_color=colors, marker_line_width=0,
                             text=[f"{v:.0f}" if v else "NA" for v in values],
-                            textposition="outside"))
+                            textposition="outside",
+                            hovertemplate=hover))
     fig.add_vline(x=50, line_dash="dot", line_color=T.TEXT_MUTED)
     fig.update_layout(**T.chart_layout(
-        title="Factor percentile ranks (vs sector peers)",
+        title="Factor percentile ranks (vs sub-sector peers) — click V/Q/G bars for breakdown",
         xaxis=dict(range=[0, 100], gridcolor=T.BORDER, linecolor=T.BORDER,
                    tickfont=dict(color=T.TEXT_MUTED)),
         height=200, margin=dict(t=40, b=30, l=80, r=20),
     ))
     return fig
+
+
+def _render_factor_breakdown(b) -> html.Div:
+    """Render a FactorBreakdown into the slide-in drawer body. Shows the
+    sub-sector bucket, ingredient table, peer-signal distribution stats,
+    and the target's exact rank position + percentile formula."""
+    if b.empty_reason:
+        # Empty-state — explain why no rank exists.
+        body = [
+            html.H5(f"{b.factor.title()} percentile — not computed",
+                     style={"color": T.WARNING}),
+            html.P(b.empty_reason, className="text-muted"),
+        ]
+        if b.bucket:
+            body.append(html.Small(f"Bucket: {b.bucket}", className="text-muted"))
+        if b.ingredients:
+            body.append(html.Hr())
+            body.append(html.Small("Ingredient detail (target side):",
+                                    className="text-muted"))
+            body.append(_factor_ingredient_table(b))
+        return html.Div(body)
+
+    pct_color = (T.SUCCESS if b.pctile >= 70 else
+                  (T.WARNING if b.pctile < 30 else T.INFO))
+    return html.Div([
+        # Header — factor name + pctile + bucket
+        html.Div([
+            html.Span(b.factor.title(),
+                       style={"fontSize": "1.4rem", "fontWeight": "700",
+                              "color": T.TEXT, "marginRight": "12px"}),
+            html.Span(f"= {b.pctile:.1f}",
+                       style={"fontSize": "1.4rem", "fontWeight": "700",
+                              "color": pct_color}),
+        ]),
+        html.Div([
+            html.Span("Ranked against ", className="text-muted small"),
+            html.Span(f"{b.bucket_size - 1} peer(s) ",
+                       style={"fontWeight": "600", "color": T.TEXT}),
+            html.Span("in sub-sector ", className="text-muted small"),
+            html.Span(f"\"{b.bucket}\"",
+                       style={"fontWeight": "600", "color": T.PRIMARY}),
+        ], className="mb-3"),
+
+        # Section 1 — composite ingredients table
+        html.H6("Composite ingredients", className="fw-bold mt-3"),
+        html.P("Each row is one raw fundamentals component fed into the "
+                "composite signal. Rows marked ✗ were dropped from the average "
+                "for the reason shown.",
+                className="text-muted small mb-2"),
+        _factor_ingredient_table(b),
+
+        # Section 2 — peer signal distribution
+        html.H6("Composite signal vs sub-sector peers",
+                 className="fw-bold mt-4"),
+        html.P("Higher composite signal = higher percentile rank. "
+                "The target's signal is the mean of the ingredient "
+                "contributions above.",
+                className="text-muted small mb-2"),
+        html.Div([
+            html.Div([
+                html.Span(f"{b.ticker} signal: ", className="text-muted small"),
+                html.Span(f"{b.target_composite_signal:.5f}",
+                           style={"fontWeight": "700", "color": T.PRIMARY,
+                                  "fontFamily": "monospace"}),
+            ], className="mb-2"),
+            html.Table([
+                html.Thead(html.Tr([
+                    html.Th(c, className="text-muted small")
+                    for c in ["Peer min", "P25", "Median", "P75", "Peer max"]
+                ])),
+                html.Tbody(html.Tr([
+                    html.Td(f"{v:.5f}",
+                             style={"fontFamily": "monospace",
+                                    "fontSize": "0.85rem"})
+                    for v in [b.peer_signal_min, b.peer_signal_p25,
+                              b.peer_signal_median, b.peer_signal_p75,
+                              b.peer_signal_max]
+                ])),
+            ], className="table table-sm"),
+        ], className="mb-3"),
+
+        # Section 3 — side-by-side V/Q/G comparison vs nearest peers in
+        # the same sub-sector. Highlights the current factor's ingredient
+        # rows so the user knows what drove the rank that opened the drawer.
+        html.H6("Side-by-side vs nearest peers", className="fw-bold mt-4"),
+        html.P([
+            "Closest 3 peers by composite signal, in rank order. ",
+            html.Span("Highlighted rows", style={"backgroundColor": T.PRIMARY_SOFT,
+                                                  "padding": "0 4px",
+                                                  "borderRadius": "3px"}),
+            f" are the ingredients of the {b.factor} composite that opened this drawer.",
+        ], className="text-muted small mb-2"),
+        _peer_comparison_table(b),
+
+        # Section 4 — rank line
+        html.Div([
+            html.Span("Result: ", className="text-muted small"),
+            html.Span(f"{b.ticker} ranks ",
+                       style={"fontWeight": "600", "color": T.TEXT}),
+            html.Span(f"{b.rank_position} of {b.bucket_size}",
+                       style={"fontWeight": "700", "color": T.PRIMARY,
+                              "fontSize": "1.05rem"}),
+            html.Span(f" → percentile {b.pctile:.1f}",
+                       style={"fontWeight": "600", "color": pct_color,
+                              "marginLeft": "8px"}),
+        ], className="mb-3 mt-4 p-2",
+            style={"backgroundColor": T.CARD_BG_SOFT,
+                   "border": f"1px solid {T.BORDER}",
+                   "borderRadius": "6px"}),
+
+        # Formula footnote
+        html.Hr(),
+        html.Small([
+            html.Strong("Formula: "),
+            "percentile = 100 × (peers_below + (ties + 1) / 2) / (bucket_size + 1). ",
+            "Higher composite signal = higher rank for all three factors. "
+            "Ingredients are dropped when raw values fall outside data-quality bounds "
+            "(see PE_BOUNDS / PB_BOUNDS / EV_EBITDA_BOUNDS in analysis/factor_scores.py).",
+        ], className="text-muted"),
+    ])
+
+
+def _factor_ingredient_table(b) -> "html.Table":
+    """Small html.Table for the ingredients list. Used by both the populated
+    and empty-state paths of _render_factor_breakdown."""
+    def fmt(v, decimals=4):
+        if v is None:
+            return html.Span("—", className="text-muted")
+        try:
+            return html.Span(f"{float(v):.{decimals}f}",
+                              style={"fontFamily": "monospace",
+                                     "fontSize": "0.85rem"})
+        except (TypeError, ValueError):
+            return html.Span("—", className="text-muted")
+
+    rows = []
+    for ing in b.ingredients:
+        if ing.included:
+            badge = html.Span("✓ used", style={"color": T.SUCCESS,
+                                                  "fontWeight": "600",
+                                                  "fontSize": "0.82rem"})
+            reason_cell = ""
+        else:
+            badge = html.Span("✗ dropped", style={"color": T.WARNING,
+                                                     "fontWeight": "600",
+                                                     "fontSize": "0.82rem"})
+            reason_cell = html.Span(ing.reason_excluded,
+                                     className="text-muted small")
+        # target_contribution now carries the per-ingredient percentile
+        # (0-100) post the V/Q/G normalization fix — see
+        # analysis/factor_scores.py:_factor_signal_breakdown.
+        pctile = ing.target_contribution
+        pctile_cell = (html.Span(f"{pctile:.0f}",
+                                   style={"fontFamily": "monospace",
+                                          "fontSize": "0.85rem",
+                                          "fontWeight": "600"})
+                        if pctile is not None
+                        else html.Span("—", className="text-muted"))
+        rows.append(html.Tr([
+            html.Td(ing.name, style={"fontSize": "0.85rem"}),
+            html.Td(fmt(ing.target_raw)),
+            html.Td(pctile_cell),
+            html.Td([badge, html.Br(), reason_cell]),
+        ]))
+    if not rows:
+        rows = [html.Tr(html.Td("(no ingredients available)",
+                                  colSpan=4,
+                                  className="text-muted small"))]
+    return html.Table([
+        html.Thead(html.Tr([
+            html.Th("Ingredient", className="text-muted small"),
+            html.Th("Raw value", className="text-muted small"),
+            html.Th("Bucket %ile", className="text-muted small"),
+            html.Th("Status", className="text-muted small"),
+        ])),
+        html.Tbody(rows),
+    ], className="table table-sm")
+
+
+_PEER_TABLE_ROWS = [
+    # (fundamentals field, display label, factor key for shading, format mode)
+    # format mode: "pct" → multiply by 100 + "%"; int → number of decimals
+    ("trailing_pe",      "P/E",          "value",    1),
+    ("price_to_book",    "P/B",          "value",    2),
+    ("ev_to_ebitda",     "EV/EBITDA",    "value",    1),
+    ("return_on_equity", "ROE",          "quality",  "pct"),
+    ("return_on_assets", "ROA",          "quality",  "pct"),
+    ("debt_to_equity",   "D/E %",        "quality",  1),   # already in percent
+    ("earnings_growth",  "Earnings YoY", "growth",   "pct"),
+    ("revenue_growth",   "Revenue YoY",  "growth",   "pct"),
+]
+
+
+def _peer_comparison_table(b) -> "html.Table":
+    """Side-by-side V/Q/G fundamentals for the target + up to 3 nearest peers
+    in the same sub-sector. Rows = metrics; columns = target (highlighted) +
+    peers (rank-ordered). Rows belonging to the factor that opened the drawer
+    get a soft PRIMARY-tinted background so the reader sees which inputs
+    drove the rank."""
+    if not b.target_snapshot or not b.nearest_peers:
+        return html.Div("Not enough peers in this sub-sector for a "
+                         "side-by-side comparison.",
+                         className="text-muted small")
+
+    def fmt(val, mode):
+        if val is None:
+            return html.Span("—", className="text-muted")
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            return html.Span("—", className="text-muted")
+        if mode == "pct":
+            return f"{v * 100:.1f}%"
+        return f"{v:.{mode}f}"
+
+    columns = [b.target_snapshot] + b.nearest_peers
+    header = html.Thead(html.Tr([
+        html.Th("Metric", className="text-muted small",
+                 style={"fontSize": "0.78rem"}),
+        *[html.Th([
+            html.Div(f"#{c.rank_position}  {c.ticker}",
+                      style={"fontWeight": "700",
+                             "color": (T.PRIMARY if i == 0 else T.TEXT),
+                             "fontSize": "0.82rem"}),
+            html.Div(c.name[:14], className="text-muted",
+                      style={"fontSize": "0.7rem"}),
+          ], style={"textAlign": "center",
+                    "borderBottom": f"2px solid {T.PRIMARY if i == 0 else T.BORDER}",
+                    "padding": "4px 6px"})
+          for i, c in enumerate(columns)],
+    ]))
+
+    body_rows = []
+    for field_key, label, factor_key, mode in _PEER_TABLE_ROWS:
+        is_current = (factor_key == b.factor)
+        tint = {"backgroundColor": T.PRIMARY_SOFT} if is_current else {}
+        body_rows.append(html.Tr([
+            html.Td(label, style={"fontWeight": "600",
+                                    "fontSize": "0.82rem", **tint}),
+            *[html.Td(fmt(getattr(c, field_key), mode),
+                       style={"fontFamily": "monospace",
+                              "fontSize": "0.78rem",
+                              "textAlign": "right",
+                              **({"color": T.PRIMARY, "fontWeight": "700"}
+                                  if i == 0 else {}),
+                              **tint})
+              for i, c in enumerate(columns)],
+        ]))
+
+    # Footer row — the composite signal for the active factor + the rank.
+    footer_style = {"borderTop": f"2px solid {T.BORDER_STRONG}"}
+    body_rows.append(html.Tr([
+        html.Td([f"{b.factor.title()} signal"], className="fst-italic",
+                 style={"fontSize": "0.78rem", "color": T.TEXT_MUTED,
+                        **footer_style}),
+        *[html.Td(f"{c.composite_signal:.4f}",
+                   style={"fontFamily": "monospace",
+                          "fontSize": "0.78rem",
+                          "textAlign": "right",
+                          **({"color": T.PRIMARY, "fontWeight": "700"}
+                              if i == 0 else {}),
+                          **footer_style})
+          for i, c in enumerate(columns)],
+    ]))
+
+    return html.Table([header, html.Tbody(body_rows)],
+                       className="table table-sm",
+                       style={"marginBottom": "0"})
+
+
+def _provenance_subtitle(prov) -> "html.Span":
+    """Build the small grey text line under the Y1-5 slider explaining where
+    the default came from. Used by render_report. Returns "" when no provenance
+    is available (e.g. ticker had no per-share data so the resolver wasn't called)."""
+    if prov is None:
+        return ""
+    val = prov.chosen_value * 100
+    if prov.winning_tier == "cagr_median":
+        parts = []
+        for k, v in prov.median_inputs.items():
+            if v is None:
+                continue
+            label = k.replace("_5y_cagr", "")
+            parts.append(f"{label} {v*100:+.1f}%")
+        body = (f"Default {val:+.1f}% — median of 5y CAGRs "
+                 f"({', '.join(parts) if parts else 'no data'})")
+    elif prov.winning_tier == "analyst_consensus":
+        body = (f"Default {val:+.1f}% — yfinance analyst 5y consensus "
+                 "(no historical CAGR available)")
+    elif prov.winning_tier == "trailing":
+        body = (f"Default {val:+.1f}% — trailing YoY earnings_growth "
+                 "(no CAGR or analyst consensus)")
+    else:
+        body = f"Default {val:+.1f}% — hardcoded floor (no growth data)"
+    if prov.clamped and prov.raw_value is not None:
+        body += f" (clamped from {prov.raw_value*100:+.1f}%)"
+    return html.Span(body)
+
+
+def _render_dcf_walkthrough(inputs, result, dcf_inputs) -> html.Div:
+    """Six-step walkthrough that exposes every intermediate value compute_dcf()
+    computes — base FCF, year-by-year projection, terminal, EV, per-share
+    intrinsic, MoS. Rendered into sr-dcf-walkthrough by recompute_dcf so it
+    re-renders on every slider drag."""
+    eps_ttm = getattr(dcf_inputs, "eps_ttm", None)
+    shares = inputs.shares_outstanding
+    wacc = inputs.wacc
+    g15, g610, tg = inputs.growth_y1_5, inputs.growth_y6_10, inputs.terminal_growth
+
+    def _b(v, dp=2):
+        """Format a number as 'X.XXB' (billions). Falls back to '—' on None."""
+        if v is None:
+            return "—"
+        try:
+            return f"{float(v) / 1e9:.{dp}f}B"
+        except (TypeError, ValueError):
+            return "—"
+
+    # Step 1 — Base FCF derivation
+    net_income = (eps_ttm or 0) * (shares or 0)
+    step1 = html.Div([
+        html.Div([
+            html.Span("Step 1 — ", className="text-muted small"),
+            html.Strong("Base free cash flow (proxy)"),
+        ]),
+        html.Div([
+            html.Code(f"Net income = EPS_TTM × Shares = "
+                      f"{eps_ttm if eps_ttm is not None else '—':.4f} × "
+                      f"{_b(shares)} = {_b(net_income)}"
+                      if eps_ttm is not None else "Net income unavailable — using base FCF directly",
+                      style={"fontSize": "0.8rem"}),
+        ]),
+        html.Div([
+            html.Code(f"Base FCF = Net income × 0.80 (FCF conversion proxy) "
+                       f"= {_b(inputs.base_fcf)}",
+                       style={"fontSize": "0.8rem"}),
+        ]),
+        html.Small("The 0.80 factor assumes ~80% of net income converts to free cash "
+                    "flow on average — capex-heavy industries convert less. HK filings "
+                    "rarely expose true historical FCF, so this proxy is the honest floor.",
+                    className="text-muted d-block mt-1",
+                    style={"fontSize": "0.72rem"}),
+    ], className="mb-3")
+
+    # Step 2 — Year-by-year projection table
+    proj_rows = []
+    for b in result.breakdown:
+        if b.is_terminal:
+            continue
+        proj_rows.append(html.Tr([
+            html.Td(b.year, style={"textAlign": "right", "fontWeight": "600"}),
+            html.Td(f"{b.growth_used*100:+.1f}%",
+                     style={"textAlign": "right",
+                            "color": (T.PRIMARY if b.year <= 5 else T.INFO),
+                            "fontWeight": "500"}),
+            html.Td(_b(b.fcf), style={"textAlign": "right",
+                                       "fontFamily": "monospace"}),
+            html.Td(f"{b.discount_factor:.4f}", style={"textAlign": "right",
+                                                         "fontFamily": "monospace"}),
+            html.Td(_b(b.pv), style={"textAlign": "right",
+                                      "fontFamily": "monospace",
+                                      "fontWeight": "600"}),
+        ]))
+    step2 = html.Div([
+        html.Div([
+            html.Span("Step 2 — ", className="text-muted small"),
+            html.Strong("Year-by-year projection"),
+        ]),
+        html.Small(f"Years 1-5 grow at {g15*100:+.1f}% (your Y1-5 slider); "
+                    f"years 6-10 grow at {g610*100:+.1f}% (Y6-10 slider). "
+                    f"Discount factor = 1 / (1 + WACC {wacc*100:.1f}%)^year.",
+                    className="text-muted d-block mb-1",
+                    style={"fontSize": "0.72rem"}),
+        html.Table([
+            html.Thead(html.Tr([
+                html.Th(c, style={"fontSize": "0.75rem",
+                                    "color": T.TEXT_MUTED,
+                                    "textAlign": "right",
+                                    "padding": "4px 8px"})
+                for c in ["Year", "Growth", "FCF",
+                          "Discount factor", "Present value"]
+            ])),
+            html.Tbody(proj_rows),
+        ], className="table table-sm",
+            style={"fontSize": "0.82rem", "marginBottom": "0"}),
+    ], className="mb-3")
+
+    # Step 3 — Terminal value
+    terminal_row = next((b for b in result.breakdown if b.is_terminal), None)
+    fcf_y10 = result.breakdown[9].fcf if len(result.breakdown) >= 10 else 0
+    fcf_y11 = fcf_y10 * (1 + tg)
+    df_10 = 1.0 / ((1 + wacc) ** 10)
+    step3 = html.Div([
+        html.Div([
+            html.Span("Step 3 — ", className="text-muted small"),
+            html.Strong("Terminal value (Gordon growth)"),
+        ]),
+        html.Div([
+            html.Code(f"FCF_year_11 = FCF_year_10 × (1 + terminal_growth) = "
+                      f"{_b(fcf_y10)} × {1+tg:.4f} = {_b(fcf_y11)}",
+                      style={"fontSize": "0.8rem"}),
+        ]),
+        html.Div([
+            html.Code(f"Terminal value = FCF_11 / (WACC − terminal) = "
+                      f"{_b(fcf_y11)} / ({wacc*100:.1f}% − {tg*100:.1f}%) = "
+                      f"{_b(result.terminal_value)}",
+                      style={"fontSize": "0.8rem"}),
+        ]),
+        html.Div([
+            html.Code(f"PV of terminal = Terminal × {df_10:.4f} (year-10 DF) = "
+                      f"{_b(result.discounted_terminal)}",
+                      style={"fontSize": "0.8rem"}),
+        ]),
+        html.Small("Terminal value captures all FCF beyond year 10 as a perpetuity "
+                    f"growing at {tg*100:.1f}% forever. This is usually 60-80% of EV — "
+                    "the model is most sensitive to terminal growth + WACC.",
+                    className="text-muted d-block mt-1",
+                    style={"fontSize": "0.72rem"}),
+    ], className="mb-3")
+
+    # Step 4 — Enterprise value
+    sum_pv_explicit = sum(b.pv for b in result.breakdown if not b.is_terminal)
+    step4 = html.Div([
+        html.Div([
+            html.Span("Step 4 — ", className="text-muted small"),
+            html.Strong("Enterprise value"),
+        ]),
+        html.Div([
+            html.Code(f"EV = Σ PV_y1..10 + PV_terminal = "
+                      f"{_b(sum_pv_explicit)} + {_b(result.discounted_terminal)} "
+                      f"= {_b(result.enterprise_value)}",
+                      style={"fontSize": "0.8rem"}),
+        ]),
+    ], className="mb-3")
+
+    # Step 5 — Per-share intrinsic
+    step5 = html.Div([
+        html.Div([
+            html.Span("Step 5 — ", className="text-muted small"),
+            html.Strong("Per-share intrinsic value"),
+        ]),
+        html.Div([
+            html.Code(f"Intrinsic / share = EV / Shares = "
+                      f"{_b(result.enterprise_value)} / {_b(shares)} = "
+                      f"${result.intrinsic_value_per_share:.2f}",
+                      style={"fontSize": "0.8rem"}),
+        ]),
+    ], className="mb-3")
+
+    # Step 6 — Margin of safety
+    if result.margin_of_safety is None:
+        mos_html = html.Code("MoS = N/A (no current price)",
+                              style={"fontSize": "0.8rem"})
+    else:
+        mos_pct = result.margin_of_safety * 100
+        mos_color = (T.SUCCESS if mos_pct > 0
+                      else (T.DANGER if mos_pct < -20 else T.WARNING))
+        mos_html = html.Div([
+            html.Code(f"MoS = (Intrinsic − Current) / Intrinsic = "
+                      f"(${result.intrinsic_value_per_share:.2f} − "
+                      f"${result.current_price:.2f}) / "
+                      f"${result.intrinsic_value_per_share:.2f}",
+                      style={"fontSize": "0.8rem"}),
+            html.Div([
+                html.Span("Result: ", className="text-muted me-2"),
+                html.Span(f"{mos_pct:+.1f}%",
+                           style={"color": mos_color, "fontWeight": "700",
+                                  "fontSize": "1.1rem"}),
+                html.Span(" undervalued" if mos_pct > 0
+                            else (" overvalued" if mos_pct < 0 else ""),
+                           className="text-muted ms-1"),
+            ], className="mt-1"),
+        ])
+    step6 = html.Div([
+        html.Div([
+            html.Span("Step 6 — ", className="text-muted small"),
+            html.Strong("Margin of safety"),
+        ]),
+        mos_html,
+    ])
+
+    return html.Div([step1, step2, step3, step4, step5, step6])
 
 
 def _build_business_summary(r) -> html.Div:
@@ -831,7 +1362,12 @@ def _load_dcf_inputs_only(db_path: str, ticker: str) -> Optional[DCFInputs]:
 
     Reads via the storage factory so cloud DB is used when USE_CLOUD_DB=true.
     Assumes the data is already cached (caller invoked _load_history /
-    _load_prices via cache-aside earlier in render_report)."""
+    _load_prices via cache-aside earlier in render_report).
+
+    Stashes the raw `eps_ttm` on the returned DCFInputs (via a side attribute
+    set after instantiation) so the Section 5 walkthrough can display
+    "EPS_TTM × Shares = Net income" without re-querying. Plain DCFInputs
+    callers ignore the attribute."""
     from analysis.dcf import default_inputs_from_snapshot
     from storage.database import Database
     from storage.factory import get_prices_repo, get_fundamentals_repo
@@ -889,7 +1425,15 @@ def _load_dcf_inputs_only(db_path: str, ticker: str) -> Optional[DCFInputs]:
                 "last_price": current_price if current_price is not None
                               else _coerce_float(r.get("last_price")),
             }
-            return default_inputs_from_snapshot(snap)
+            resolved = default_inputs_from_snapshot(snap)
+            if resolved is None:
+                return None
+            # Resolver now returns (DCFInputs, GrowthProvenance). The slider
+            # callback only needs DCFInputs but we stash eps_ttm on it so the
+            # Section 5 walkthrough can show "EPS_TTM × Shares = Net income".
+            inputs, _provenance = resolved
+            inputs.eps_ttm = eps
+            return inputs
     return None
 
 

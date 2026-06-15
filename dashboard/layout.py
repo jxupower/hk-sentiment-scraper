@@ -20,8 +20,6 @@ def build_layout(sectors: list[str]) -> html.Div:
         _header_bar(),
         dbc.Container([
             dbc.Tabs([
-                dbc.Tab(label="Sentiment", tab_id="tab-sentiment",
-                        children=_sentiment_tab(sectors)),
                 dbc.Tab(label="Screener", tab_id="tab-screener",
                         children=build_screener_tab()),
                 dbc.Tab(label="Discovery", tab_id="tab-recommendations",
@@ -36,7 +34,13 @@ def build_layout(sectors: list[str]) -> html.Div:
                         children=build_risk_tab()),
                 dbc.Tab(label="Portfolio", tab_id="tab-portfolio",
                         children=build_portfolio_tab()),
-            ], id="main-tabs", active_tab="tab-sentiment", className="mb-4"),
+                # Sentiment is now the rightmost tab — fundamentals-driven
+                # workflow (Screener / Discovery / Research) is the primary
+                # entry point; sentiment is a supplementary lens, not the
+                # default landing tab.
+                dbc.Tab(label="Sentiment", tab_id="tab-sentiment",
+                        children=_sentiment_tab(sectors)),
+            ], id="main-tabs", active_tab="tab-screener", className="mb-4"),
         ], fluid=True, className="py-3", style={"maxWidth": "1600px"}),
     ], style={"background": T.BG, "minHeight": "100vh"})
 

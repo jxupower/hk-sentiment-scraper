@@ -242,7 +242,11 @@ sectors:
   Mining:
     - ticker: "2899.HK"
       name: "Zijin Mining"
-      sub_sector: "Base Metals & Mining"
+      # yfinance tags Zijin's industry as "Gold" — gold is the largest
+      # profit driver (~40-50% of operating profit). Sister spinoff
+      # 2259.HK Zijin Gold International already sits in Precious Metals
+      # & Mining; aligning the parent here fixes that inconsistency.
+      sub_sector: "Precious Metals & Mining"
       aliases: ["Zijin Mining Group", "Zijin Gold", "Zijin copper"]
     - ticker: "1772.HK"
       name: "Ganfeng Lithium"

@@ -17,7 +17,17 @@ def create_app(db_path: str, settings) -> dash.Dash:
     import config.settings as cfg
 
     watchlist = cfg.load_watchlist()
-    sectors = list(watchlist.get("sectors", {}).keys())
+    # Sentiment tab buckets are sub-sectors now (post the 2026-06 watchlist-UI
+    # removal — sentiment groups by sub_sector instead of the editorial
+    # watchlist sector layer). We still draw from the watchlist roster
+    # because those tickers carry rich alias coverage; the 75 universe-wide
+    # sub-sectors would be too sparse for daily sentiment scoring.
+    from storage.database import Database
+    from storage.repository import SecuritiesRepository
+    _db = Database(db_path)
+    _db.initialize()
+    _securities_repo = SecuritiesRepository(_db)
+    sectors = cfg.get_subsectors_for_sentiment(watchlist, _securities_repo)
 
     app = dash.Dash(
         __name__,

@@ -98,6 +98,51 @@ def get_tickers_for_sector(sector: str, watchlist: dict) -> list[str]:
     return [e["ticker"] for e in watchlist["sectors"].get(sector, [])]
 
 
+def _get_sub_sector_map(watchlist: dict, securities_repo) -> dict[str, str]:
+    """Return {ticker -> sub_sector} for every watchlist ticker.
+
+    Resolution chain (matches universe/reconciler.py:_resolve_sub_sector):
+      1. Watchlist YAML's per-entry `sub_sector` field (highest priority)
+      2. The reconciler-populated `securities.sub_sector` column
+    Tickers with no sub_sector at all get "Unclassified" so we don't drop
+    them from the sentiment-tab grouping silently."""
+    by_ticker_security = {s["ticker"]: s
+                           for s in securities_repo.get_universe()}
+    result: dict[str, str] = {}
+    for entries in (watchlist.get("sectors") or {}).values():
+        for entry in entries or []:
+            t = entry.get("ticker")
+            if not t:
+                continue
+            sub = (entry.get("sub_sector")
+                    or by_ticker_security.get(t, {}).get("sub_sector")
+                    or "Unclassified")
+            result[t] = sub
+    return result
+
+
+def get_subsectors_for_sentiment(watchlist: dict, securities_repo) -> list[str]:
+    """Distinct sub-sectors across the watchlist roster. Drives the Sentiment
+    tab's sector cards (post the 2026-06 watchlist-UI removal — sentiment
+    now buckets by sub_sector rather than the editorial watchlist sector)."""
+    return sorted(set(_get_sub_sector_map(watchlist, securities_repo).values()))
+
+
+def get_tickers_for_subsector(sub_sector: str, watchlist: dict,
+                                securities_repo) -> list[str]:
+    """Watchlist tickers whose resolved sub_sector matches. Used by the
+    Sentiment tab's per-bucket score queries + by job_runner when computing
+    sub_sector-level sector_signals."""
+    smap = _get_sub_sector_map(watchlist, securities_repo)
+    return [t for t, s in smap.items() if s == sub_sector]
+
+
+def get_subsector_for_ticker(ticker: str, watchlist: dict,
+                               securities_repo) -> str | None:
+    """Single ticker → sub_sector lookup (same resolution chain as above)."""
+    return _get_sub_sector_map(watchlist, securities_repo).get(ticker)
+
+
 _SECTOR_BROAD_TERMS: dict[str, list[str]] = {
     "Platforms & Cloud Infrastructure": ["China tech", "Chinese tech", "China internet", "China platform",
                               "China e-commerce", "China digital", "China app", "China mobile internet",

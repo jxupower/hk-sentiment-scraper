@@ -127,7 +127,6 @@ def build_recommendations_tab() -> html.Div:
                         dcc.Checklist(
                             id="rec-show-filter",
                             options=[
-                                {"label": " Watchlist only", "value": "watchlist"},
                                 {"label": " Include flagged", "value": "include_flagged"},
                                 {"label": " Include disqualified (educational)",
                                  "value": "include_dq"},
@@ -170,6 +169,7 @@ def build_recommendations_tab() -> html.Div:
                         {"name": "Ticker",        "id": "ticker"},
                         {"name": "Name",          "id": "name"},
                         {"name": "Sector",        "id": "sector"},
+                        {"name": "Price",         "id": "current_price"},
                         {"name": "Composite %",   "id": "composite_pctile", "type": "numeric"},
                         {"name": "Value %",       "id": "value_pctile",     "type": "numeric"},
                         {"name": "Quality %",     "id": "quality_pctile",   "type": "numeric"},
@@ -195,6 +195,10 @@ def build_recommendations_tab() -> html.Div:
                         {"if": {"column_id": "sector"}, "textAlign": "left",
                          "fontFamily": "Inter, sans-serif", "color": T.TEXT_MUTED},
                         {"if": {"column_id": "status_badge"}, "textAlign": "center"},
+                        # Lazy "Get price" cell — visually clickable.
+                        {"if": {"column_id": "current_price"},
+                         "cursor": "pointer", "color": T.PRIMARY,
+                         "textDecoration": "underline"},
                     ],
                     style_header=T.DATATABLE_HEADER,
                     style_data_conditional=[

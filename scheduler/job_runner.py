@@ -189,15 +189,29 @@ class JobRunner:
 
         logger.info("Stored %d new articles.", new_count)
 
+        # Resolve sub_sector for every watchlist ticker once per cycle.
+        # The `sector` column on ticker_signals + sector_signals now carries
+        # the sub_sector label (post 2026-06 watchlist-UI removal — the
+        # editorial watchlist sector layer no longer drives the dashboard).
+        from collections import defaultdict
+        ticker_subsector = {
+            t: (self._config.get_subsector_for_ticker(
+                    t, self._watchlist, self._securities_repo) or "Unclassified")
+            for t in self._all_tickers
+        }
+        subsector_to_tickers: dict[str, list[str]] = defaultdict(list)
+        for t, sub in ticker_subsector.items():
+            subsector_to_tickers[sub].append(t)
+
         # Per-ticker signals (used for drill-down)
         for ticker in self._all_tickers:
             try:
                 scores_24h = self._sentiment_repo.get_scores_for_ticker(ticker, hours=24)
                 scores_7d = self._sentiment_repo.get_scores_for_ticker(ticker, hours=168)
                 price_df = self._yahoo.fetch_price_history(ticker, period="1mo")
-                sector = self._config.get_sector_for_ticker(ticker, self._watchlist)
+                sub = ticker_subsector.get(ticker)
                 sig = self._signal_gen.compute_ticker_signal(
-                    ticker=ticker, sector=sector,
+                    ticker=ticker, sector=sub,
                     scores_24h=scores_24h, scores_7d=scores_7d, price_df=price_df,
                 )
                 self._signal_repo.upsert_signal(
@@ -211,15 +225,14 @@ class JobRunner:
             except Exception as e:
                 logger.error("Ticker signal failed [%s]: %s", ticker, e)
 
-        # Sector-level signals (primary dashboard view)
-        for sector, entries in self._watchlist["sectors"].items():
+        # Sector-level signals — one row per sub_sector across the watchlist roster.
+        for sub_sector, tickers in subsector_to_tickers.items():
             try:
-                tickers = [e["ticker"] for e in entries]
                 scores_24h = self._sentiment_repo.get_scores_for_sector(tickers, hours=24)
                 scores_7d = self._sentiment_repo.get_scores_for_sector(tickers, hours=168)
                 price_dfs = {t: self._yahoo.fetch_price_history(t, period="1mo") for t in tickers}
                 sector_sig = self._sector_signal_gen.compute_sector_signal(
-                    sector=sector,
+                    sector=sub_sector,
                     scores_24h=scores_24h,
                     scores_7d=scores_7d,
                     price_dfs=price_dfs,
@@ -233,11 +246,11 @@ class JobRunner:
                     direction=sector_sig.direction,
                     confidence=sector_sig.confidence,
                 )
-                logger.info("Sector [%s]: %s (sentiment=%.3f, momentum=%.2f%%)",
-                            sector, sector_sig.direction,
+                logger.info("Sub-sector [%s]: %s (sentiment=%.3f, momentum=%.2f%%)",
+                            sub_sector, sector_sig.direction,
                             sector_sig.avg_sentiment_24h, sector_sig.avg_price_momentum)
             except Exception as e:
-                logger.error("Sector signal failed [%s]: %s", sector, e)
+                logger.error("Sub-sector signal failed [%s]: %s", sub_sector, e)
 
         logger.info("=== Scrape cycle complete ===")
 

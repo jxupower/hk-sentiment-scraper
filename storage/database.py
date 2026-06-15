@@ -203,6 +203,18 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_research_notes_status
                     ON research_notes(research_status);
+
+                -- yfinance Ticker.growth_estimates "+5y" stockTrend cache.
+                -- Populated lazily by analysis/data_loader.py:get_or_fetch_analyst_growth
+                -- and consumed by analysis/dcf.py's 3-tier Y1-5 growth resolver
+                -- when no historical CAGR is available. growth_5y may be NULL
+                -- when yfinance returns no estimates for the ticker (common for
+                -- HK names) — we cache the miss so we don't keep retrying.
+                CREATE TABLE IF NOT EXISTS analyst_growth_cache (
+                    ticker     TEXT PRIMARY KEY,
+                    growth_5y  REAL,            -- fraction, e.g. 0.12 = 12%
+                    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             # Migration: add Direction C columns to fundamentals_snapshots if missing
             # (CREATE TABLE IF NOT EXISTS won't add columns to a pre-existing table).

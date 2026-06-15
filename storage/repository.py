@@ -115,36 +115,54 @@ class SentimentRepository:
             return [dict(r) for r in rows]
 
     def get_scores_for_sector(self, tickers: list[str], hours: int = 24) -> list[dict]:
-        """Return all sentiment scores for any ticker in the sector."""
+        """Return one row per article that mentions any ticker in the sector.
+
+        Article-level dedup (per-article-mean fix, 2026-06): an article tagged
+        for N tickers used to produce N sentiment_scores rows, all with the
+        SAME final_score, which made multi-tag articles count N× in sector
+        averages and drown out single-tag articles. We now GROUP BY article_id
+        and return AVG(final_score) per article so each article contributes
+        exactly once to downstream aggregates, regardless of tag count.
+
+        For a single-ticker drill-down use get_scores_for_ticker() instead."""
         if not tickers:
             return []
         since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
         placeholders = ",".join("?" * len(tickers))
         with self.db.get_connection() as conn:
             rows = conn.execute(f"""
-                SELECT s.ticker, s.final_score, s.label, s.scored_at,
-                       s.vader_score, s.claude_score,
+                SELECT a.id AS article_id,
+                       AVG(s.final_score) AS final_score,
+                       MAX(s.scored_at) AS scored_at,
                        a.source, a.title, a.url, a.published_at
                 FROM sentiment_scores s
                 JOIN articles a ON s.article_id = a.id
                 WHERE s.ticker IN ({placeholders}) AND s.scored_at >= ?
-                ORDER BY s.scored_at DESC
+                GROUP BY a.id
+                ORDER BY scored_at DESC
             """, (*tickers, since)).fetchall()
-            return [dict(r) for r in rows]
+            # Add a placeholder `ticker` so callers that still read it don't
+            # crash; "—" signals "multi-ticker (collapsed)".
+            return [{**dict(r), "ticker": "—"} for r in rows]
 
     def get_sector_timeseries(self, tickers: list[str], hours: int = 168) -> pd.DataFrame:
-        """Aggregated sentiment timeseries across all tickers in a sector."""
+        """Aggregated sentiment timeseries across all tickers in a sector,
+        deduplicated at the article level so multi-tag articles don't
+        over-influence the trend line. See get_scores_for_sector()."""
         if not tickers:
             return pd.DataFrame(columns=["final_score", "scored_at", "source"])
         since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
         placeholders = ",".join("?" * len(tickers))
         with self.db.get_connection() as conn:
             rows = conn.execute(f"""
-                SELECT s.final_score, s.scored_at, a.source
+                SELECT AVG(s.final_score) AS final_score,
+                       MAX(s.scored_at) AS scored_at,
+                       a.source
                 FROM sentiment_scores s
                 JOIN articles a ON s.article_id = a.id
                 WHERE s.ticker IN ({placeholders}) AND s.scored_at >= ?
-                ORDER BY s.scored_at ASC
+                GROUP BY a.id
+                ORDER BY scored_at ASC
             """, (*tickers, since)).fetchall()
         if not rows:
             return pd.DataFrame(columns=["final_score", "scored_at", "source"])
@@ -479,6 +497,26 @@ class HistoricalPricesRepository:
                 "SELECT MIN(date) FROM historical_prices WHERE ticker = ?", (ticker,)
             ).fetchone()
             return row[0] if row else None
+
+    def latest_date_any(self) -> Optional[str]:
+        """Freshest price date across all tickers — used by the Screener
+        header pill to show 'data as-of'."""
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT MAX(date) FROM historical_prices"
+            ).fetchone()
+            return row[0] if row and row[0] else None
+
+    def latest_price(self, ticker: str) -> Optional[float]:
+        """Single-ticker latest adj_close — backs the Screener/Discovery
+        per-row lazy 'Get price' click handler. Indexed lookup, sub-ms."""
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT adj_close FROM historical_prices WHERE ticker = ? "
+                "AND adj_close IS NOT NULL ORDER BY date DESC LIMIT 1",
+                (ticker,),
+            ).fetchone()
+            return float(row[0]) if row else None
 
 
 class BacktestRepository:

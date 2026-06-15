@@ -2,8 +2,11 @@
 
 Plain Bagel's step 3 emphasizes comparing the target to peers in the same
 industry on the same metrics ("peer comparison scorecard" in the transcript).
-We use yfinance sector classification (already populated in `securities.yf_sector`)
-to define the peer group.
+We use the curated SUB-SECTOR taxonomy (populated in `securities.sub_sector`
+from config/sub_sectors.yaml) to define the peer group — strict, no fallback
+to parent yf_sector. Tickers without a sub_sector assignment get no
+scorecard (build_peer_scorecard returns None), since ranking against a
+parent-sector mixed bag (chips vs apps vs food delivery) is misleading.
 
 For each metric, we compute:
   - target ticker's value
@@ -11,8 +14,7 @@ For each metric, we compute:
   - peer 25th and 75th percentile
   - target's percentile rank (0-100) within the peer group
 
-Plus a ranked list of top N peers in the same sector by composite score
-(reusing FactorScoringEngine).
+Plus a ranked list of top N peers in the same sub-sector by market cap.
 """
 import math
 import sqlite3
@@ -82,19 +84,15 @@ def build_peer_scorecard(ticker: str, db_path: str,
     target_row = next((r for r in universe if r["ticker"] == ticker), None)
     if not target_row:
         return None
-    # Prefer sub_sector for the peer group — same fallback chain as factor
-    # scoring so the scorecard's bucket matches what Discovery shows. Falling
-    # back to effective_sector lets the comparison still work for tickers
-    # without a sub_sector assignment.
-    peer_field = ("sub_sector" if target_row.get("sub_sector")
-                   else ("effective_sector" if target_row.get("effective_sector")
-                          else "yf_sector"))
-    sector = (target_row.get("sub_sector") or target_row.get("effective_sector")
-                or target_row.get("yf_sector") or target_row.get("watchlist_sector"))
+    # Strict sub-sector peer group — matches the strict bucketing used by
+    # FactorScoringEngine. Tickers without a sub_sector assignment return
+    # no scorecard rather than fall back to parent yf_sector (which would
+    # rank chips vs apps vs food delivery — meaningless).
+    sector = target_row.get("sub_sector")
     if not sector:
         return None
     peer_rows = [r for r in universe
-                  if r.get(peer_field) == sector and r["ticker"] != ticker]
+                  if r.get("sub_sector") == sector and r["ticker"] != ticker]
 
     scorecard = PeerScorecard(
         target_ticker=ticker,

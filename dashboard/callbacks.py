@@ -15,7 +15,8 @@ DIRECTION_BADGE_COLOR = {"UP": "success", "DOWN": "danger", "MIXED": "warning", 
 def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scraper):
     from storage.database import Database
     from storage.repository import (ArticleRepository, SentimentRepository,
-                                     SignalRepository, SectorSignalRepository)
+                                     SignalRepository, SectorSignalRepository,
+                                     SecuritiesRepository)
 
     db = Database(db_path)
     db.initialize()
@@ -23,6 +24,7 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
     sentiment_repo = SentimentRepository(db)
     signal_repo = SignalRepository(db)
     sector_signal_repo = SectorSignalRepository(db)
+    securities_repo = SecuritiesRepository(db)
 
     @app.callback(Output("last-updated", "children"),
                   Input("auto-refresh", "n_intervals"),
@@ -101,7 +103,12 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
                 "--", "secondary", "", "",
             )
 
-        tickers = settings.get_tickers_for_sector(sector, watchlist)
+        # `sector` is now a sub_sector (post 2026-06 sentiment retag).
+        # get_tickers_for_subsector resolves through watchlist YAML's
+        # per-entry sub_sector + securities.sub_sector.
+        tickers = settings.get_tickers_for_subsector(
+            sector, watchlist, securities_repo,
+        )
         scores_24h = sentiment_repo.get_scores_for_sector(tickers, hours=24)
         sentiment_ts = sentiment_repo.get_sector_timeseries(tickers, hours=168)
 

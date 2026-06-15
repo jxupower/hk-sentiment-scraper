@@ -342,6 +342,12 @@ def build_stock_research_tab() -> html.Div:
                                 dcc.Slider(id="sr-dcf-g15", min=-10, max=30, step=1, value=10,
                                            marks={-10: "-10", 0: "0", 15: "15", 30: "30"},
                                            tooltip={"placement": "bottom"}),
+                                html.Small(id="sr-dcf-g15-provenance",
+                                            className="text-muted",
+                                            style={"fontSize": "0.72rem",
+                                                   "lineHeight": "1.2",
+                                                   "display": "block",
+                                                   "marginTop": "4px"}),
                             ], width=3),
                             dbc.Col([
                                 html.Label("Growth Y6-10 (%)",
@@ -365,6 +371,24 @@ def build_stock_research_tab() -> html.Div:
                                            tooltip={"placement": "bottom"}),
                             ], width=3),
                         ], className="mb-3"),
+                        # Step-by-step DCF walkthrough — populated by
+                        # recompute_dcf in lockstep with slider changes. Shows
+                        # base FCF derivation, year-by-year projection, terminal
+                        # value, sum-to-EV, per-share intrinsic, and MoS — so
+                        # the result block below isn't a black box.
+                        dbc.Card([
+                            dbc.CardHeader(
+                                "DCF walkthrough — every step from your "
+                                "growth rates to the margin of safety",
+                                className="fw-bold small"),
+                            dbc.CardBody(
+                                dcc.Loading(
+                                    html.Div(id="sr-dcf-walkthrough"),
+                                    type="dot", color=T.PRIMARY,
+                                ),
+                                style={"padding": "12px 16px"},
+                            ),
+                        ], style=CARD_STYLE, className="mb-3"),
                         html.Div(id="sr-dcf-result", style={"color": T.TEXT}),
                         dcc.Graph(id="sr-dcf-sensitivity",
                                   config={"displayModeBar": False}, figure={}),
@@ -411,6 +435,18 @@ def build_stock_research_tab() -> html.Div:
                 ], className="text-end mb-3"),
             ]),
         ]),
+
+        # Slide-in drawer that opens when the user clicks a V/Q/G bar in the
+        # Section 1 factor-percentile chart. Body is populated by a callback
+        # in stock_research_callbacks.py that calls
+        # FactorScoringEngine.breakdown_for(ticker, factor) on click.
+        dbc.Offcanvas(
+            id="sr-factor-breakdown-drawer",
+            placement="end", is_open=False, scrollable=True,
+            title="Factor percentile — how it was computed",
+            children=html.Div(id="sr-factor-breakdown-body"),
+            style={"width": "520px"},
+        ),
     ])
 
 

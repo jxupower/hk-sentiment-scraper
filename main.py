@@ -520,5 +520,28 @@ def _print_sector_signals(sector_signal_repo):
     console.print(table)
 
 
+@cli.group()
+def audit():
+    """Taxonomy / engine audits — generate markdown reports for human review."""
+
+
+@audit.command("subsectors")
+@click.option("--tail-pct", default=0.05, show_default=True, type=float,
+              help="Tail size for V/Q/G outlier detection (top or bottom).")
+def audit_subsectors(tail_pct):
+    """Identify V/Q/G outliers per sub-sector and suggest reclassification."""
+    from datetime import date as _date
+    from analysis.audit_subsector_outliers import run_audit
+    import config.settings as settings
+    today = _date.today().isoformat()
+    out = run_audit(
+        db_path=settings.DB_PATH,
+        sub_sectors_yaml="config/sub_sectors.yaml",
+        output_md_path=f"data/audit_subsector_outliers_{today}.md",
+        tail_pct=tail_pct,
+    )
+    console.print(f"[bold green]Audit written to[/bold green] {out}")
+
+
 if __name__ == "__main__":
     cli()
