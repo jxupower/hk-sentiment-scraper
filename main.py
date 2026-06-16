@@ -354,7 +354,7 @@ def backtest():
 
 @backtest.command("run")
 @click.option("--screen", "screen_id", required=True,
-              help="Screen ID: value | quality_compounder | income | avoid_distress")
+              help="Screen ID: value | quality_compounder | income")
 @click.option("--start", default="2018-01-01", show_default=True,
               help="Start date (YYYY-MM-DD).")
 @click.option("--end", default=None,
@@ -414,7 +414,7 @@ def backtest_run(screen_id, start, end, freq, industry, persist):
 
 @backtest.command("optimize")
 @click.option("--screen", "screen_id", required=True,
-              help="Screen ID (skips avoid_distress; it's educational, not for optimization).")
+              help="Screen ID: value | quality_compounder | income")
 @click.option("--industry", default=None,
               help="Optional: one yf_sector. Otherwise iterates all sectors with data.")
 @click.option("--start", default="2018-01-01", show_default=True)

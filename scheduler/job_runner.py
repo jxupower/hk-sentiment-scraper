@@ -359,8 +359,6 @@ class JobRunner:
 
             end = date_cls.today().strftime("%Y-%m-%d")
             for screen in BUILTIN_SCREENS:
-                if screen.id == "avoid_distress":
-                    continue
                 logger.info("Re-optimizing screen=%s across %d industries", screen.id, len(industries))
                 optimizer.optimize_all_industries(
                     screen, industries, start_date="2018-01-01", end_date=end,

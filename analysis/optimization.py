@@ -54,10 +54,6 @@ PARAM_GRIDS = {
         "market_cap_min":      [2_000_000_000, 5_000_000_000, 20_000_000_000],
         "earnings_growth_min": [-0.10, -0.05, 0.0],
     },
-    "avoid_distress": {
-        # Distress screen is educational; optimizing it on historical IR doesn't
-        # make conceptual sense (we WANT it to underperform). Skip optimization.
-    },
 }
 
 

@@ -222,6 +222,46 @@ class CloudHistoricalPricesRepository:
             row = cur.fetchone()
             return float(row[0]) if row else None
 
+    def bulk_prices_on_or_before(self, tickers: list[str],
+                                    target_date: str) -> dict:
+        """{ticker: latest adj_close at or before `target_date`} in one
+        round-trip. Used by the backtest engine's as-of enrichment to
+        avoid 2,800+ sequential price lookups per snapshot."""
+        if not tickers:
+            return {}
+        with cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ON (ticker) ticker, adj_close
+                FROM historical_prices
+                WHERE ticker = ANY(%s) AND date <= %s AND adj_close IS NOT NULL
+                ORDER BY ticker, date DESC
+            """, (list(tickers), target_date))
+            return {row[0]: float(row[1]) for row in cur.fetchall()}
+
+    def get_full_ohlc_series(self, ticker: str) -> list[dict]:
+        """All historical OHLC rows for a ticker. Used by the Stock Research
+        candlestick view; the line chart only needs adj_close so it uses
+        get_full_series instead."""
+        with cursor(dict_rows=True) as cur:
+            cur.execute("""
+                SELECT date, open, high, low, close, adj_close, volume
+                FROM historical_prices
+                WHERE ticker = %s
+                ORDER BY date ASC
+            """, (ticker,))
+            out = []
+            for r in cur.fetchall():
+                out.append({
+                    "date": str(r["date"]),
+                    "open": float(r["open"]) if r["open"] is not None else None,
+                    "high": float(r["high"]) if r["high"] is not None else None,
+                    "low": float(r["low"]) if r["low"] is not None else None,
+                    "close": float(r["close"]) if r["close"] is not None else None,
+                    "adj_close": float(r["adj_close"]) if r["adj_close"] is not None else None,
+                    "volume": int(r["volume"]) if r["volume"] is not None else None,
+                })
+            return out
+
     def distinct_tickers(self) -> list[str]:
         """All tickers with at least one price row — used by seed scripts to
         skip already-loaded tickers."""
@@ -382,6 +422,16 @@ class CloudPortfoliosRepository:
         with cursor() as cur:
             cur.execute("DELETE FROM portfolios WHERE name = %s", (name,))
             return cur.rowcount > 0
+
+    def list_names_starting_with(self, prefix: str) -> list[str]:
+        """All portfolio names beginning with `prefix`. Used by the backtest
+        save flow to pick the next free '<Strategy> backtest #N' number."""
+        with cursor() as cur:
+            cur.execute(
+                "SELECT name FROM portfolios WHERE name LIKE %s",
+                (prefix + "%",),
+            )
+            return [row[0] for row in cur.fetchall()]
 
 
 def _serialise_portfolio_row(row: dict) -> dict:

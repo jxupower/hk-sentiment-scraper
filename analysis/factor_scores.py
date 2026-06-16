@@ -211,11 +211,19 @@ class FactorScoringEngine:
     def compute(self, weights: Optional[dict] = None,
                 sentiment_window_days: int = DEFAULT_SENTIMENT_WINDOW_DAYS,
                 min_articles: int = DEFAULT_MIN_ARTICLES,
+                as_of_date: Optional[str] = None,
+                pre_loaded_rows: Optional[list[dict]] = None,
                 ) -> tuple[list[FactorResult], EngineDiagnostics]:
         weights = self._normalize_weights(weights or DEFAULT_WEIGHTS)
         self._reload_flags()
 
-        fund_rows = self._load_fundamentals()
+        # The Backtest engine enriches as-of rows with price-derived P/E,
+        # P/B, market_cap before passing them in — the akshare-annual
+        # snapshots store only per-share fields, so loading them straight
+        # via _load_fundamentals would disqualify almost everything on
+        # "no core fundamentals".
+        fund_rows = (pre_loaded_rows if pre_loaded_rows is not None
+                      else self._load_fundamentals(as_of_date=as_of_date))
         sent_by_ticker = self._load_sentiment(sentiment_window_days)
 
         # Pass 1: disqualify + categorize
@@ -343,13 +351,16 @@ class FactorScoringEngine:
 
     # ---------- private: loading ----------
 
-    def _load_fundamentals(self) -> list[dict]:
+    def _load_fundamentals(self, *, as_of_date: Optional[str] = None) -> list[dict]:
         # Routes via analysis/data_loader → storage/factory → cloud or sqlite
         # depending on USE_CLOUD_DB. Securities join happens client-side when on
-        # cloud (securities stays local).
+        # cloud (securities stays local). When `as_of_date` is provided the
+        # loader returns the latest snapshot per ticker that's <= that date,
+        # so the factor engine can score the universe as it looked back then.
         from analysis.data_loader import get_universe_fundamentals
         from storage.database import Database
-        return get_universe_fundamentals(Database(self.db_path))
+        return get_universe_fundamentals(Database(self.db_path),
+                                          as_of_date=as_of_date)
 
     def _load_sentiment(self, window_days: int) -> dict[str, dict]:
         with sqlite3.connect(self.db_path) as conn:

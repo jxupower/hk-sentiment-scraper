@@ -91,8 +91,14 @@ def build_stock_research_tab() -> html.Div:
                             html.H4(id="sr-header-name", className="mb-0",
                                     style={"fontWeight": "700", "color": T.TEXT,
                                            "fontSize": "1.6rem", "letterSpacing": "-0.02em"}),
-                            html.Span(id="sr-header-sector",
-                                      style={"color": T.TEXT_MUTED, "fontSize": "0.9rem"}),
+                            html.Div(html.Span(id="sr-header-sector",
+                                      style={"color": T.TEXT_MUTED, "fontSize": "0.9rem"})),
+                            # Sub-sector sits on its own line below the sector
+                            # so peer-grouping context is visible at a glance.
+                            html.Div(html.Span(id="sr-header-subsector",
+                                      style={"color": T.TEXT_FAINT,
+                                             "fontSize": "0.8rem",
+                                             "fontStyle": "italic"})),
                         ], width=5),
                         dbc.Col([
                             html.Div("Current price", className="stat-label"),
@@ -287,9 +293,35 @@ def build_stock_research_tab() -> html.Div:
                 # Price chart — primary canvas (daily resolution, scales to any period)
                 dbc.Card([
                     dbc.CardHeader([
-                        html.Span("Price history", className="fw-bold small me-2"),
-                        html.Span(id="sr-price-summary",
-                                   style={"color": T.TEXT_MUTED, "fontSize": "0.8rem"}),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Span("Price history",
+                                           className="fw-bold small me-2"),
+                                html.Span(id="sr-price-summary",
+                                           style={"color": T.TEXT_MUTED,
+                                                  "fontSize": "0.8rem"}),
+                            ], width="auto",
+                                className="d-flex align-items-center"),
+                            dbc.Col(
+                                # Chart style toggle — line is the default
+                                # (lightest payload + scales to any window);
+                                # candle reveals intraday open/high/low/close
+                                # using the same OHLC payload already loaded.
+                                dbc.RadioItems(
+                                    id="sr-price-chart-style",
+                                    options=[
+                                        {"label": "Line",   "value": "line"},
+                                        {"label": "Candle", "value": "candle"},
+                                    ],
+                                    value="line", inline=True,
+                                    className="btn-group",
+                                    inputClassName="btn-check",
+                                    labelClassName="btn btn-outline-primary btn-sm",
+                                    labelCheckedClassName="active",
+                                ),
+                                className="text-end",
+                            ),
+                        ], align="center", className="g-2"),
                     ]),
                     dbc.CardBody(dcc.Graph(id="sr-price-chart",
                                            config={"displayModeBar": False}, figure={})),

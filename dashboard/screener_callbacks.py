@@ -11,6 +11,7 @@ from dash.exceptions import PreventUpdate
 
 from dashboard import theme as T
 from dashboard.screener_layout import NUMERIC_FILTERS
+from dashboard.screener_presets import INVESTOR_PRESETS
 
 
 # Module-level lock prevents the manual "Refresh prices now" button from
@@ -19,29 +20,10 @@ from dashboard.screener_layout import NUMERIC_FILTERS
 _manual_price_refresh_lock = threading.Lock()
 
 
-# Transform helpers for the NUMERIC_FILTERS table. Each row's raw fundamentals
-# value gets adapted to the unit shown in the slider (e.g. ROE 0.18 -> 18.0%).
-def _xform_value(xform_key, raw):
-    if raw is None:
-        return None
-    if xform_key == "roe_pct":
-        return raw * 100
-    if xform_key == "mcap_b":
-        return raw / 1e9 if raw else None
-    return raw
-
-
-def _in_range(v, lo, hi):
-    """A row passes if value is missing (treat as 'unknown' — don't exclude)
-    OR falls inside [lo, hi]. Matches the existing completeness filter's
-    permissive semantics."""
-    if v is None:
-        return True
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return True
-    return lo <= f <= hi
+# Range-filter primitives — moved to analysis/preset_filter.py so the
+# Backtest engine can apply preset constraints with identical semantics.
+# Re-exported here so the existing call sites below don't need rewriting.
+from analysis.preset_filter import _in_range, _xform_value  # noqa: F401
 
 
 def _extract_clicked_bucket(click_bar, click_ann):
@@ -170,6 +152,18 @@ def register_screener_callbacks(app, db_path: str):
         slider_defaults = [[lo, hi] for _l, _s, lo, hi, _st, _k, _x in NUMERIC_FILTERS]
         # Order matches clear_outputs above.
         return ([], [], 0.5, "", "", *slider_defaults)
+
+    # Investor preset buttons — one callback per preset. Each click rewrites
+    # every numeric range slider: slugs the preset constrains get the preset
+    # values, the rest get reset to full-range defaults. Sector/sub-sector
+    # dropdowns and text searches are deliberately left untouched so any
+    # user-applied narrowing persists when a preset is loaded.
+    preset_slider_outputs = [
+        Output(f"screener-{slug}-slider", "value", allow_duplicate=True)
+        for _l, slug, _lo, _hi, _st, _k, _x in NUMERIC_FILTERS
+    ]
+    for _preset in INVESTOR_PRESETS:
+        _register_preset_callback(app, _preset, preset_slider_outputs)
 
     # "Refresh prices now" button — kicks off the same yfinance pull as the
     # daily cron (period='5d' over the full active universe) in a background
@@ -387,6 +381,28 @@ def register_screener_callbacks(app, db_path: str):
         )
 
 
+def _register_preset_callback(app, preset: dict, preset_slider_outputs: list):
+    """Wire one investor-preset button to the numeric range sliders. The
+    callback writes a [lo, hi] for every NUMERIC_FILTERS slug — preset
+    overrides if specified, else the slug's full-range default — so the
+    preset reads as a complete screen state rather than additive narrowing
+    on top of whatever was already set."""
+    overrides = preset["sliders"]
+
+    @app.callback(
+        *preset_slider_outputs,
+        Input(f"screener-preset-{preset['id']}-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def apply_preset(_n):
+        if not _n:
+            raise PreventUpdate
+        out = []
+        for _label, slug, lo, hi, _step, _key, _xform in NUMERIC_FILTERS:
+            out.append(overrides.get(slug) or [lo, hi])
+        return tuple(out)
+
+
 def _register_range_sync(app, slug: str, lo: float, hi: float):
     """Two-way slider ↔ number-input sync for one numeric filter. Slider is
     canonical (it's the Input on update_screener); inputs are display +
@@ -435,6 +451,7 @@ def _query_latest(db_path: str) -> list[dict]:
             SELECT f.ticker, f.snapshot_date, f.trailing_pe, f.forward_pe,
                    f.price_to_book, f.ev_to_ebitda, f.dividend_yield,
                    f.market_cap, f.beta, f.return_on_equity, f.debt_to_equity,
+                   f.earnings_growth,
                    f.last_price, f.currency, f.data_completeness,
                    s.name, s.is_watchlist, s.watchlist_sector,
                    s.yf_sector, s.yf_industry, s.sub_sector, s.effective_sector

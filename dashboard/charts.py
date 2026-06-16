@@ -1,7 +1,46 @@
+from datetime import date, timedelta
+
 import pandas as pd
 import plotly.graph_objects as go
 
 from dashboard import theme as T
+
+
+def _trading_day_rangebreaks(dates: list) -> list:
+    """Plotly rangebreaks that hide non-trading days from the x-axis so the
+    candle/line is drawn contiguously. Always skips Sat/Sun; also lists any
+    weekday gaps inferred from the supplied date series (HK public holidays
+    like CNY, Easter, etc.). `dates` can be ISO strings or date objects."""
+    breaks = [dict(bounds=["sat", "mon"])]
+    if not dates:
+        return breaks
+    parsed = []
+    for d in dates:
+        if d is None:
+            continue
+        if hasattr(d, "isoformat"):
+            parsed.append(d if isinstance(d, date) else d.date())
+        else:
+            try:
+                parsed.append(date.fromisoformat(str(d)[:10]))
+            except (ValueError, TypeError):
+                continue
+    parsed = sorted(set(parsed))
+    if len(parsed) < 2:
+        return breaks
+    missing = []
+    prev = parsed[0]
+    for cur_date in parsed[1:]:
+        probe = prev + timedelta(days=1)
+        while probe < cur_date:
+            # Mon–Fri only; weekends are already covered by the bounds break.
+            if probe.weekday() < 5:
+                missing.append(probe.isoformat())
+            probe += timedelta(days=1)
+        prev = cur_date
+    if missing:
+        breaks.append(dict(values=missing))
+    return breaks
 
 # Re-export for backward-compat: existing imports `from dashboard.charts import DIRECTION_COLORS`
 DIRECTION_COLORS = T.DIRECTION_COLORS
@@ -334,7 +373,96 @@ def price_chart(prices: list, label: str = "Price") -> go.Figure:
                    annotation_position="bottom right")
     fig.update_layout(T.chart_layout(f"{label} — {pct:+.1f}% over period"),
                       yaxis_title="Price",
+                      xaxis=dict(rangebreaks=_trading_day_rangebreaks(list(dates))),
                       height=280, margin=dict(t=40, b=40, l=60, r=20))
+    return fig
+
+
+def price_candlestick_chart(prices: list, label: str = "Price") -> go.Figure:
+    """Daily OHLC candlestick over the supplied window. Falls back to a
+    'OHLC data not available' message when open/high/low aren't populated
+    (e.g. some indices and synthetic portfolio tickers store only close).
+    Period-return annotation matches the line chart so the headline number
+    is comparable across views."""
+    rows = [p for p in prices
+            if p.get("open") is not None and p.get("high") is not None
+            and p.get("low") is not None and p.get("close") is not None]
+    if not rows:
+        return _empty_fig(label,
+                          "OHLC data not available for this ticker — "
+                          "switch back to the Line view.")
+    dates = [p["date"] for p in rows]
+    opens = [p["open"] for p in rows]
+    highs = [p["high"] for p in rows]
+    lows = [p["low"] for p in rows]
+    closes = [p["close"] for p in rows]
+    first, last = closes[0], closes[-1]
+    pct = (last / first - 1) * 100 if first else 0
+
+    fig = go.Figure(go.Candlestick(
+        x=dates, open=opens, high=highs, low=lows, close=closes,
+        increasing=dict(line=dict(color=T.SUCCESS), fillcolor=T.SUCCESS),
+        decreasing=dict(line=dict(color=T.DANGER), fillcolor=T.DANGER),
+        whiskerwidth=0.4,
+        hoverlabel=dict(font=dict(family="JetBrains Mono, monospace")),
+    ))
+    fig.add_hline(y=first, line_dash="dot", line_color=T.TEXT_FAINT,
+                   annotation_text=f"start ${first:.2f}",
+                   annotation_font_color=T.TEXT_MUTED,
+                   annotation_position="bottom right")
+    fig.update_layout(T.chart_layout(f"{label} — {pct:+.1f}% over period"),
+                      yaxis_title="Price",
+                      # Hide the default Plotly range slider — it eats vertical
+                      # space and our period RadioItems already does that job.
+                      # rangebreaks hide weekends + HK holiday gaps so the
+                      # candles butt up against one another with no blanks.
+                      xaxis=dict(rangeslider=dict(visible=False),
+                                 rangebreaks=_trading_day_rangebreaks(dates)),
+                      height=280, margin=dict(t=40, b=40, l=60, r=20))
+    return fig
+
+
+def equity_curve_chart(curve: list, benchmark: list,
+                         strategy_label: str = "Strategy",
+                         benchmark_label: str = "^HSI") -> go.Figure:
+    """Two-line equity curve: strategy (cap-weighted top-10 V/Q/G) vs the
+    benchmark, both normalised to 100 at t0. `curve` and `benchmark` are
+    lists of (date_iso, value). Hides weekend + HK-holiday gaps via the
+    shared `_trading_day_rangebreaks` helper so the lines read as
+    contiguous trading-day series."""
+    if not curve:
+        return _empty_fig("Equity curve",
+                          "No backtest data yet — run a preset to populate.")
+
+    strat_dates, strat_vals = zip(*curve)
+    pct = strat_vals[-1] - 100.0   # since base is 100
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=list(strat_dates), y=list(strat_vals), mode="lines",
+        name=strategy_label,
+        line=dict(color=T.PRIMARY, width=2.5),
+        hovertemplate="%{x}<br>%{y:.1f}<extra>" + strategy_label + "</extra>",
+    ))
+    if benchmark:
+        b_dates, b_vals = zip(*benchmark)
+        fig.add_trace(go.Scatter(
+            x=list(b_dates), y=list(b_vals), mode="lines",
+            name=benchmark_label,
+            line=dict(color=T.TEXT_MUTED, width=1.8, dash="dot"),
+            hovertemplate="%{x}<br>%{y:.1f}<extra>" + benchmark_label + "</extra>",
+        ))
+    fig.add_hline(y=100, line_dash="dot", line_color=T.TEXT_FAINT,
+                   annotation_text="start", annotation_font_color=T.TEXT_MUTED,
+                   annotation_position="bottom right")
+    fig.update_layout(
+        T.chart_layout(f"{strategy_label} — {pct:+.1f} pts over period"),
+        yaxis_title="Index (start = 100)",
+        xaxis=dict(rangebreaks=_trading_day_rangebreaks(list(strat_dates))),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                     xanchor="right", x=1),
+        height=340, margin=dict(t=50, b=40, l=60, r=20),
+    )
     return fig
 
 

@@ -1,173 +1,163 @@
-import json
-import math
+"""Backtest tab callbacks — preset + V/Q/G top-10 walk-forward.
+
+Two callbacks register here:
+  1. `run_backtest` — fires on the Run button. Calls
+     `analysis.factor_backtest.run_preset_backtest()` and populates stats,
+     equity-curve chart, holdings table, and the survivors `dcc.Store`
+     that backs the Save button.
+  2. `save_backtest_portfolio` — fires on Save. Picks the next free
+     "<Strategy> backtest #N" name, writes a 100-share-each portfolio to
+     Supabase via `CloudPortfoliosRepository`, then writes a cross-tab-nav
+     payload that the Portfolio tab listens for to auto-load the new entry.
+
+The previous per-screen sub-tab UI was removed in this overhaul. The CLI
+commands `python main.py backtest run|optimize` still work against the
+legacy engine.
+"""
+import logging
 import os
-from datetime import date as date_cls
+import time
 
-from dash import Input, Output, State, html, no_update
-import dash_bootstrap_components as dbc
+from dash import Input, Output, State, no_update
+from dash.exceptions import PreventUpdate
 
-from analysis.backtest import BacktestEngine
-from analysis.screens import BUILTIN_SCREENS, ScreenParams
-from dashboard.backtest_layout import OPTIMIZABLE_SCREENS
+from analysis.factor_backtest import (
+    next_backtest_portfolio_name,
+    run_preset_backtest,
+)
+from dashboard.charts import equity_curve_chart
+from dashboard.screener_presets import INVESTOR_PRESETS
+
+logger = logging.getLogger(__name__)
+
+YEARS_TO_DAYS = 365
 
 
 def register_backtest_callbacks(app, db_path: str):
     sector_risk_path = os.path.join(os.path.dirname(__file__), "..", "config",
                                      "sector_risk.yaml")
 
-    # One pair of callbacks per screen tab — display optimized params table + live-backtest button
-    for screen in OPTIMIZABLE_SCREENS:
-        _register_table_callback(app, db_path, screen)
-        _register_run_callback(app, db_path, sector_risk_path, screen)
-
-
-def _register_table_callback(app, db_path: str, screen):
-    """Load optimized_parameters rows for this screen and render."""
+    # --- Run backtest -------------------------------------------------
     @app.callback(
-        Output(f"bt-{screen.id}-table", "data"),
-        Output(f"bt-{screen.id}-last-opt", "children"),
-        Output(f"bt-{screen.id}-n-industries", "children"),
-        Output(f"bt-{screen.id}-avg-ir", "children"),
-        Output(f"bt-{screen.id}-status", "children"),
-        Input("bt-auto-refresh", "n_intervals"),
-    )
-    def load_optimized(_n, _screen=screen):
-        import sqlite3
-        rows = []
-        with sqlite3.connect(db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            db_rows = conn.execute("""
-                SELECT * FROM optimized_parameters WHERE screen_id = ? ORDER BY industry
-            """, (_screen.id,)).fetchall()
-            for r in db_rows:
-                rows.append(_format_optimized_row(dict(r), _screen.id))
-
-        last_opt = "(never run)"
-        if rows:
-            dates = [r["last_optimized_at"] for r in rows if r.get("last_optimized_at")]
-            if dates:
-                last_opt = max(dates)[:16]
-
-        n_ind = len(rows)
-        irs = [r["information_ratio"] for r in rows
-               if r.get("information_ratio") is not None]
-        avg_ir = f"{sum(irs)/len(irs):+.3f}" if irs else "N/A"
-        status = ("" if rows else
-                  "No optimized parameters yet. Run: "
-                  f"python main.py backtest optimize --screen {_screen.id}")
-        return rows, last_opt, str(n_ind), avg_ir, status
-
-
-def _register_run_callback(app, db_path: str, sector_risk_path: str, screen):
-    """Click 'Run' to do a live backtest with default params, full universe, default window."""
-    @app.callback(
-        Output(f"bt-{screen.id}-run-result", "children"),
-        Input(f"bt-{screen.id}-run-btn", "n_clicks"),
+        Output("bt-stat-total", "children"),
+        Output("bt-stat-annret", "children"),
+        Output("bt-stat-vol", "children"),
+        Output("bt-stat-sharpe", "children"),
+        Output("bt-stat-maxdd", "children"),
+        Output("bt-stat-hit", "children"),
+        Output("bt-equity-chart", "figure"),
+        Output("bt-holdings-table", "data"),
+        Output("bt-final-rebal-date", "children"),
+        Output("bt-survivors-store", "data"),
+        Output("bt-preset-label-store", "data"),
+        Output("bt-save-preview", "children"),
+        Output("bt-save-btn", "disabled"),
+        Output("bt-run-status", "children"),
+        Input("bt-run-btn", "n_clicks"),
+        State("bt-preset-select", "value"),
+        State("bt-horizon-select", "value"),
+        State("bt-rebal-select", "value"),
         prevent_initial_call=True,
     )
-    def run_live_backtest(n_clicks, _screen=screen):
-        if not n_clicks:
-            return no_update
-        engine = BacktestEngine(db_path, sector_risk_path=sector_risk_path)
-        end = date_cls.today().strftime("%Y-%m-%d")
+    def run_backtest(_n, preset_id, horizon_years, rebal_freq):
+        if not preset_id or not horizon_years or not rebal_freq:
+            raise PreventUpdate
+        # Anchor start to today − N years; the engine snaps to the nearest
+        # ^HSI trading day on-or-after via the trading-day calendar.
+        from datetime import date, timedelta
+        end_iso = date.today().isoformat()
+        start_iso = (date.today() -
+                     timedelta(days=int(horizon_years) * YEARS_TO_DAYS)).isoformat()
+
+        t0 = time.time()
         try:
-            result = engine.run(
-                _screen, _screen.default_params,
-                start_date="2020-01-01", end_date=end, rebalance_freq="quarterly",
-                persist_repo=None,
+            result = run_preset_backtest(
+                preset_id, start_iso, end_iso, rebal_freq,
+                db_path, sector_risk_path,
             )
         except Exception as e:
-            return html.Pre(f"ERROR: {e}", className="text-danger small")
+            logger.exception("Backtest failed")
+            return ("—", "—", "—", "—", "—", "—",
+                     {}, [], "", [], "",
+                     "", True, f"Failed: {e}")
+        elapsed = time.time() - t0
 
-        def pct(v): return f"{v*100:+.2f}%" if v is not None else "N/A"
-        def num(v, d=3): return f"{v:.{d}f}" if v is not None else "N/A"
+        m = result.metrics
+        total_pct  = f"{m.total_return * 100:+.1f}%"
+        annret_pct = f"{m.annualized_return * 100:+.1f}%"
+        vol_pct    = f"{m.annualized_vol * 100:.1f}%"
+        sharpe_str = f"{m.sharpe:+.2f}"
+        maxdd_pct  = f"{m.max_drawdown * 100:.1f}%"
+        hit_pct    = f"{m.hit_rate * 100:.0f}%"
 
-        return html.Div([
-            html.P([html.Strong("Result: "),
-                    f"{result.n_rebalances} rebalances, {result.n_unique_holdings} unique holdings"]),
-            html.Table([
-                html.Tr([html.Td(html.Strong("Total return")),
-                         html.Td(pct(result.total_return))]),
-                html.Tr([html.Td(html.Strong("Benchmark return")),
-                         html.Td(pct(result.benchmark_return))]),
-                html.Tr([html.Td(html.Strong("Excess")),
-                         html.Td(pct(result.total_return - result.benchmark_return))]),
-                html.Tr([html.Td(html.Strong("Information Ratio")),
-                         html.Td(num(result.information_ratio))]),
-                html.Tr([html.Td(html.Strong("Sharpe (per period)")),
-                         html.Td(num(result.sharpe))]),
-                html.Tr([html.Td(html.Strong("Max drawdown")),
-                         html.Td(pct(result.max_drawdown))]),
-                html.Tr([html.Td(html.Strong("Hit rate (beat bench)")),
-                         html.Td(pct(result.hit_rate))]),
-            ], className="table table-sm w-auto small"),
-        ])
+        fig = equity_curve_chart(
+            result.equity_curve, result.benchmark_curve,
+            strategy_label=f"{result.preset_label} top-10",
+        )
 
+        # Final-rebalance holdings, sorted by weight desc, weight in %
+        final_holdings = sorted(result.rebalance_log[-1].holdings,
+                                 key=lambda h: -h[1])
+        holdings_rows = [{"ticker": t, "weight": round(w * 100, 2)}
+                         for t, w in final_holdings]
+        final_date = (f"as of {result.rebalance_log[-1].date} — "
+                      f"{m.n_rebalances} rebalances in {elapsed:.1f}s")
 
-def _format_optimized_row(db_row: dict, screen_id: str) -> dict:
-    """Decompose parameters_json and expose the headline columns."""
-    try:
-        params = json.loads(db_row.get("parameters_json") or "{}")
-    except (TypeError, ValueError):
-        params = {}
+        n_surv = len(result.preset_survivors_at_start)
+        save_preview = (
+            f"Will save {n_surv} ticker{'s' if n_surv != 1 else ''} "
+            f"(preset survivors at {result.rebalance_log[0].date}) "
+            f"× 100 shares each, rf = 3%."
+            if n_surv > 0 else
+            "No preset survivors at start date — nothing to save."
+        )
+        run_status = (f"Ran {m.n_rebalances} rebalances in {elapsed:.1f}s. "
+                       f"Top-10 from {n_surv}-ticker survivor set.")
 
-    out = {
-        "industry": db_row.get("industry"),
-        "information_ratio": _rnd(db_row.get("information_ratio"), 3),
-        "n_walk_forward_windows": db_row.get("n_walk_forward_windows"),
-        "last_optimized_at": (db_row.get("last_optimized_at") or "")[:16],
-    }
+        return (total_pct, annret_pct, vol_pct, sharpe_str, maxdd_pct,
+                 hit_pct, fig, holdings_rows, final_date,
+                 result.preset_survivors_at_start, result.preset_label,
+                 save_preview, n_surv == 0, run_status)
 
-    # Screen-specific param columns
-    if screen_id == "value":
-        out.update({
-            "pe_max": _rnd(params.get("pe_max"), 1),
-            "pb_max": _rnd(params.get("pb_max"), 1),
-            "roe_min_pct": _rnd(_safe_pct(params.get("roe_min")), 0),
-            "earnings_growth_min_pct": _rnd(_safe_pct(params.get("earnings_growth_min")), 0),
-            "market_cap_min_b": _rnd(_safe_div(params.get("market_cap_min"), 1e9), 1),
-        })
-    elif screen_id == "quality_compounder":
-        out.update({
-            "roe_min_pct": _rnd(_safe_pct(params.get("roe_min")), 0),
-            "de_max": _rnd(params.get("de_max"), 0),
-            "earnings_growth_min_pct": _rnd(_safe_pct(params.get("earnings_growth_min")), 0),
-            "market_cap_min_b": _rnd(_safe_div(params.get("market_cap_min"), 1e9), 1),
-        })
-    elif screen_id == "income":
-        out.update({
-            "dividend_yield_min": _rnd(params.get("dividend_yield_min"), 1),
-            "market_cap_min_b": _rnd(_safe_div(params.get("market_cap_min"), 1e9), 1),
-            "earnings_growth_min_pct": _rnd(_safe_pct(params.get("earnings_growth_min")), 0),
-        })
-    return out
+    # --- Save to portfolio --------------------------------------------
+    @app.callback(
+        Output("bt-save-status", "children"),
+        Output("main-tabs", "active_tab", allow_duplicate=True),
+        Output("cross-tab-nav", "data", allow_duplicate=True),
+        Input("bt-save-btn", "n_clicks"),
+        State("bt-survivors-store", "data"),
+        State("bt-preset-label-store", "data"),
+        prevent_initial_call=True,
+    )
+    def save_backtest_portfolio(_n, survivors, preset_label):
+        if not survivors or not preset_label:
+            raise PreventUpdate
+        try:
+            from analysis.portfolio_synth import rebuild_and_upsert
+            from storage.cloud_repository import CloudPortfoliosRepository
+            from storage.database import Database
+            repo = CloudPortfoliosRepository()
+            name = next_backtest_portfolio_name(preset_label, repo)
+            holdings = [{"ticker": t, "shares": 100} for t in survivors]
+            repo.save_portfolio(
+                name, holdings,
+                optimal_weights=None,
+                rf=0.03,
+                weight_cap=0.30,
+                lookback_days=None,
+                notes=f"Auto-saved from Backtest tab: {preset_label} preset survivors.",
+            )
+            # Materialise the @NAME synthetic ticker so the saved portfolio
+            # is renderable on Risk Forecast etc. immediately. Mirrors the
+            # behaviour of the Portfolio tab's save_status_quo flow.
+            portfolio_dict = {"name": name, "holdings": holdings,
+                                "optimal_weights": None}
+            rebuild_and_upsert(name, portfolio_dict, Database(db_path))
+        except Exception as e:
+            logger.exception("Save backtest portfolio failed")
+            return f"Save failed: {e}", no_update, no_update
 
-
-def _rnd(v, n=1):
-    if v is None:
-        return None
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(f) or math.isinf(f):
-        return None
-    return round(f, n)
-
-
-def _safe_pct(v):
-    if v is None:
-        return None
-    try:
-        return float(v) * 100
-    except (TypeError, ValueError):
-        return None
-
-
-def _safe_div(v, d):
-    if v is None:
-        return None
-    try:
-        return float(v) / d
-    except (TypeError, ValueError):
-        return None
+        nav = {"tab": "tab-portfolio", "portfolio": name,
+               "ts": int(time.time() * 1000)}
+        return (f"Saved as '{name}' — switching to Portfolio tab.",
+                 "tab-portfolio", nav)

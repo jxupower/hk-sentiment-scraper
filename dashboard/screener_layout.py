@@ -2,6 +2,7 @@ from dash import dcc, html, dash_table
 import dash_bootstrap_components as dbc
 
 from dashboard import theme as T
+from dashboard.screener_presets import INVESTOR_PRESETS
 
 
 # Numeric range filters added to the Screener accordion. Each entry is
@@ -16,6 +17,7 @@ NUMERIC_FILTERS = [
     ("EV/EBITDA",        "evebitda",  0,    100,  0.5,   "ev_to_ebitda",       None),
     ("Dividend yield %", "divyield",  0,    20,   0.1,   "dividend_yield",     None),
     ("ROE %",            "roe",      -50,   100,  0.5,   "return_on_equity",   "roe_pct"),
+    ("Earnings growth %","egrowth",  -100,  500,  5,     "earnings_growth",    "roe_pct"),
     ("D/E %",            "de",        0,    1000, 5,     "debt_to_equity",     None),
     ("Beta",             "beta",     -2,    5,    0.1,   "beta",               None),
     ("Market cap (B HKD)","mcap",     0,    3000, 10,    "market_cap",         "mcap_b"),
@@ -91,6 +93,40 @@ def build_screener_tab() -> html.Div:
                     ], width=2),
                 ], align="center"),
             ], style={"padding": "20px 24px"}),
+        ], style=T.CARD_STYLE, className="mb-3"),
+
+        # Famous-investor preset bar — one-click composite V/Q/G screens.
+        # Each button populates the numeric range filters below to match
+        # the named framework; sector dropdowns + text searches are left
+        # alone so any existing narrowing persists.
+        dbc.Card([
+            dbc.CardHeader([
+                html.Span("Investor presets",
+                          className="fw-bold me-2"),
+                html.Span("— one-click composite V/Q/G screens; "
+                           "click to load filter ranges",
+                           className="text-muted small"),
+            ]),
+            dbc.CardBody([
+                html.Div([
+                    dbc.Button(
+                        [html.Div(p["label"],
+                                   style={"fontWeight": "700",
+                                          "fontSize": "0.9rem"}),
+                         html.Div(p["title"],
+                                   style={"fontSize": "0.72rem",
+                                          "fontStyle": "italic",
+                                          "color": T.TEXT_MUTED,
+                                          "marginTop": "2px"})],
+                        id=f"screener-preset-{p['id']}-btn",
+                        title=p["description"],
+                        color="primary", outline=True,
+                        className="me-2 mb-2 text-start",
+                        style={"minWidth": "180px"},
+                    )
+                    for p in INVESTOR_PRESETS
+                ], className="d-flex flex-wrap"),
+            ], style={"padding": "12px 16px"}),
         ], style=T.CARD_STYLE, className="mb-3"),
 
         # Filters card — accordion-grouped to keep the page short. Search +
@@ -184,6 +220,7 @@ def build_screener_tab() -> html.Div:
                     # --- Quality group ---
                     dbc.AccordionItem([
                         _range_filter("ROE %", "roe", -50, 100, 0.5),
+                        _range_filter("Earnings growth %", "egrowth", -100, 500, 5),
                         _range_filter("D/E %", "de", 0, 1000, 5),
                         _range_filter("Beta", "beta", -2, 5, 0.1),
                     ], title="Quality", item_id="quality"),

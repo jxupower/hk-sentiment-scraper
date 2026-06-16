@@ -254,6 +254,62 @@ def register_portfolio_callbacks(app, db_path: str):
             f"Deleted @{selected_name} (+ {price_rows_removed} synthetic "
             "price rows).")
 
+    # ----- Cross-tab handoff: load a portfolio when the Backtest tab
+    # writes one to `cross-tab-nav.data`. Mirrors the existing Screener →
+    # Research handoff pattern. Refreshes the dropdown options so the
+    # newly-saved name appears, then populates the holdings table + name
+    # input and emits a status pill so the user sees what happened.
+    @app.callback(
+        Output("portfolio-saved-dropdown", "options", allow_duplicate=True),
+        Output("portfolio-saved-dropdown", "value", allow_duplicate=True),
+        Output("portfolio-name-input", "value", allow_duplicate=True),
+        Output("portfolio-holdings-table", "data", allow_duplicate=True),
+        Output("portfolio-rf", "value", allow_duplicate=True),
+        Output("portfolio-save-status", "children", allow_duplicate=True),
+        Output("portfolio-latest-optimal", "data", allow_duplicate=True),
+        Input("cross-tab-nav", "data"),
+        prevent_initial_call=True,
+    )
+    def load_portfolio_from_nav(nav_data):
+        from storage.cloud_db import available
+        from storage.cloud_repository import CloudPortfoliosRepository
+
+        if not nav_data or nav_data.get("tab") != "tab-portfolio":
+            raise PreventUpdate
+        portfolio_name = nav_data.get("portfolio")
+        if not portfolio_name:
+            raise PreventUpdate
+        if not available():
+            return (no_update, no_update, no_update, no_update, no_update,
+                     _status_error("Cloud DB not configured."), no_update)
+
+        try:
+            row = CloudPortfoliosRepository().get_portfolio(portfolio_name)
+        except Exception as e:
+            return (no_update, no_update, no_update, no_update, no_update,
+                     _status_error(f"Cross-tab load failed: {e}"), no_update)
+        if not row:
+            return (no_update, no_update, no_update, no_update, no_update,
+                     _status_error(f"No saved portfolio named "
+                                    f"{portfolio_name!r}."), no_update)
+
+        new_table_data = [
+            {"ticker": h["ticker"], "shares": h.get("shares", 0)}
+            for h in (row.get("holdings") or [])
+        ]
+        rf_pct = (row.get("rf") or 0) * 100   # stored as decimal; UI uses %
+        return (
+            _build_saved_options(),
+            portfolio_name,
+            portfolio_name,
+            new_table_data,
+            rf_pct if rf_pct > 0 else no_update,
+            _status_ok(f"Loaded @{portfolio_name} from Backtest tab "
+                        f"({len(new_table_data)} holdings, rf = "
+                        f"{rf_pct:.0f}%)."),
+            None,
+        )
+
     # ----- Main compute callback -----
     @app.callback(
         Output("portfolio-placeholder", "style"),

@@ -59,6 +59,7 @@ class ResearchReport:
     ticker: str
     name: str
     sector: str
+    sub_sector: Optional[str]
     is_watchlist: bool
     market_cap: Optional[float]
     current_price: Optional[float]
@@ -250,6 +251,7 @@ def build_research_report(ticker: str, db_path: str,
         ticker=ticker,
         name=latest.get("name") or ticker,
         sector=latest.get("yf_sector") or latest.get("watchlist_sector") or "—",
+        sub_sector=latest.get("sub_sector"),
         is_watchlist=bool(latest.get("is_watchlist")),
         market_cap=latest.get("market_cap"),
         current_price=current_price,

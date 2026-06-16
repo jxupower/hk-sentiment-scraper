@@ -518,6 +518,43 @@ class HistoricalPricesRepository:
             ).fetchone()
             return float(row[0]) if row else None
 
+    def bulk_prices_on_or_before(self, tickers: list[str],
+                                    target_date: str) -> dict:
+        """{ticker: latest adj_close at or before `target_date`} via one
+        query with a sub-grouped MAX(date). SQLite mirror of the cloud
+        bulk method — used by the backtest engine's as-of enrichment."""
+        if not tickers:
+            return {}
+        placeholders = ",".join("?" * len(tickers))
+        with self.db.get_connection() as conn:
+            rows = conn.execute(f"""
+                SELECT h.ticker, h.adj_close
+                FROM historical_prices h
+                INNER JOIN (
+                    SELECT ticker, MAX(date) AS max_date
+                    FROM historical_prices
+                    WHERE ticker IN ({placeholders}) AND date <= ?
+                          AND adj_close IS NOT NULL
+                    GROUP BY ticker
+                ) latest
+                  ON h.ticker = latest.ticker AND h.date = latest.max_date
+            """, (*tickers, target_date)).fetchall()
+            return {r[0]: float(r[1]) for r in rows}
+
+    def get_full_ohlc_series(self, ticker: str) -> list[dict]:
+        """All historical OHLC rows for a ticker. Used by the Stock Research
+        candlestick view; line chart only needs adj_close so it uses
+        get_full_series instead."""
+        with self.db.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT date, open, high, low, close, adj_close, volume
+                FROM historical_prices
+                WHERE ticker = ?
+                ORDER BY date ASC
+            """, (ticker,)).fetchall()
+            return [dict(r) for r in rows]
+
 
 class BacktestRepository:
     """Backtest runs + per-rebalance holdings."""

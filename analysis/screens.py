@@ -38,14 +38,6 @@ class ScreenParams:
     profit_margins_max: float = math.inf
     dividend_yield_min: float = -math.inf
     market_cap_min: float = 0.0
-    # Distress screen: requires extreme cheapness AND red flags
-    distress_pe_max: float = math.inf
-    distress_pb_max: float = math.inf
-    distress_min_red_flags: int = 0
-    distress_eg_threshold: float = -math.inf      # earnings_growth below this is a red flag
-    distress_pm_threshold: float = -math.inf      # profit_margins below this is a red flag
-    distress_rg_threshold: float = -math.inf      # revenue_growth below this is a red flag
-    distress_de_threshold: float = math.inf       # debt_to_equity above this is a red flag
 
     def to_dict(self) -> dict:
         """Serialize to dict, replacing inf with None for JSON friendliness."""
@@ -104,7 +96,6 @@ class ScreenDefinition:
     predicate: Callable               # (row, params, criteria_collector) -> bool
     default_params: ScreenParams
     exclude_flagged: bool = True
-    is_distress_screen: bool = False
 
 
 # ============== Predicates (now parameterized) ==============
@@ -187,38 +178,6 @@ def _income_screen(row, params: ScreenParams, criteria):
     return all([c_dy, c_mc, c_grow])
 
 
-def _avoid_distress_screen(row, params: ScreenParams, criteria):
-    pe  = _finite(row.get("trailing_pe"))
-    pb  = _finite(row.get("price_to_book"))
-    pm  = _finite(row.get("profit_margins"))
-    eg  = _finite(row.get("earnings_growth"))
-    rg  = _finite(row.get("revenue_growth"))
-    de  = _finite(row.get("debt_to_equity"))
-
-    looks_cheap = ((pe is not None and 0 < pe < params.distress_pe_max) or
-                   (pb is not None and 0 < pb < params.distress_pb_max))
-    if not looks_cheap:
-        return False
-
-    red_flags = []
-    if pm is not None and pm < params.distress_pm_threshold:
-        red_flags.append(ScreenCriterion(f"Profit margins < {_fmt_pct(params.distress_pm_threshold)}", True))
-    if eg is not None and eg < params.distress_eg_threshold:
-        red_flags.append(ScreenCriterion(f"Earnings growth < {_fmt_pct(params.distress_eg_threshold)}", True))
-    if rg is not None and rg < params.distress_rg_threshold:
-        red_flags.append(ScreenCriterion(f"Revenue growth < {_fmt_pct(params.distress_rg_threshold)}", True))
-    if de is not None and de > params.distress_de_threshold:
-        red_flags.append(ScreenCriterion(f"D/E > {_fmt(params.distress_de_threshold)}%", True))
-
-    if len(red_flags) < params.distress_min_red_flags:
-        return False
-
-    criteria.append(ScreenCriterion(
-        f"P/E < {_fmt(params.distress_pe_max)} OR P/B < {_fmt(params.distress_pb_max)}", True))
-    criteria.extend(red_flags)
-    return True
-
-
 def _fmt(v):
     if v is None or (isinstance(v, float) and (math.isinf(v) or math.isnan(v))):
         return "∞" if v == math.inf else ("-∞" if v == -math.inf else "?")
@@ -292,26 +251,6 @@ BUILTIN_SCREENS = [
             dividend_yield_min=4.0,
             market_cap_min=5_000_000_000,
             earnings_growth_min=-0.05,
-        ),
-    ),
-    ScreenDefinition(
-        id="avoid_distress", name="Avoid Distress (educational)",
-        description="Looks cheap, IS broken. Why your value screen would miss these.",
-        long_description=(
-            "Educational view. Default thresholds: P/E < 3 OR P/B < 0.25 (extreme cheap), "
-            "plus >= 2 distress red flags from: profit margin < -10%, earnings growth < -30%, "
-            "revenue growth < -15%, D/E > 300%. Shows what a naive value screen would buy."
-        ),
-        predicate=_avoid_distress_screen, exclude_flagged=False,
-        is_distress_screen=True,
-        default_params=ScreenParams(
-            distress_pe_max=3,
-            distress_pb_max=0.25,
-            distress_min_red_flags=2,
-            distress_pm_threshold=-0.10,
-            distress_eg_threshold=-0.30,
-            distress_rg_threshold=-0.15,
-            distress_de_threshold=300,
         ),
     ),
 ]

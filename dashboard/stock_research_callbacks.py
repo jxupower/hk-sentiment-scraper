@@ -99,6 +99,7 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-content", "style"),
         Output("sr-header-name", "children"),
         Output("sr-header-sector", "children"),
+        Output("sr-header-subsector", "children"),
         Output("sr-header-price", "children"),
         Output("sr-header-mcap", "children"),
         Output("sr-header-badges", "children"),
@@ -160,7 +161,7 @@ def register_stock_research_callbacks(app, db_path: str):
         if r is None:
             return (
                 {"display": "block"}, {"display": "none"},
-                "", "", "", "", [], [], {},
+                "", "", "", "", "", [], [], {},
                 "(no data)", "", "", "", "", [],
                 [], {}, {}, {}, [],
                 "", "", "", None,
@@ -171,6 +172,9 @@ def register_stock_research_callbacks(app, db_path: str):
         # Header
         name = r.name
         sector = r.sector
+        # Sub-sector label — falls back to em-dash so the slot doesn't
+        # collapse when a ticker has no sub_sector tag.
+        sub_sector = r.sub_sector or "—"
         price_str = f"${r.current_price:.2f}" if r.current_price else "NA"
         mcap_str = f"${r.market_cap/1e9:.1f}B" if r.market_cap else "NA"
         badges = []
@@ -233,7 +237,7 @@ def register_stock_research_callbacks(app, db_path: str):
 
         return (
             {"display": "none"}, {"display": "block"},
-            name, sector, price_str, mcap_str, badges,
+            name, sector, sub_sector, price_str, mcap_str, badges,
             screen_badges, factor_fig,
             business_summary, s_swot, w_swot, o_swot, t_swot, article_feed,
             cagr_table, eps_fig, rev_fig, peer_fig, forensic,
@@ -321,9 +325,10 @@ def register_stock_research_callbacks(app, db_path: str):
         Input("sr-ticker-select", "value"),
         Input("sr-period-select", "value"),
         Input("sr-load-btn", "n_clicks"),
+        Input("sr-price-chart-style", "value"),
         prevent_initial_call=True,
     )
-    def update_period_charts(ticker, period_days, _clicks):
+    def update_period_charts(ticker, period_days, _clicks, chart_style):
         if not ticker:
             return {}, "", {}, "", {}, {}, ""
 
@@ -350,7 +355,11 @@ def register_stock_research_callbacks(app, db_path: str):
                           if cutoff_iso else history)
 
         # Charts
-        price_fig = price_chart(prices_window, label=f"{ticker}")
+        if chart_style == "candle":
+            from dashboard.charts import price_candlestick_chart
+            price_fig = price_candlestick_chart(prices_window, label=f"{ticker}")
+        else:
+            price_fig = price_chart(prices_window, label=f"{ticker}")
         price_summary = _build_price_summary(prices_window)
         shares_fig = share_count_chart(history_window)
         strategy_stats = _build_strategy_stats_window(history_window, prices_window)
@@ -1301,15 +1310,33 @@ def _load_history(db_path: str, ticker: str) -> list:
 
 
 def _load_prices(db_path: str, ticker: str) -> list[dict]:
-    """Pull all historical prices for a ticker via the cache-aside loader.
-    Cache hit: instant. Cache miss: fetches from yfinance (~3-5s)."""
+    """Pull all historical prices for a ticker, projecting full OHLC so the
+    same payload feeds both the line and candlestick views. Cache hit:
+    instant. Cache miss: get_or_fetch_prices fetches from yfinance (~3-5s)
+    and writes OHLC to historical_prices; the follow-up repo pull then sees
+    the full row. Synthetic ('@') and index ('^') tickers may have NULL
+    open/high/low — the candlestick chart handles that gracefully."""
     from analysis.data_loader import get_or_fetch_prices
     from storage.database import Database
+    from storage.factory import get_prices_repo
 
     db = Database(db_path)
-    rows = get_or_fetch_prices(ticker, db, period="10y")
-    return [{"date": _coerce_date_str(r.get("date")),
-             "adj_close": _coerce_float(r.get("adj_close"))} for r in rows]
+    # Side-effect: ensures rows exist in historical_prices.
+    get_or_fetch_prices(ticker, db, period="10y")
+    # Full OHLC pull from whichever backend the factory selects.
+    ohlc_rows = get_prices_repo(db).get_full_ohlc_series(ticker)
+    out = []
+    for r in ohlc_rows:
+        out.append({
+            "date": _coerce_date_str(r.get("date")),
+            "open": _coerce_float(r.get("open")),
+            "high": _coerce_float(r.get("high")),
+            "low": _coerce_float(r.get("low")),
+            "close": _coerce_float(r.get("close")),
+            "adj_close": _coerce_float(r.get("adj_close")),
+            "volume": r.get("volume"),
+        })
+    return out
 
 
 def _coerce_float(v):
