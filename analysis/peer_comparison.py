@@ -73,14 +73,21 @@ def _finite(v) -> Optional[float]:
 
 
 def build_peer_scorecard(ticker: str, db_path: str,
-                         top_n_peers: int = 10) -> Optional[PeerScorecard]:
-    """Construct a per-metric comparison vs the target's yfinance sector peers."""
+                         top_n_peers: int = 10,
+                         universe: Optional[list] = None) -> Optional[PeerScorecard]:
+    """Construct a per-metric comparison vs the target's yfinance sector peers.
+
+    `universe` is an optional pre-loaded list of fundamentals rows. When the
+    caller already has the universe in hand (e.g. the Research orchestrator
+    that just fetched it for the factor engine), passing it here saves an
+    extra Supabase round-trip per Research render."""
     from analysis.data_loader import get_universe_fundamentals
     from storage.database import Database
 
-    # One universe pull, then filter client-side. Avoids two separate
-    # cloud round-trips for target+peers.
-    universe = get_universe_fundamentals(Database(db_path))
+    # One universe pull, then filter client-side. Re-uses the caller's
+    # pre-loaded universe when supplied — otherwise pulls fresh.
+    if universe is None:
+        universe = get_universe_fundamentals(Database(db_path))
     target_row = next((r for r in universe if r["ticker"] == ticker), None)
     if not target_row:
         return None

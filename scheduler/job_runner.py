@@ -87,6 +87,21 @@ class JobRunner:
                 coalesce=True,
                 misfire_grace_time=3600,
             )
+            # Sub-sector composites rebuild — weekdays 14:30 UTC (22:30 HKT),
+            # 30 min after the EOD price refresh so constituents have
+            # already settled. Rebuilds all ~75 `&NAME` indices into
+            # historical_prices.
+            self._scheduler.add_job(
+                func=self._refresh_subsector_composites_daily,
+                trigger="cron",
+                day_of_week="mon-fri",
+                hour=14,
+                minute=30,
+                id="subsector_composites_daily",
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=3600,
+            )
             # Startup freshness check — fires once ~30s after dashboard start.
             # If historical_prices is more than 1 calendar day stale (e.g.
             # because the cron didn't fire when the dashboard was offline),
@@ -293,6 +308,25 @@ class JobRunner:
             logger.info("Daily price refresh: %s", summary)
         except Exception as e:
             logger.error("Daily historical price refresh failed: %s", e)
+
+    def _refresh_subsector_composites_daily(self):
+        """Daily rebuild of all `&NAME` sub-sector composite indices.
+        Runs 30 min after the EOD price refresh so the constituents have
+        already settled. Per-composite errors are caught + logged
+        individually — one bad sub-sector doesn't stop the others."""
+        from analysis.subsector_synth import rebuild_all_subsectors
+        try:
+            summary = rebuild_all_subsectors(self._securities_repo.db)
+            logger.info(
+                "Daily sub-sector composite refresh: %d/%d succeeded, "
+                "%d rows in %.1fs",
+                summary["n_succeeded"], summary["n_attempted"],
+                summary["total_rows_written"], summary["elapsed_sec"])
+            if summary.get("errors"):
+                logger.warning("Composite rebuild errors: %s",
+                                 summary["errors"][:5])
+        except Exception as e:
+            logger.error("Daily sub-sector composite refresh failed: %s", e)
 
     def _refresh_prices_if_stale(self):
         """Run ~30s after dashboard startup. If historical_prices is more than

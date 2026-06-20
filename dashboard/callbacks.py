@@ -1,5 +1,5 @@
 from datetime import datetime
-from dash import Input, Output, ALL, html, dcc
+from dash import Input, Output, State, ALL, html, dcc
 import dash_bootstrap_components as dbc
 
 from dashboard.charts import (
@@ -8,11 +8,88 @@ from dashboard.charts import (
     DIRECTION_COLORS,
 )
 from dashboard import theme as T
+from dashboard.i18n import T as i18n_T
 
 DIRECTION_BADGE_COLOR = {"UP": "success", "DOWN": "danger", "MIXED": "warning", "NEUTRAL": "secondary"}
 
 
 def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scraper):
+    # ----- Language toggle (global) -----
+    # Clientside: flips user-language Store + button outline states instantly
+    # on click. No Python round-trip needed for the button itself.
+    app.clientside_callback(
+        """
+        function(en_clicks, zh_clicks) {
+            const ctx = window.dash_clientside.callback_context;
+            const trig = ctx.triggered && ctx.triggered.length ? ctx.triggered[0] : null;
+            if (!trig || !trig.prop_id) {
+                // Initial load — leave defaults alone
+                return window.dash_clientside.no_update;
+            }
+            const choice = trig.prop_id.indexOf("lang-zh-btn") === 0 ? "zh" : "en";
+            // outline=true means INACTIVE (outline-only); active is outline=false.
+            return [choice, choice !== "en", choice !== "zh"];
+        }
+        """,
+        Output("user-language", "data"),
+        Output("lang-en-btn", "outline"),
+        Output("lang-zh-btn", "outline"),
+        Input("lang-en-btn", "n_clicks"),
+        Input("lang-zh-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+
+    # Server-side: rebuild the tab strip with translated labels when language
+    # changes. dbc.Tab.label is static at render time so we hand back a fresh
+    # children list. Tab children (the per-tab layouts) re-render but their
+    # own ids stay stable; per-tab i18n callbacks update the inner text.
+    @app.callback(
+        Output("main-tabs", "children"),
+        Input("user-language", "data"),
+        State("sentiment-sectors-store", "data"),
+        prevent_initial_call=True,
+    )
+    def rebuild_tabs_on_language(lang, sectors):
+        from dashboard.layout import build_tabs
+        return build_tabs(lang or "en", sectors or [])
+
+    # Server-side: update the global chrome (header tagline + last-updated
+    # prefix) when language changes.
+    @app.callback(
+        Output("header-app-title", "children"),
+        Output("header-app-tagline", "children"),
+        Output("header-last-updated-prefix", "children"),
+        Input("user-language", "data"),
+    )
+    def update_global_chrome(lang):
+        lang = lang or "en"
+        return (
+            i18n_T("app.title", lang),
+            i18n_T("app.tagline", lang),
+            i18n_T("app.last_updated", lang),
+        )
+
+    # Sentiment-tab chrome (sub-card titles + controls header).
+    @app.callback(
+        Output("sentiment-controls-title", "children"),
+        Output("refresh-btn", "children"),
+        Output("sentiment-selected-prefix", "children"),
+        Output("sentiment-ticker-breakdown-title", "children"),
+        Output("sentiment-ai-title", "children"),
+        Output("sentiment-articles-title", "children"),
+        Input("user-language", "data"),
+    )
+    def update_sentiment_chrome(lang):
+        lang = lang or "en"
+        return (
+            i18n_T("sentiment.controls", lang),
+            i18n_T("sentiment.btn.refresh", lang),
+            i18n_T("sentiment.selected", lang),
+            i18n_T("sentiment.ticker_breakdown", lang),
+            i18n_T("sentiment.ai_analysis", lang),
+            i18n_T("sentiment.recent_articles", lang),
+        )
+
     from storage.database import Database
     from storage.repository import (ArticleRepository, SentimentRepository,
                                      SignalRepository, SectorSignalRepository,
@@ -253,7 +330,7 @@ def _build_ticker_rows(ticker_signals):
             dbc.Col(html.Span(f"{sent:+.3f}", style={"color": color, "fontWeight": "bold",
                                                       "fontSize": "0.85rem"}), width=3),
             dbc.Col(html.Span(f"{momentum:+.2f}%",
-                              style={"color": T.SUCCESS if momentum >= 0 else T.DANGER,
+                              style={"color": T.PRICE_UP if momentum >= 0 else T.PRICE_DOWN,
                                      "fontSize": "0.85rem"}), width=3),
             dbc.Col(html.Span(f"{s.get('article_count_24h', 0)} art",
                               className="text-muted", style={"fontSize": "0.75rem"}), width=3),
@@ -280,7 +357,7 @@ def _build_article_feed(scores):
     rows = []
     for s in scores[:60]:
         score = s.get("final_score", 0) or 0
-        color = T.SUCCESS if score >= 0.05 else (T.DANGER if score <= -0.05 else T.TEXT_FAINT)
+        color = T.PRICE_UP if score >= 0.05 else (T.PRICE_DOWN if score <= -0.05 else T.TEXT_FAINT)
         source_badge = {"rss": "info", "reddit": "warning", "yahoo": "primary"}.get(
             s.get("source", ""), "secondary")
         pub = s.get("published_at", "") or ""

@@ -38,7 +38,9 @@ DEFAULT_HORIZON = 21
 
 def build_risk_tab() -> html.Div:
     return html.Div([
-        dbc.Alert([
+        dbc.Alert(id="risk-alert-banner", color="info",
+                    className="small mb-3", dismissable=True,
+                    children=[
             html.Strong("Risk Forecast — GJR-GARCH(1,1) with Student-t innovations. "),
             "Pick a stock or Hang Seng index, click Load. The fan chart shows "
             "5,000 Monte Carlo paths over the chosen horizon. ",
@@ -47,7 +49,7 @@ def build_risk_tab() -> html.Div:
                     "Monte Carlo with a fitted parametric model can't generate "
                     "tail events outside the fitted distribution; forecasts "
                     "beyond ~5 days are illustrative, not precise."),
-        ], color="info", className="small mb-3", dismissable=True),
+        ]),
 
         # Header — ticker + window + horizon + Load
         # Responsive: stack on phones (xs=12 each), spread across the row on
@@ -58,6 +60,7 @@ def build_risk_tab() -> html.Div:
                 dbc.Row([
                     dbc.Col([
                         html.Label("Ticker (index or HK stock)",
+                                    id="risk-label-ticker",
                                     className="text-muted small mb-1"),
                         dcc.Dropdown(
                             id="risk-ticker-select",
@@ -69,6 +72,7 @@ def build_risk_tab() -> html.Div:
                     ], xs=12, md=4),
                     dbc.Col([
                         html.Label("History window (fit data)",
+                                    id="risk-label-window",
                                     className="text-muted small mb-1"),
                         dbc.RadioItems(
                             id="risk-history-window",
@@ -83,6 +87,7 @@ def build_risk_tab() -> html.Div:
                     ], xs=12, sm=6, md=3),
                     dbc.Col([
                         html.Label("Forecast horizon",
+                                    id="risk-label-horizon",
                                     className="text-muted small mb-1"),
                         dbc.RadioItems(
                             id="risk-horizon",
@@ -115,7 +120,8 @@ def build_risk_tab() -> html.Div:
             # Fan chart (the centerpiece) + status strip
             dbc.Card([
                 dbc.CardHeader([
-                    html.Span("Monte Carlo fan chart", className="fw-bold"),
+                    html.Span("Monte Carlo fan chart", id="risk-fan-title",
+                              className="fw-bold"),
                     html.Span(id="risk-fan-subtitle",
                               style={"color": T.TEXT_MUTED, "fontSize": "0.8rem",
                                      "marginLeft": "12px"}),
@@ -133,6 +139,7 @@ def build_risk_tab() -> html.Div:
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader("Forecast vs. historical volatility",
+                                        id="risk-volcone-title",
                                         className="fw-bold small"),
                         dbc.CardBody([
                             dcc.Graph(id="risk-vol-cone",
@@ -143,11 +150,13 @@ def build_risk_tab() -> html.Div:
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader("Value-at-Risk & expected shortfall",
+                                        id="risk-var-title",
                                         className="fw-bold small"),
                         dbc.CardBody(html.Div(id="risk-var-table")),
                     ], style=T.CARD_STYLE, className="mb-2"),
                     dbc.Card([
                         dbc.CardHeader("Loss probabilities (over horizon)",
+                                        id="risk-prob-title",
                                         className="fw-bold small"),
                         dbc.CardBody(html.Div(id="risk-prob-table")),
                     ], style=T.CARD_STYLE),
@@ -157,6 +166,7 @@ def build_risk_tab() -> html.Div:
             # Drawdown histogram (full-width)
             dbc.Card([
                 dbc.CardHeader("Max-drawdown distribution",
+                                  id="risk-dd-title",
                                 className="fw-bold small"),
                 dbc.CardBody([
                     dcc.Graph(id="risk-drawdown-hist",

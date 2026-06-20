@@ -543,5 +543,55 @@ def audit_subsectors(tail_pct):
     console.print(f"[bold green]Audit written to[/bold green] {out}")
 
 
+@cli.group()
+def composites():
+    """Sub-sector composite indices — `&NAME` synthetic tickers."""
+
+
+@composites.command("rebuild")
+@click.option("--sub-sector", default=None,
+              help="Rebuild a single sub-sector (by its human label, "
+                   "e.g. 'Banks'). Omit to rebuild every active sub-sector.")
+def composites_rebuild(sub_sector):
+    """Materialise sub-sector composite price series into historical_prices."""
+    from analysis.subsector_synth import (
+        rebuild_all_subsectors, rebuild_and_upsert_subsector,
+    )
+    import config.settings as settings
+    from storage.database import Database
+    db = Database(settings.DB_PATH)
+    if sub_sector:
+        summary = rebuild_and_upsert_subsector(sub_sector, db)
+        console.print(summary)
+    else:
+        summary = rebuild_all_subsectors(db)
+        console.print(
+            f"[bold green]Rebuilt[/bold green] {summary['n_succeeded']}/"
+            f"{summary['n_attempted']} composites · "
+            f"{summary['total_rows_written']:,} rows · "
+            f"{summary['elapsed_sec']:.1f}s"
+        )
+        if summary["errors"]:
+            console.print(f"[bold yellow]Errors:[/bold yellow]")
+            for e in summary["errors"][:10]:
+                console.print(f"  {e}")
+
+
+@composites.command("list")
+def composites_list():
+    """List every sub-sector with its derived composite ticker."""
+    from analysis.subsector_synth import list_subsector_composites
+    import config.settings as settings
+    from storage.database import Database
+    rows = list_subsector_composites(Database(settings.DB_PATH))
+    table = Table(title=f"{len(rows)} sub-sector composites")
+    table.add_column("Ticker", style="cyan")
+    table.add_column("Sub-sector")
+    table.add_column("Constituents", justify="right")
+    for r in rows:
+        table.add_row(r["ticker"], r["sub_sector"], str(r["n_constituents"]))
+    console.print(table)
+
+
 if __name__ == "__main__":
     cli()

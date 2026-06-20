@@ -49,11 +49,18 @@ def get_or_fetch_prices(ticker: str, db: Database, *,
     get_or_fetch_portfolio_prices() — synthetic series built from user-saved
     portfolio constituents.
 
+    Tickers beginning with "&" (e.g. "&BANKS", "&SEMICONDUCTORS_AND_EQUIPMENT")
+    are routed to get_or_fetch_subsector_prices() — cap-weighted, chain-
+    linked Laspeyres composite indices built from current sub-sector
+    constituents.
+
     Returns [] if both cache and fetch fail."""
     if ticker.startswith("^"):
         return get_or_fetch_index_prices(ticker, db, force_refresh=force_refresh)
     if ticker.startswith("@"):
         return get_or_fetch_portfolio_prices(ticker, db, force_refresh=force_refresh)
+    if ticker.startswith("&"):
+        return get_or_fetch_subsector_prices(ticker, db, force_refresh=force_refresh)
 
     repo = get_prices_repo(db)
 
@@ -155,6 +162,47 @@ def get_or_fetch_portfolio_prices(portfolio_ticker: str, db: Database, *,
     except Exception as e:
         log.warning("rebuild_and_upsert failed for %s: %s", name, e)
     return _get_full_series(repo, portfolio_ticker)
+
+
+def get_or_fetch_subsector_prices(subsector_ticker: str, db: Database, *,
+                                     force_refresh: bool = False) -> list[dict]:
+    """Cache-aside read for sub-sector composite tickers.
+
+    `&NAME` is the cap-weighted chain-linked Laspeyres index for the
+    matching `securities.sub_sector` value. On miss / staleness the
+    constituents are reloaded and the index is recomputed via
+    `analysis/subsector_synth.rebuild_and_upsert_subsector`.
+
+    Returns [] when the sub-sector slug doesn't resolve to a real
+    sub_sector value in `securities` — callers degrade gracefully."""
+    repo = get_prices_repo(db)
+
+    if not force_refresh:
+        latest_str = repo.latest_date(subsector_ticker) if hasattr(repo, "latest_date") \
+                      else _sqlite_latest_date(db, subsector_ticker)
+        from analysis.subsector_synth import is_subsector_stale
+        if latest_str and not is_subsector_stale(latest_str):
+            return _get_full_series(repo, subsector_ticker)
+
+    from analysis.subsector_synth import (
+        label_for_ticker, rebuild_and_upsert_subsector,
+    )
+    label = label_for_ticker(subsector_ticker, db)
+    if not label:
+        log.warning("no sub_sector resolves to ticker %s", subsector_ticker)
+        return _get_full_series(repo, subsector_ticker)
+
+    log.info("Cache-aside rebuild for sub-sector composite %s",
+              subsector_ticker)
+    try:
+        summary = rebuild_and_upsert_subsector(label, db)
+        if summary.get("errors"):
+            log.warning("rebuild for %s reported errors: %s",
+                         subsector_ticker, summary["errors"])
+    except Exception as e:
+        log.warning("rebuild_and_upsert_subsector failed for %s: %s",
+                     label, e)
+    return _get_full_series(repo, subsector_ticker)
 
 
 def _get_full_series(repo, ticker: str) -> list[dict]:

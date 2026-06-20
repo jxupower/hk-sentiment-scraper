@@ -173,13 +173,16 @@ def _build(holdings: list[dict], tickers: list[str], lookback: int,
     # Estimate mu, sigma
     ms = estimate_mu_sigma(returns)
 
-    # Latest prices for status-quo weighting
-    from analysis.data_loader import get_or_fetch_prices
-    latest_prices: dict[str, float] = {}
-    for t in tickers:
-        rows = get_or_fetch_prices(t, db)
-        if rows:
-            latest_prices[t] = float(rows[-1]["adj_close"])
+    # Latest prices for status-quo weighting. Bulk query: one Supabase
+    # round-trip for all holdings instead of N. The cache-aside ensure-
+    # rows-exist loop was previously called inside compute_returns_matrix
+    # above, so the rows are already cached at this point — we just need
+    # the latest adj_close per ticker.
+    from datetime import date as _date
+    from storage.factory import get_prices_repo
+    repo = get_prices_repo(db)
+    latest_prices = repo.bulk_prices_on_or_before(tickers,
+                                                       _date.today().isoformat())
 
     # Status quo weights
     w_status_quo = status_quo_weights(holdings, latest_prices, tickers)

@@ -17,6 +17,50 @@ from dashboard.portfolio_charts import (
 
 
 def register_portfolio_callbacks(app, db_path: str):
+    # ----- i18n: flip every translatable label on language change -----
+    @app.callback(
+        Output("portfolio-saved-title", "children"),
+        Output("portfolio-label-name", "children"),
+        Output("portfolio-label-existing", "children"),
+        Output("portfolio-load-btn", "children"),
+        Output("portfolio-delete-btn", "children"),
+        Output("portfolio-holdings-title", "children"),
+        Output("portfolio-add-row-btn", "children"),
+        Output("portfolio-params-title", "children"),
+        Output("portfolio-label-lookback", "children"),
+        Output("portfolio-label-rebal", "children"),
+        Output("portfolio-label-weight-cap", "children"),
+        Output("portfolio-label-rf", "children"),
+        Output("portfolio-compute-btn", "children"),
+        Output("portfolio-holdings-table", "columns"),
+        Input("user-language", "data"),
+    )
+    def i18n_portfolio(lang):
+        from dashboard.i18n import T as I
+        lang = lang or "en"
+        cols = [
+            {"name": I("backtest.col.ticker", lang), "id": "ticker",
+             "type": "text", "editable": True},
+            {"name": I("backtest.col.shares", lang), "id": "shares",
+             "type": "numeric", "editable": True},
+        ]
+        return (
+            I("portfolio.saved_portfolios", lang),
+            I("portfolio.label.name", lang),
+            I("portfolio.saved_portfolios", lang),
+            I("common.load", lang),
+            I("portfolio.btn.delete", lang),
+            I("portfolio.holdings_table", lang),
+            I("portfolio.btn.add_row", lang),
+            "Parameters" if lang == "en" else "参数",
+            I("portfolio.label.lookback", lang),
+            I("portfolio.label.rebal", lang),
+            I("portfolio.label.weight_cap", lang) + " ",
+            I("portfolio.label.rf", lang),
+            I("portfolio.btn.compute", lang),
+            cols,
+        )
+
 
     # ----- Cap slider label (cosmetic) -----
     @app.callback(
@@ -431,7 +475,9 @@ def _error_state(msg: str):
 
 
 def _delta_text(label: str, delta: float):
-    color = T.SUCCESS if delta > 0.001 else (T.DANGER if delta < -0.001 else T.TEXT_MUTED)
+    # Portfolio metric delta (e.g. Sharpe lift): positive return-direction
+    # signal = red in CN/HK convention.
+    color = T.PRICE_UP if delta > 0.001 else (T.PRICE_DOWN if delta < -0.001 else T.TEXT_MUTED)
     sym = "+" if delta >= 0 else ""
     return html.Div([
         html.Span(f"{label}: ", style={"color": T.TEXT_MUTED}),
@@ -454,7 +500,7 @@ def _build_backtest_table(backtest: dict) -> html.Table:
                         "Sharpe", "Max DD", "Turnover (/rebal)"]],
                       className="small text-muted")]
     for key, s in backtest.items():
-        sharpe_color = T.SUCCESS if (s.sharpe or 0) > 0 else T.DANGER
+        sharpe_color = T.PRICE_UP if (s.sharpe or 0) > 0 else T.PRICE_DOWN
         rows.append(html.Tr([
             html.Td(s.name, style={"fontWeight": "600"}),
             html.Td(fmt_pct(s.total_return, signed=True)),
@@ -487,7 +533,8 @@ def _build_candidate_table(bundle) -> html.Div:
         opt_w = bundle.w_full_optimal[idx]
         verdict = ("✓ valuable add" if dv > 0.05
                    else ("~ marginal" if dv > 0.01 else "✗ negligible"))
-        v_color = T.SUCCESS if dv > 0.05 else (T.WARNING if dv > 0.01 else T.TEXT_MUTED)
+        # Marginal Sharpe lift: positive = bullish "add this name" = red.
+        v_color = T.PRICE_UP if dv > 0.05 else (T.WARNING if dv > 0.01 else T.TEXT_MUTED)
         rows.append(html.Tr([
             html.Td(t, style={"fontWeight": "600"}),
             html.Td(f"+{dv:.3f}" if dv > 0 else f"{dv:.3f}",
@@ -525,7 +572,8 @@ def _build_trade_list(bundle) -> html.Div:
         target_shares = target_value / price if price > 0 else 0.0
         delta = target_shares - current_shares
         delta_hkd = delta * price
-        color = T.SUCCESS if delta > 0 else (T.DANGER if delta < 0 else T.TEXT_MUTED)
+        # Trade list delta: BUY (positive shares Δ) = red, SELL = green.
+        color = T.PRICE_UP if delta > 0 else (T.PRICE_DOWN if delta < 0 else T.TEXT_MUTED)
         rows.append(html.Tr([
             html.Td(t, style={"fontWeight": "600"}),
             html.Td(f"{current_shares:,.0f}"),

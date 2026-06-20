@@ -290,3 +290,124 @@ ticker_overrides:
   # Slot it into the existing 163-name Engineering & Construction peer pool.
   # --------------------------------------------------------------------------
   3708.HK: { parent_sector: Industrials, sub_sector: Engineering & Construction }   # World Digi Econ (yf classifies as Residential Construction)
+
+
+# ============================================================================
+# 中文 display labels — purely display, NOT used as resolver keys
+# ============================================================================
+# `securities.sub_sector` + `securities.effective_sector` continue to store the
+# English label as their canonical value (used by every backend join). These
+# maps are consumed only by `config.settings.get_subsector_label(name, lang)`
+# and `get_sector_label(name, lang)` to render the 中文 form on the dashboard
+# when the user has selected 中文. Missing entries fall back to English.
+
+parent_sectors_zh:
+  "Technology":              "科技"
+  "Financial Services":      "金融服务"
+  "Healthcare":              "医疗保健"
+  "Consumer Cyclical":       "可选消费"
+  "Consumer Defensive":      "必需消费"
+  "Communication Services":  "通讯服务"
+  "Industrials":             "工业"
+  "Basic Materials":         "基础材料"
+  "Energy":                  "能源"
+  "Utilities":               "公用事业"
+  "Real Estate":             "房地产"
+
+sub_sectors_zh:
+  # Technology
+  "Application Software":              "应用软件"
+  "Platforms & Cloud Infrastructure":  "平台与云基础设施"
+  "IT Services & Consulting":          "IT 服务与咨询"
+  "Semiconductors & Equipment":        "半导体及设备"
+  "Consumer Electronics & Devices":    "消费电子及设备"
+  "Tech Components & Distribution":    "科技组件及分销"
+  "Telecom Equipment":                 "通讯设备"
+  "Auto Tech":                         "新能源汽车"
+
+  # Industrials
+  "Aerospace & Defense":               "航空航天与国防"
+  "Building Products & Equipment":     "建筑产品及设备"
+  "Business & Professional Services":  "商业及专业服务"
+  "Conglomerates":                     "综合企业"
+  "Electrical Equipment":              "电气设备"
+  "Engineering & Construction":        "工程与建筑"
+  "Environmental Services":            "环保服务"
+  "Industrial Machinery":              "工业机械"
+  "Infrastructure Operations":         "基础设施运营"
+  "Logistics & Freight":               "物流与货运"
+  "Metal Fabrication":                 "金属加工"
+  "Passenger & Air Transport":         "客运与航空运输"
+
+  # Consumer Cyclical
+  "Apparel & Specialty Retail":        "服装及专卖零售"
+  "Apparel Manufacturing":             "服装制造"
+  "Auto Dealerships":                  "汽车经销"
+  "Auto Manufacturers":                "汽车制造商"
+  "Auto Parts & Suppliers":            "汽车零部件供应商"
+  "Gambling & Casinos":                "博彩与赌场"
+  "Home Furnishings & Appliances":     "家居及家电"
+  "Internet Retail":                   "互联网零售"
+  "Luxury Goods":                      "奢侈品"
+  "Packaging & Containers":            "包装与容器"
+  "Personal Services":                 "个人服务"
+  "Restaurants":                       "餐饮"
+  "Textiles & Footwear":               "纺织与鞋类"
+  "Travel & Hospitality":              "旅游与酒店"
+
+  # Healthcare
+  "Biotechnology":                     "生物科技"
+  "Diagnostics & Research":            "诊断与研究"
+  "Drug Manufacturing":                "制药"
+  "Health Information Services":       "健康信息服务"
+  "Medical Care Facilities":           "医疗机构"
+  "Medical Devices & Instruments":     "医疗器械"
+  "Pharmacy Retail & Distribution":    "药品零售与分销"
+
+  # Financial Services
+  "Asset Management":                  "资产管理"
+  "Banks":                             "银行"
+  "Capital Markets":                   "资本市场"
+  "Credit Services":                   "信贷服务"
+  "Financial Conglomerates":           "金融综合企业"
+  "Insurance":                         "保险"
+
+  # Consumer Defensive
+  "Beverages":                         "饮料"
+  "Education & Training Services":     "教育与培训服务"
+  "Food Production, Distribution & Retail": "食品生产、分销与零售"
+  "Household & Personal Products":     "家居及个人护理用品"
+  "Packaged Foods":                    "包装食品"
+
+  # Communication Services
+  "Advertising Agencies":              "广告代理"
+  "Internet Content & Gaming":         "互联网内容与游戏"
+  "Media & Entertainment":             "媒体与娱乐"
+  "Telecom Services":                  "电信服务"
+
+  # Basic Materials
+  "Agricultural Inputs":               "农业投入"
+  "Base Metals & Mining":              "基本金属与采矿"
+  "Building Materials & Cement":       "建材与水泥"
+  "Chemicals":                         "化工"
+  "Coking Coal":                       "炼焦煤"
+  "Forest Products & Paper":           "林产品与造纸"
+  "Precious Metals & Mining":          "贵金属与采矿"
+  "Steel":                             "钢铁"
+
+  # Energy
+  "Clean Energy & Nuclear":            "清洁能源与核能"
+  "Oil & Gas":                         "石油与天然气"
+  "Thermal Coal":                      "动力煤"
+
+  # Utilities
+  "Independent Power Producers":       "独立发电商"
+  "Regulated Electric Utilities":      "受监管电力公用事业"
+  "Regulated Gas Utilities":           "受监管燃气公用事业"
+  "Regulated Water Utilities":         "受监管水务公用事业"
+  "Renewable Utilities":               "可再生能源公用事业"
+
+  # Real Estate
+  "Diversified Real Estate":           "综合性房地产"
+  "Property Management & Services":    "物业管理与服务"
+  "Real Estate Developers":            "房地产开发商"

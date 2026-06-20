@@ -222,6 +222,30 @@ class CloudHistoricalPricesRepository:
             row = cur.fetchone()
             return float(row[0]) if row else None
 
+    def bulk_get_price_series(self, tickers: list[str],
+                                  start_date: str,
+                                  end_date: str) -> dict:
+        """{ticker: [{date, adj_close}, …]} for every ticker in one
+        round-trip — same shape as the existing get_price_series but
+        batched. Cuts subsector/portfolio rebuild latency from O(N×RTT)
+        to O(RTT) on the Supabase pool.
+
+        Rows missing adj_close are filtered. Tickers with no rows in the
+        window get a `[]` so callers can detect missing series."""
+        if not tickers:
+            return {}
+        out: dict = {t: [] for t in tickers}
+        with cursor() as cur:
+            cur.execute("""
+                SELECT ticker, date, adj_close FROM historical_prices
+                WHERE ticker = ANY(%s) AND date >= %s AND date <= %s
+                  AND adj_close IS NOT NULL
+                ORDER BY ticker, date ASC
+            """, (list(tickers), start_date, end_date))
+            for t, d, ac in cur.fetchall():
+                out[t].append({"date": str(d), "adj_close": float(ac)})
+        return out
+
     def bulk_prices_on_or_before(self, tickers: list[str],
                                     target_date: str) -> dict:
         """{ticker: latest adj_close at or before `target_date`} in one

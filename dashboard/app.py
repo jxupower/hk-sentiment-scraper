@@ -29,6 +29,18 @@ def create_app(db_path: str, settings) -> dash.Dash:
     _securities_repo = SecuritiesRepository(_db)
     sectors = cfg.get_subsectors_for_sentiment(watchlist, _securities_repo)
 
+    # Pre-warm the Supabase connection pool at startup. The first query
+    # otherwise pays a 500ms-2s TCP+auth handshake; doing it here moves
+    # that cost out of every user's first click. Silent on local-only
+    # configurations.
+    if cfg.cloud_db_configured():
+        try:
+            from storage import cloud_db
+            cloud_db.available()
+            print("[dashboard] Supabase pool pre-warmed at startup")
+        except Exception as e:
+            print(f"[dashboard] Supabase pool pre-warm skipped: {e}")
+
     app = dash.Dash(
         __name__,
         external_stylesheets=[

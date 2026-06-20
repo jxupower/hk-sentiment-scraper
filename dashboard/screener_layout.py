@@ -24,10 +24,14 @@ NUMERIC_FILTERS = [
 ]
 
 
-def _stat_block(label: str, value_id: str, value_color: str = None):
-    """Hero number with small uppercase label above."""
+def _stat_block(label: str, value_id: str, value_color: str = None,
+                  label_id: str = None):
+    """Hero number with small uppercase label above. `label_id` is set when
+    the label text needs to flip on language change; the i18n callback
+    targets it."""
     return html.Div([
-        html.Div(label, className="stat-label"),
+        html.Div(label, className="stat-label",
+                  id=label_id if label_id else f"{value_id}-label"),
         html.Div(id=value_id, className="hero-number",
                   style={"color": value_color} if value_color else {}),
     ])
@@ -38,7 +42,8 @@ def _range_filter(label: str, slug: str, lo: float, hi: float, step: float):
     Slider is the canonical source; inputs are kept in sync by callbacks in
     screener_callbacks.py. None passes the filter (treat as unknown)."""
     return html.Div([
-        html.Label(label, className="stat-label mb-1"),
+        html.Label(label, className="stat-label mb-1",
+                     id=f"screener-{slug}-range-label"),
         dbc.Row([
             dbc.Col(dcc.Input(id=f"screener-{slug}-min", type="number",
                               value=lo, step=step, debounce=True,
@@ -86,7 +91,8 @@ def build_screener_tab() -> html.Div:
                         dbc.Button("Refresh prices now",
                                     id="screener-refresh-prices-btn",
                                     color="warning", outline=True, size="sm",
-                                    className="float-end mt-2 me-2"),
+                                    className="float-end mt-2 me-2",
+                                    n_clicks=0),
                         html.Div(id="screener-refresh-prices-status",
                                   className="text-end small text-muted mt-1",
                                   style={"clear": "both", "fontSize": "0.72rem"}),
@@ -102,18 +108,22 @@ def build_screener_tab() -> html.Div:
         dbc.Card([
             dbc.CardHeader([
                 html.Span("Investor presets",
+                          id="screener-presets-title",
                           className="fw-bold me-2"),
                 html.Span("— one-click composite V/Q/G screens; "
                            "click to load filter ranges",
+                           id="screener-presets-subtitle",
                            className="text-muted small"),
             ]),
             dbc.CardBody([
                 html.Div([
                     dbc.Button(
                         [html.Div(p["label"],
+                                   id=f"screener-preset-{p['id']}-label",
                                    style={"fontWeight": "700",
                                           "fontSize": "0.9rem"}),
                          html.Div(p["title"],
+                                   id=f"screener-preset-{p['id']}-title",
                                    style={"fontSize": "0.72rem",
                                           "fontStyle": "italic",
                                           "color": T.TEXT_MUTED,
@@ -136,7 +146,9 @@ def build_screener_tab() -> html.Div:
         dbc.Card([
             dbc.CardHeader(
                 dbc.Row([
-                    dbc.Col(html.Span("Filters", className="fw-bold"),
+                    dbc.Col(html.Span("Filters",
+                                          id="screener-filters-title",
+                                          className="fw-bold"),
                             width="auto"),
                     dbc.Col(
                         dbc.Button("Clear filters",
@@ -153,6 +165,7 @@ def build_screener_tab() -> html.Div:
                         dbc.Row([
                             dbc.Col([
                                 html.Label("Ticker contains",
+                                            id="screener-label-ticker-contains",
                                             className="stat-label mb-2"),
                                 dcc.Input(id="screener-ticker-search",
                                           type="text", value="", debounce=True,
@@ -162,6 +175,7 @@ def build_screener_tab() -> html.Div:
                             ], xs=12, md=6),
                             dbc.Col([
                                 html.Label("Name contains",
+                                            id="screener-label-name-contains",
                                             className="stat-label mb-2"),
                                 dcc.Input(id="screener-name-search",
                                           type="text", value="", debounce=True,
@@ -170,26 +184,32 @@ def build_screener_tab() -> html.Div:
                                                  "fontSize": "0.9rem"}),
                             ], xs=12, md=6),
                         ], className="g-3"),
-                    ], title="Search", item_id="search"),
+                    ], title="Search", item_id="search",
+                        id="screener-acc-search"),
 
                     # --- Classification group (existing 4 controls live here) ---
                     dbc.AccordionItem([
                         dbc.Row([
                             dbc.Col([
-                                html.Label("Sector", className="stat-label mb-2"),
+                                html.Label("Sector",
+                                              id="screener-label-sector",
+                                              className="stat-label mb-2"),
                                 dcc.Dropdown(id="screener-sector-filter",
                                               multi=True,
                                               placeholder="All sectors"),
                             ], xs=12, md=4),
                             dbc.Col([
-                                html.Label("Sub-sector", className="stat-label mb-2"),
+                                html.Label("Sub-sector",
+                                              id="screener-label-sub-sector",
+                                              className="stat-label mb-2"),
                                 dcc.Dropdown(id="screener-subsector-filter",
                                               multi=True,
                                               placeholder="All sub-sectors"),
                             ], xs=12, md=4),
                             dbc.Col([
                                 html.Label("Min data completeness",
-                                            className="stat-label mb-2"),
+                                              id="screener-label-min-completeness",
+                                              className="stat-label mb-2"),
                                 dcc.Slider(
                                     id="screener-completeness-filter",
                                     min=0, max=1, step=0.1, value=0.5,
@@ -200,7 +220,8 @@ def build_screener_tab() -> html.Div:
                                 ),
                             ], xs=12, md=4),
                         ], className="g-3"),
-                    ], title="Classification", item_id="classification"),
+                    ], title="Classification", item_id="classification",
+                        id="screener-acc-classification"),
 
                     # --- Valuation group ---
                     dbc.AccordionItem([
@@ -208,6 +229,7 @@ def build_screener_tab() -> html.Div:
                                  "missing data. To exclude them, raise "
                                  "Min data completeness in the Classification "
                                  "group.",
+                                 id="screener-range-hint",
                                  className="text-muted small mb-3",
                                  style={"fontStyle": "italic"}),
                         _range_filter("Trailing P/E", "pe", 0, 200, 0.5),
@@ -215,7 +237,8 @@ def build_screener_tab() -> html.Div:
                         _range_filter("P/B", "pb", 0, 30, 0.1),
                         _range_filter("EV/EBITDA", "evebitda", 0, 100, 0.5),
                         _range_filter("Dividend yield %", "divyield", 0, 20, 0.1),
-                    ], title="Valuation", item_id="valuation"),
+                    ], title="Valuation", item_id="valuation",
+                        id="screener-acc-valuation"),
 
                     # --- Quality group ---
                     dbc.AccordionItem([
@@ -223,13 +246,15 @@ def build_screener_tab() -> html.Div:
                         _range_filter("Earnings growth %", "egrowth", -100, 500, 5),
                         _range_filter("D/E %", "de", 0, 1000, 5),
                         _range_filter("Beta", "beta", -2, 5, 0.1),
-                    ], title="Quality", item_id="quality"),
+                    ], title="Quality", item_id="quality",
+                        id="screener-acc-quality"),
 
                     # --- Size group ---
                     dbc.AccordionItem([
                         _range_filter("Market cap (B HKD)", "mcap",
                                       0, 3000, 10),
-                    ], title="Size", item_id="size"),
+                    ], title="Size", item_id="size",
+                        id="screener-acc-size"),
                 ], active_item=["search", "classification"], always_open=True,
                     flush=True),
             ]),
@@ -244,6 +269,7 @@ def build_screener_tab() -> html.Div:
                 dbc.Row([
                     dbc.Col([
                         html.Label("P/E aggregation",
+                                    id="screener-label-pe-agg",
                                     className="stat-label mb-1"),
                         dbc.RadioItems(
                             id="screener-pe-aggregation",
@@ -288,6 +314,7 @@ def build_screener_tab() -> html.Div:
                                           color="primary", outline=True,
                                           size="sm"),
                               html.Span(" — defer-loaded to keep filter changes fast.",
+                                         id="screener-subsector-loader-blurb",
                                          className="text-muted small ms-2"),
                           ]),
                 dcc.Graph(id="screener-subsector-pe-chart",
@@ -299,7 +326,8 @@ def build_screener_tab() -> html.Div:
         # The big table
         dbc.Card([
             dbc.CardHeader([
-                html.Span("Tickers", style={"fontWeight": "600", "marginRight": "10px"}),
+                html.Span("Tickers", id="screener-table-title",
+                          style={"fontWeight": "600", "marginRight": "10px"}),
                 html.Span(id="screener-row-count",
                           style={"color": T.TEXT_MUTED, "fontSize": "0.85rem"}),
             ]),

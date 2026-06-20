@@ -518,6 +518,27 @@ class HistoricalPricesRepository:
             ).fetchone()
             return float(row[0]) if row else None
 
+    def bulk_get_price_series(self, tickers: list[str],
+                                  start_date: str,
+                                  end_date: str) -> dict:
+        """{ticker: [{date, adj_close}, …]} for every ticker in one
+        query. SQLite mirror of the cloud bulk method."""
+        if not tickers:
+            return {}
+        out: dict = {t: [] for t in tickers}
+        placeholders = ",".join("?" * len(tickers))
+        with self.db.get_connection() as conn:
+            rows = conn.execute(f"""
+                SELECT ticker, date, adj_close FROM historical_prices
+                WHERE ticker IN ({placeholders})
+                  AND date >= ? AND date <= ?
+                  AND adj_close IS NOT NULL
+                ORDER BY ticker, date ASC
+            """, (*tickers, start_date, end_date)).fetchall()
+            for t, d, ac in rows:
+                out[t].append({"date": str(d), "adj_close": float(ac)})
+        return out
+
     def bulk_prices_on_or_before(self, tickers: list[str],
                                     target_date: str) -> dict:
         """{ticker: latest adj_close at or before `target_date`} via one

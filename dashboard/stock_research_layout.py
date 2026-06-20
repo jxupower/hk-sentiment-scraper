@@ -37,21 +37,24 @@ DEFAULT_PERIOD_DAYS = 365
 def build_stock_research_tab() -> html.Div:
     return html.Div([
         # Caveat banner
-        dbc.Alert([
-            html.Strong("Single-stock deep research, "),
-            "structured as Richard Coffin / The Plain Bagel's 6-step framework. ",
-            "Honest gaps: DCF uses an FCF proxy (EPS × shares × 0.8) — adjust the slider; ",
-            "akshare data is as-restated, not point-in-time; ",
-            "no capex/insider/management-compensation data; ",
-            "forensic detector is heuristic only.",
-        ], color="info", className="small mb-3", dismissable=True),
+        dbc.Alert(id="sr-alert-banner", color="info",
+                    className="small mb-3", dismissable=True,
+                    children="Single-stock deep research, "
+                             "structured as Richard Coffin / The Plain Bagel's "
+                             "6-step framework. Honest gaps: DCF uses an FCF "
+                             "proxy (EPS × shares × 0.8) — adjust the slider; "
+                             "akshare data is as-restated, not point-in-time; "
+                             "no capex/insider/management-compensation data; "
+                             "forensic detector is heuristic only."),
 
         # Ticker selector
         dbc.Card([
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Ticker (e.g. 0700.HK)", className="text-muted small mb-1"),
+                        html.Label("Ticker (e.g. 0700.HK)",
+                                      id="sr-label-ticker",
+                                      className="text-muted small mb-1"),
                         dcc.Dropdown(
                             id="sr-ticker-select",
                             placeholder="Type to search HK tickers...",
@@ -59,7 +62,9 @@ def build_stock_research_tab() -> html.Div:
                         ),
                     ], width=6),
                     dbc.Col([
-                        html.Label("Research status", className="text-muted small mb-1"),
+                        html.Label("Research status",
+                                      id="sr-label-status",
+                                      className="text-muted small mb-1"),
                         dcc.Dropdown(
                             id="sr-status-select",
                             options=STATUS_OPTIONS, value=None,
@@ -75,11 +80,59 @@ def build_stock_research_tab() -> html.Div:
             ], style={"padding": "12px 16px"}),
         ], style=CARD_STYLE, className="mb-3"),
 
-        # Placeholder shown until a ticker is loaded
-        html.Div(id="sr-placeholder",
-                 children=html.P("Pick a ticker above to generate a deep-research report.",
-                                 className="text-muted text-center py-5"),
-                 style={"display": "block"}),
+        # One-shot trigger to populate the browse table once after the
+        # initial page render. max_intervals=1 means it fires exactly once
+        # and stops, no recurring overhead.
+        dcc.Interval(id="sr-browse-trigger", interval=500, n_intervals=0,
+                      max_intervals=1),
+
+        # Placeholder shown until a ticker is loaded. Browse-mode for the
+        # 75 sub-sector composites — clicking a row populates the ticker
+        # dropdown with the `&NAME` value and auto-fires "Load report".
+        # The whole placeholder Div is hidden as soon as the report renders.
+        html.Div(id="sr-placeholder", style={"display": "block"}, children=[
+            html.P("Pick a ticker above, or browse a sub-sector composite below.",
+                    id="sr-placeholder-text",
+                    className="text-muted text-center py-2"),
+            dbc.Card([
+                dbc.CardHeader([
+                    html.Span("Sub-sector composites",
+                                id="sr-browse-title",
+                                className="fw-bold me-2"),
+                    html.Span("— click a row to load the composite report",
+                                id="sr-browse-subtitle",
+                                className="text-muted small"),
+                ]),
+                dbc.CardBody(
+                    dash_table.DataTable(
+                        id="sr-subsector-browse-table",
+                        columns=[
+                            {"name": "Ticker",       "id": "ticker"},
+                            {"name": "Sub-sector",   "id": "sub_sector"},
+                            {"name": "Parent sector","id": "parent_sector"},
+                            {"name": "Constituents", "id": "n_constituents",
+                             "type": "numeric"},
+                        ],
+                        data=[],
+                        page_size=20,
+                        sort_action="native",
+                        filter_action="native",
+                        style_cell=T.DATATABLE_CELL,
+                        style_cell_conditional=[
+                            {"if": {"column_id": "ticker"}, "textAlign": "left",
+                             "fontWeight": "600", "color": T.PRIMARY,
+                             "cursor": "pointer", "textDecoration": "underline"},
+                            {"if": {"column_id": "sub_sector"}, "textAlign": "left",
+                             "cursor": "pointer"},
+                            {"if": {"column_id": "parent_sector"}, "textAlign": "left",
+                             "color": T.TEXT_MUTED, "fontSize": "0.85rem"},
+                        ],
+                        style_header=T.DATATABLE_HEADER,
+                        style_filter=T.DATATABLE_FILTER,
+                    ),
+                ),
+            ], style=CARD_STYLE),
+        ]),
 
         # Main report content — all in DOM, hidden until ticker loaded
         html.Div(id="sr-content", style={"display": "none"}, children=[
@@ -118,6 +171,91 @@ def build_stock_research_tab() -> html.Div:
                     ], align="center"),
                 ], style={"padding": "12px 16px"}),
             ], style=CARD_STYLE, className="mb-3"),
+
+            # Composite-only cards. Default hidden; the render callback
+            # toggles them to display:block when the user loads a `&NAME`
+            # sub-sector composite ticker. The single-stock cards below
+            # get the inverse treatment.
+            dbc.Card([
+                dbc.CardHeader([
+                    html.Span("Sub-sector composite", className="fw-bold me-2"),
+                    html.Span(id="sr-composite-summary",
+                                className="text-muted small"),
+                ]),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col(_stat_block("Constituents",
+                                              "sr-composite-stat-count"),
+                                width=2),
+                        dbc.Col(_stat_block("Total mkt cap",
+                                              "sr-composite-stat-mcap"),
+                                width=2),
+                        dbc.Col(_stat_block("Median P/E",
+                                              "sr-composite-stat-pe"),
+                                width=2),
+                        dbc.Col(_stat_block("Median P/B",
+                                              "sr-composite-stat-pb"),
+                                width=2),
+                        dbc.Col(_stat_block("Median ROE",
+                                              "sr-composite-stat-roe"),
+                                width=2),
+                        dbc.Col(_stat_block("Median yield",
+                                              "sr-composite-stat-div"),
+                                width=2),
+                    ], align="center"),
+                ], style={"padding": "12px 16px"}),
+            ], id="sr-section-composite-aggregate", style={**CARD_STYLE, "display": "none"},
+                className="mb-3"),
+
+            dbc.Card([
+                dbc.CardHeader([
+                    html.Span("Constituents", className="fw-bold me-2"),
+                    html.Span("— click a ticker to drill into the single-stock view",
+                                className="text-muted small"),
+                ]),
+                dbc.CardBody(
+                    dash_table.DataTable(
+                        id="sr-composite-table",
+                        columns=[
+                            {"name": "Ticker",        "id": "ticker"},
+                            {"name": "Name",          "id": "name"},
+                            {"name": "Sector",        "id": "sector"},
+                            {"name": "Mkt cap (B)",   "id": "market_cap_b",
+                             "type": "numeric"},
+                            {"name": "Weight %",      "id": "weight",
+                             "type": "numeric"},
+                            {"name": "P/E",           "id": "trailing_pe",
+                             "type": "numeric"},
+                            {"name": "P/B",           "id": "price_to_book",
+                             "type": "numeric"},
+                            {"name": "ROE %",         "id": "roe_pct",
+                             "type": "numeric"},
+                            {"name": "Earn growth %", "id": "growth_pct",
+                             "type": "numeric"},
+                            {"name": "Yield %",       "id": "div_yield",
+                             "type": "numeric"},
+                            {"name": "Data %",        "id": "completeness_pct",
+                             "type": "numeric"},
+                        ],
+                        data=[],
+                        page_size=25,
+                        sort_action="native",
+                        filter_action="native",
+                        style_cell=T.DATATABLE_CELL,
+                        style_cell_conditional=[
+                            {"if": {"column_id": "ticker"}, "textAlign": "left",
+                             "fontWeight": "600", "color": T.PRIMARY,
+                             "cursor": "pointer", "textDecoration": "underline"},
+                            {"if": {"column_id": "name"}, "textAlign": "left"},
+                            {"if": {"column_id": "sector"}, "textAlign": "left",
+                             "color": T.TEXT_MUTED, "fontSize": "0.85rem"},
+                        ],
+                        style_header=T.DATATABLE_HEADER,
+                        style_filter=T.DATATABLE_FILTER,
+                    ),
+                ),
+            ], id="sr-section-composite-constituents",
+                style={**CARD_STYLE, "display": "none"}, className="mb-3"),
 
             # Section 1 — Idea & Screening Context
             _section_card("1. Idea & Screening Context", "sr-section-idea", [
@@ -482,9 +620,22 @@ def build_stock_research_tab() -> html.Div:
     ])
 
 
+def _stat_block(label: str, value_id: str) -> html.Div:
+    """Hero number with small uppercase label above — used by the
+    sub-sector composite aggregate-stats card."""
+    return html.Div([
+        html.Div(label, className="stat-label"),
+        html.Div(id=value_id, className="hero-number",
+                  style={"fontSize": "1.3rem"}),
+    ])
+
+
 def _section_card(title: str, section_id: str, body_components: list) -> dbc.Card:
+    # Card header gets its own id (`<section_id>-title`) so the i18n
+    # callback can flip the title text on language change without rebuilding
+    # the whole card.
     return dbc.Card([
-        dbc.CardHeader(title, className="fw-bold"),
+        dbc.CardHeader(title, id=f"{section_id}-title", className="fw-bold"),
         dbc.CardBody(body_components),
     ], id=section_id, style=CARD_STYLE, className="mb-3")
 

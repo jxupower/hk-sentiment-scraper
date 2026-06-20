@@ -98,19 +98,133 @@ class ResearchReport:
     })
 
 
+# ============== Composite (sub-sector) research report ==============
+
+@dataclass
+class ConstituentRow:
+    """One member of a sub-sector composite. Surfaced in the Research tab's
+    constituents table. Fundamentals are latest-snapshot; weight is the
+    constituent's current mcap as a fraction of the sub-sector total."""
+    ticker: str
+    name: str
+    sector: str               # parent yf_sector
+    market_cap: Optional[float]
+    weight: float             # 0..1, latest-mcap relative share
+    trailing_pe: Optional[float]
+    price_to_book: Optional[float]
+    return_on_equity: Optional[float]
+    earnings_growth: Optional[float]
+    dividend_yield: Optional[float]
+    data_completeness: Optional[float]
+
+
+@dataclass
+class CompositeResearchReport:
+    """Sub-sector composite report — returned by `build_research_report`
+    when ticker starts with `&`. The Stock Research tab branches on
+    `isinstance(r, CompositeResearchReport)` to swap section visibility
+    and populate the constituents / aggregate-stats cards."""
+    ticker: str                          # "&BANKS"
+    name: str                            # "Banks"
+    sub_sector_id: str                   # "BANKS" (normalised slug)
+    n_constituents: int
+    total_market_cap: Optional[float]
+    aggregate_stats: dict                # {median_pe, median_pb, median_roe, …}
+    constituents: list                   # list[ConstituentRow], sorted by weight desc
+
+
+def build_composite_research_report(ticker: str, db_path: str
+                                       ) -> Optional[CompositeResearchReport]:
+    """Build the sub-sector view. Resolves the `&NAME` slug back to a
+    real `securities.sub_sector` label, pulls constituents + latest
+    fundamentals, computes aggregate medians + cap-weights."""
+    from analysis.data_loader import get_universe_fundamentals
+    from analysis.subsector_synth import label_for_ticker
+    from statistics import median
+    from storage.database import Database
+
+    db = Database(db_path)
+    label = label_for_ticker(ticker, db)
+    if not label:
+        return None
+
+    sub_id = ticker[1:] if ticker.startswith("&") else ticker
+    universe = get_universe_fundamentals(db)
+    members = [r for r in universe if r.get("sub_sector") == label]
+    if not members:
+        return None
+
+    def _f(v):
+        try:
+            x = float(v) if v is not None else None
+            return x if x is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    # Cap-weight by latest market_cap
+    caps = [(r, _f(r.get("market_cap"))) for r in members]
+    total_mcap = sum(m for _, m in caps if m and m > 0) or None
+    rows = []
+    for r, mc in caps:
+        weight = (mc / total_mcap) if (total_mcap and mc and mc > 0) else 0.0
+        rows.append(ConstituentRow(
+            ticker=r["ticker"],
+            name=r.get("name") or r["ticker"],
+            sector=r.get("yf_sector") or r.get("watchlist_sector") or "—",
+            market_cap=mc,
+            weight=weight,
+            trailing_pe=_f(r.get("trailing_pe")),
+            price_to_book=_f(r.get("price_to_book")),
+            return_on_equity=_f(r.get("return_on_equity")),
+            earnings_growth=_f(r.get("earnings_growth")),
+            dividend_yield=_f(r.get("dividend_yield")),
+            data_completeness=_f(r.get("data_completeness")),
+        ))
+    rows.sort(key=lambda c: -(c.weight or 0))
+
+    def _median(values):
+        vs = [v for v in values if v is not None]
+        return median(vs) if vs else None
+
+    agg = {
+        "median_pe":         _median(c.trailing_pe for c in rows),
+        "median_pb":         _median(c.price_to_book for c in rows),
+        "median_roe":        _median(c.return_on_equity for c in rows),
+        "median_growth":     _median(c.earnings_growth for c in rows),
+        "median_div_yield":  _median(c.dividend_yield for c in rows),
+        "median_completeness": _median(c.data_completeness for c in rows),
+    }
+    return CompositeResearchReport(
+        ticker=ticker,
+        name=label,
+        sub_sector_id=sub_id,
+        n_constituents=len(rows),
+        total_market_cap=total_mcap,
+        aggregate_stats=agg,
+        constituents=rows,
+    )
+
+
 def build_research_report(ticker: str, db_path: str,
                           sector_risk_path: Optional[str] = None,
                           user_dcf_inputs: Optional[dict] = None,
                           *,
                           skip_financial_statements: bool = False,
-                          ) -> Optional[ResearchReport]:
+                          ):
     """Compose the full report for one ticker. Returns None if the ticker has
     no data at all in our DB.
+
+    Returns `CompositeResearchReport` when `ticker` is a sub-sector composite
+    (`&NAME`) — a different shape that the Research tab renders into the
+    composite-only sections.
 
     `skip_financial_statements=True` skips the (potentially 3-8s) raw filings
     fetch in Section 3b. The dashboard uses this for the initial render and
     fetches statements lazily when the user clicks "Load Financial Statements".
     """
+    if ticker and ticker.startswith("&"):
+        return build_composite_research_report(ticker, db_path)
+
     from analysis._research_cache import get_or_build as get_universe_cache
     from analysis.data_loader import (
         get_or_fetch_fundamentals_history, get_or_fetch_prices, get_universe_fundamentals
@@ -169,7 +283,9 @@ def build_research_report(ticker: str, db_path: str,
     # Factor result + screen pass/fail come from a per-process cache so we
     # don't re-score the whole universe and re-scan all 4 screens on every
     # ticker load. See analysis/_research_cache.py — 15-min TTL.
-    cache = get_universe_cache(db_path, sector_risk_path)
+    # Pass our pre-loaded universe so a cache rebuild doesn't re-query it.
+    cache = get_universe_cache(db_path, sector_risk_path,
+                                 pre_loaded_universe=universe)
     factor_result = cache.factor_results.get(ticker)
     risk_flags = factor_result.flags if factor_result else []
 
@@ -197,8 +313,9 @@ def build_research_report(ticker: str, db_path: str,
     # Revenue CAGR: derive from cumulative product of (1 + revenue_growth)
     cagr_revenue = _cagr_from_growth_series(history)
 
-    # Peer scorecard
-    peer_scorecard = build_peer_scorecard(ticker, db_path)
+    # Peer scorecard — hand off the universe we already loaded so this
+    # doesn't do a second Supabase round-trip for the same data.
+    peer_scorecard = build_peer_scorecard(ticker, db_path, universe=universe)
 
     # Default DCF — feed the 3-tier resolver in analysis/dcf.py.
     # Tier 1 (preferred): median of available 5y CAGRs across earnings,

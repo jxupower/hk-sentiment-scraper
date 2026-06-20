@@ -36,6 +36,71 @@ from dashboard.charts import (
 
 
 def register_stock_research_callbacks(app, db_path: str):
+    # ----- i18n: flip every translatable label on language change -----
+    @app.callback(
+        Output("sr-alert-banner", "children"),
+        Output("sr-label-ticker", "children"),
+        Output("sr-label-status", "children"),
+        Output("sr-ticker-select", "placeholder"),
+        Output("sr-status-select", "placeholder"),
+        Output("sr-status-select", "options"),
+        Output("sr-load-btn", "children"),
+        Output("sr-placeholder-text", "children"),
+        Output("sr-browse-title", "children"),
+        Output("sr-browse-subtitle", "children"),
+        Output("sr-subsector-browse-table", "columns"),
+        Output("sr-section-idea-title", "children"),
+        Output("sr-section-business-title", "children"),
+        Output("sr-section-finance-title", "children"),
+        Output("sr-section-financials-title", "children"),
+        Output("sr-section-strategy-title", "children"),
+        Output("sr-section-valuation-title", "children"),
+        Output("sr-section-review-title", "children"),
+        Output("sr-save-btn", "children"),
+        Output("sr-export-btn", "children"),
+        Output("sr-devil-btn", "children"),
+        Input("user-language", "data"),
+    )
+    def i18n_research(lang):
+        from dashboard.i18n import T as I
+        lang = lang or "en"
+        status_options = [
+            {"label": I("research.status.raw", lang),         "value": "raw"},
+            {"label": I("research.status.researched", lang),  "value": "researched"},
+            {"label": I("research.status.watchlist", lang),   "value": "watchlist"},
+            {"label": I("research.status.owned", lang),       "value": "owned"},
+            {"label": I("research.status.rejected", lang),    "value": "rejected"},
+        ]
+        browse_cols = [
+            {"name": I("research.col.ticker", lang),         "id": "ticker"},
+            {"name": I("research.col.subsector", lang),      "id": "sub_sector"},
+            {"name": I("research.col.parent_sector", lang),  "id": "parent_sector"},
+            {"name": I("research.col.constituents", lang),   "id": "n_constituents",
+             "type": "numeric"},
+        ]
+        return (
+            I("research.alert", lang),
+            I("research.label.ticker", lang),
+            I("research.label.status", lang),
+            I("research.ph.ticker", lang),
+            I("research.ph.status", lang),
+            status_options,
+            I("research.btn.load", lang),
+            I("research.placeholder", lang),
+            I("research.subsector_browse", lang),
+            I("research.subsector_browse.sub", lang),
+            browse_cols,
+            I("research.sec1", lang),
+            I("research.sec2", lang),
+            I("research.sec3", lang),
+            I("research.sec3b", lang),
+            I("research.sec4", lang),
+            I("research.sec5", lang),
+            I("research.sec6", lang),
+            I("research.btn.save_notes", lang),
+            I("research.btn.export_md", lang),
+            I("research.btn.counter_args", lang),
+        )
     sector_risk_path = os.path.join(os.path.dirname(__file__), "..", "config",
                                      "sector_risk.yaml")
     # Lazy engine used by the V/Q/G bar click-through drawer. We re-instantiate
@@ -56,6 +121,10 @@ def register_stock_research_callbacks(app, db_path: str):
         prevent_initial_call=True,
     )
     def populate_ticker_options(search, current_value):
+        # Build composite options (≤75 entries; filtered by search if given).
+        # These render above the equity matches with a distinct prefix marker.
+        composite_options = _build_composite_dropdown_options(db_path, search)
+
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
             if search:
@@ -74,24 +143,114 @@ def register_stock_research_callbacks(app, db_path: str):
                     WHERE is_active = 1 AND is_watchlist = 1
                     ORDER BY ticker LIMIT 30
                 """).fetchall()
-            options = [{"label": f"{r['ticker']} — {r['name']}", "value": r["ticker"]}
-                       for r in rows]
+            equity_options = [{"label": f"{r['ticker']} — {r['name']}",
+                                "value": r["ticker"]}
+                               for r in rows]
+
+            options = composite_options + equity_options
 
             # Always include the current selection so Dash doesn't clear it
             if current_value and current_value not in [o["value"] for o in options]:
-                cur_row = conn.execute(
-                    "SELECT ticker, name FROM securities WHERE ticker = ?",
-                    (current_value,)
-                ).fetchone()
-                if cur_row:
-                    options.insert(0, {
-                        "label": f"{cur_row['ticker']} — {cur_row['name']}",
-                        "value": cur_row["ticker"],
-                    })
-                else:
-                    # Ticker not in DB; preserve it anyway so the value persists
+                if current_value.startswith("&"):
+                    # Preserve a composite even if it didn't match the
+                    # search filter
                     options.insert(0, {"label": current_value, "value": current_value})
+                else:
+                    cur_row = conn.execute(
+                        "SELECT ticker, name FROM securities WHERE ticker = ?",
+                        (current_value,)
+                    ).fetchone()
+                    if cur_row:
+                        options.insert(0, {
+                            "label": f"{cur_row['ticker']} — {cur_row['name']}",
+                            "value": cur_row["ticker"],
+                        })
+                    else:
+                        # Ticker not in DB; preserve it anyway so the value persists
+                        options.insert(0, {"label": current_value,
+                                            "value": current_value})
         return options
+
+    # Click a constituent ticker in the composite Research view → reloads
+    # the Research tab onto that single stock. Stays on the same tab; just
+    # mirrors the value back into the dropdown so the user can hit Load.
+    @app.callback(
+        Output("sr-ticker-select", "value", allow_duplicate=True),
+        Output("sr-load-btn", "n_clicks", allow_duplicate=True),
+        Input("sr-composite-table", "active_cell"),
+        State("sr-composite-table", "data"),
+        State("sr-load-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def drill_into_constituent(active_cell, rows, n_clicks):
+        if not active_cell or active_cell.get("column_id") != "ticker":
+            raise PreventUpdate
+        try:
+            t = rows[active_cell["row"]]["ticker"]
+        except (IndexError, KeyError, TypeError):
+            raise PreventUpdate
+        return t, (n_clicks or 0) + 1
+
+    # Browse-mode: populate the sub-sector composites table on initial page
+    # render. Fires once per session via the dummy Interval below — the
+    # placeholder Div is visible by default, so users see the list before
+    # touching anything else.
+    @app.callback(
+        Output("sr-subsector-browse-table", "data"),
+        Input("sr-browse-trigger", "n_intervals"),
+        Input("user-language", "data"),
+    )
+    def populate_subsector_browse(_, lang):
+        from analysis.subsector_synth import list_subsector_composites
+        from config.settings import get_sector_label, get_subsector_label
+        from storage.database import Database
+        try:
+            rows = list_subsector_composites(Database(db_path))
+        except Exception:
+            return []
+        lang = lang or "en"
+        # Translate display labels; underlying English `value` stays the
+        # canonical taxonomy key.
+        for r in rows:
+            r["sub_sector"] = get_subsector_label(r.get("sub_sector"), lang)
+            r["parent_sector"] = get_sector_label(r.get("parent_sector"), lang)
+        return rows
+
+    # Click a row in the browse table → mirror the composite's `&NAME` into
+    # the ticker dropdown. Does NOT auto-fire Load Report — the user clicks
+    # Load themselves, giving them a chance to change their mind or pick a
+    # different status / preview the selected value first.
+    #
+    # We also update `options` so the dropdown can render the composite's
+    # human label — `populate_ticker_options` only fires on `search_value`
+    # changes, so a programmatic `value` set wouldn't otherwise have a
+    # matching option to render.
+    @app.callback(
+        Output("sr-ticker-select", "value", allow_duplicate=True),
+        Output("sr-ticker-select", "options", allow_duplicate=True),
+        Input("sr-subsector-browse-table", "active_cell"),
+        State("sr-subsector-browse-table", "data"),
+        State("sr-ticker-select", "options"),
+        prevent_initial_call=True,
+    )
+    def select_subsector_from_browse(active_cell, rows, current_opts):
+        if not active_cell:
+            raise PreventUpdate
+        col = active_cell.get("column_id")
+        if col not in ("ticker", "sub_sector"):
+            raise PreventUpdate
+        try:
+            row = rows[active_cell["row"]]
+        except (IndexError, KeyError, TypeError):
+            raise PreventUpdate
+        ticker = row["ticker"]
+        label = (f"⊕ {ticker} — {row.get('sub_sector', '')} "
+                  f"({row.get('n_constituents', '')})")
+        opts = list(current_opts or [])
+        # Replace an existing entry for this ticker; otherwise prepend.
+        opts = [o for o in opts if o.get("value") != ticker]
+        opts.insert(0, {"label": label, "value": ticker})
+        return ticker, opts
 
     # ----- Main report render -----
     @app.callback(
@@ -133,6 +292,27 @@ def register_stock_research_callbacks(app, db_path: str):
         # (Screener cell click → Research tab) updates the visible selection.
         Output("sr-ticker-select", "value", allow_duplicate=True),
         Output("sr-ticker-select", "options", allow_duplicate=True),
+        # Sub-sector composite visibility + table + aggregate stats.
+        # When loading a `&NAME` ticker, the single-stock sections (Idea /
+        # Business / Finance / 3b / Strategy / Valuation / Review) hide
+        # and the two composite cards reveal.
+        Output("sr-section-idea", "style"),
+        Output("sr-section-business", "style"),
+        Output("sr-section-finance", "style"),
+        Output("sr-section-financials", "style"),
+        Output("sr-section-strategy", "style"),
+        Output("sr-section-valuation", "style"),
+        Output("sr-section-review", "style"),
+        Output("sr-section-composite-aggregate", "style"),
+        Output("sr-section-composite-constituents", "style"),
+        Output("sr-composite-summary", "children"),
+        Output("sr-composite-stat-count", "children"),
+        Output("sr-composite-stat-mcap", "children"),
+        Output("sr-composite-stat-pe", "children"),
+        Output("sr-composite-stat-pb", "children"),
+        Output("sr-composite-stat-roe", "children"),
+        Output("sr-composite-stat-div", "children"),
+        Output("sr-composite-table", "data"),
         Input("sr-load-btn", "n_clicks"),
         Input("cross-tab-nav", "data"),
         State("sr-ticker-select", "value"),
@@ -158,6 +338,15 @@ def register_stock_research_callbacks(app, db_path: str):
             opts.insert(0, {"label": ticker, "value": ticker})
         r = build_research_report(ticker, db_path, sector_risk_path,
                                     skip_financial_statements=True)
+        # Section-style shorthands: single-stock visible vs composite visible.
+        # CARD_STYLE is the base; we splice display on top.
+        from dashboard.stock_research_layout import CARD_STYLE
+        show = {**CARD_STYLE, "display": "block"}
+        hide = {**CARD_STYLE, "display": "none"}
+        single_visible = (show, show, show, show, show, show, show,
+                            hide, hide, "", "", "", "", "", "", "", [])
+        composite_visible_template = (hide, hide, hide, hide, hide, hide, hide,
+                                        show, show)
         if r is None:
             return (
                 {"display": "block"}, {"display": "none"},
@@ -167,7 +356,14 @@ def register_stock_research_callbacks(app, db_path: str):
                 "", "", "", None,
                 10, 5, 2.5, 9, "",
                 ticker, opts,  # mirror selection back to dropdown
+                *single_visible,
             )
+
+        # Composite branch — sub-sector dashboard view.
+        from analysis.research_orchestrator import CompositeResearchReport
+        if isinstance(r, CompositeResearchReport):
+            return _render_composite(r, ticker, opts,
+                                       composite_visible_template)
 
         # Header
         name = r.name
@@ -244,6 +440,7 @@ def register_stock_research_callbacks(app, db_path: str):
             strat_notes, val_notes, thesis, status,
             g15, g610, tg, wacc, g15_provenance,
             ticker, opts,  # mirror selection back to dropdown
+            *single_visible,
         )
 
     # ----- Section 3b: lazy financial statements load -----
@@ -550,13 +747,122 @@ def register_stock_research_callbacks(app, db_path: str):
 
 # ============== helper functions ==============
 
+def _render_composite(r, ticker: str, opts: list,
+                         composite_visible_template) -> tuple:
+    """Build the render_report return tuple for a CompositeResearchReport.
+    Matches the Outputs ordering exactly — same number of fields as the
+    single-stock path, just with single-stock-specific cells empty and
+    the composite cards populated."""
+    import math
+    def _fmt_pct(v, n=1):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "—"
+        return f"{v*100:.{n}f}%"
+    def _fmt_money(v):
+        if v is None or v <= 0:
+            return "—"
+        if v >= 1e12:
+            return f"${v/1e12:.2f}T"
+        if v >= 1e9:
+            return f"${v/1e9:.1f}B"
+        return f"${v/1e6:.0f}M"
+    agg = r.aggregate_stats or {}
+    summary = (f"{r.name} — {r.n_constituents} active constituents, "
+                f"total mkt cap {_fmt_money(r.total_market_cap)}")
+
+    def _rnd(v, n=2):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if math.isnan(f) or math.isinf(f) else round(f, n)
+        except (TypeError, ValueError):
+            return None
+
+    constituent_rows = []
+    for c in r.constituents:
+        constituent_rows.append({
+            "ticker": c.ticker,
+            "name": (c.name or "")[:30],
+            "sector": c.sector or "—",
+            "market_cap_b": _rnd((c.market_cap or 0) / 1e9, 1)
+                              if c.market_cap else None,
+            "weight": _rnd(c.weight * 100, 2),
+            "trailing_pe": _rnd(c.trailing_pe, 1),
+            "price_to_book": _rnd(c.price_to_book, 2),
+            "roe_pct": _rnd((c.return_on_equity or 0) * 100, 1)
+                          if c.return_on_equity is not None else None,
+            "growth_pct": _rnd((c.earnings_growth or 0) * 100, 1)
+                              if c.earnings_growth is not None else None,
+            "div_yield": _rnd(c.dividend_yield, 2),
+            "completeness_pct": _rnd((c.data_completeness or 0) * 100, 0),
+        })
+
+    # Header strip is reused: name = sub-sector label; sector slot doubles
+    # as the composite ticker symbol; sub_sector slot empty; price/mcap
+    # blank since these aren't stock-level numbers.
+    composite_section_outputs = composite_visible_template + (
+        summary,
+        f"{r.n_constituents}",
+        _fmt_money(r.total_market_cap),
+        f"{agg.get('median_pe'):.1f}x" if agg.get("median_pe") else "—",
+        f"{agg.get('median_pb'):.2f}x" if agg.get("median_pb") else "—",
+        _fmt_pct(agg.get("median_roe")),
+        _fmt_pct(agg.get("median_div_yield"), 2)
+            if agg.get("median_div_yield") and agg.get("median_div_yield") > 1
+            else (f"{agg.get('median_div_yield'):.2f}%"
+                  if agg.get("median_div_yield") else "—"),
+        constituent_rows,
+    )
+
+    # Single-stock outputs get empty/zero defaults — none of those
+    # components are visible during the composite view anyway, but Dash
+    # still expects values for every Output.
+    return (
+        {"display": "none"}, {"display": "block"},
+        r.name, "Sub-sector composite", r.ticker, "—", "—", [],
+        [], {},                                      # screens, factor bars
+        "", "", "", "", "", [],                      # business, swots, articles
+        [], {}, {}, {}, [],                          # cagr, charts, peer, forensic
+        "", "", "", None,                            # notes, status
+        10, 5, 2.5, 9, "",                           # dcf
+        ticker, opts,
+        *composite_section_outputs,
+    )
+
+
+def _build_composite_dropdown_options(db_path: str, search) -> list[dict]:
+    """Sub-sector composites for the Research-tab dropdown. Returns a
+    list of `{label, value}` ready for `dcc.Dropdown.options`. Filters by
+    `search` against either the composite slug or the human sub-sector
+    label so users can find e.g. 'Semiconductors' by typing 'semi'."""
+    from analysis.subsector_synth import list_subsector_composites
+    from storage.database import Database
+    try:
+        composites = list_subsector_composites(Database(db_path))
+    except Exception:
+        return []
+    if search:
+        q = search.lstrip("&").upper()
+        composites = [
+            c for c in composites
+            if q in c["ticker"].upper() or q in c["sub_sector"].upper()
+        ]
+    return [
+        {"label": f"⊕ {c['ticker']} — {c['sub_sector']} ({c['n_constituents']})",
+         "value": c["ticker"]}
+        for c in composites
+    ]
+
+
 def _factor_bar_chart(fr) -> go.Figure:
     if fr is None:
         return {}
     metrics = ["Value", "Quality", "Growth", "Sentiment"]
     values = [fr.value_pctile or 0, fr.quality_pctile or 0,
               fr.growth_pctile or 0, fr.sentiment_pctile or 0]
-    colors = [T.SUCCESS if v >= 70 else (T.WARNING if v < 30 else T.INFO) for v in values]
+    # CN/HK convention: high percentile (this stock leads its peers) = red.
+    colors = [T.PRICE_UP if v >= 70 else (T.WARNING if v < 30 else T.INFO) for v in values]
     # Hover hint: V/Q/G are click-through to a breakdown drawer; Sentiment is not.
     hover = [
         "<b>Value: %{x:.0f}</b><br>Click for component breakdown<extra></extra>",
@@ -599,7 +905,7 @@ def _render_factor_breakdown(b) -> html.Div:
             body.append(_factor_ingredient_table(b))
         return html.Div(body)
 
-    pct_color = (T.SUCCESS if b.pctile >= 70 else
+    pct_color = (T.PRICE_UP if b.pctile >= 70 else
                   (T.WARNING if b.pctile < 30 else T.INFO))
     return html.Div([
         # Header — factor name + pctile + bucket
@@ -1032,8 +1338,10 @@ def _render_dcf_walkthrough(inputs, result, dcf_inputs) -> html.Div:
                               style={"fontSize": "0.8rem"})
     else:
         mos_pct = result.margin_of_safety * 100
-        mos_color = (T.SUCCESS if mos_pct > 0
-                      else (T.DANGER if mos_pct < -20 else T.WARNING))
+        # CN/HK convention: positive MoS (intrinsic > price = stock has
+        # room to run up) = red; deeply negative = green.
+        mos_color = (T.PRICE_UP if mos_pct > 0
+                      else (T.PRICE_DOWN if mos_pct < -20 else T.WARNING))
         mos_html = html.Div([
             html.Code(f"MoS = (Intrinsic − Current) / Intrinsic = "
                       f"(${result.intrinsic_value_per_share:.2f} − "
@@ -1139,7 +1447,7 @@ def _build_article_feed(articles: list) -> html.Div:
     rows = []
     for a in articles[:20]:
         score = a.get("final_score", 0) or 0
-        color = T.SUCCESS if score > 0.05 else (T.DANGER if score < -0.05 else T.TEXT_FAINT)
+        color = T.PRICE_UP if score > 0.05 else (T.PRICE_DOWN if score < -0.05 else T.TEXT_FAINT)
         rows.append(html.Tr([
             html.Td((a.get("published_at") or "")[:10], className="text-muted small"),
             html.Td(dbc.Badge((a.get("source") or "").upper(), color="info",
@@ -1220,7 +1528,7 @@ def _build_strategy_stats_window(history_window: list,
         ret_pct = (last / first - 1) * 100 if first else 0
         hi, lo = max(closes), min(closes)
         ret_str = f"{ret_pct:+.1f}%"
-        ret_color = T.SUCCESS if ret_pct >= 0 else T.DANGER
+        ret_color = T.PRICE_UP if ret_pct >= 0 else T.PRICE_DOWN
         price_items = [
             ("Period return", html.Span(ret_str,
                                           style={"color": ret_color, "fontWeight": "700"})),

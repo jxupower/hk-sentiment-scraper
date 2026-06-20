@@ -39,7 +39,9 @@ def build_portfolio_tab() -> html.Div:
         # Load (a load means the user is leaving the previous compute behind).
         dcc.Store(id="portfolio-latest-optimal", data=None),
 
-        dbc.Alert([
+        dbc.Alert(id="portfolio-alert-banner", color="info",
+                    className="small mb-3", dismissable=True,
+                    children=[
             html.Strong("Portfolio Rebalancer — Max-Sharpe via Modern Portfolio Theory. "),
             "Enter your holdings (ticker + shares), add candidate tickers with 0 shares, "
             "pick a lookback + rebalance frequency, click Compute. The full universe (current + candidates) "
@@ -48,7 +50,7 @@ def build_portfolio_tab() -> html.Div:
             html.Em("Honest gaps: sample means are very noisy, so 'optimal weights' are a directional guide; "
                     "in-sample Sharpe is biased up by construction (the walk-forward backtest shows out-of-sample reality); "
                     "no transaction costs / taxes modelled."),
-        ], color="info", className="small mb-3", dismissable=True),
+        ]),
 
         # ============== Saved portfolios bar ==============
         # Two explicit save buttons:
@@ -60,7 +62,8 @@ def build_portfolio_tab() -> html.Div:
         # The Risk Forecast tab consumes those @-tickers like normal stocks.
         dbc.Card([
             dbc.CardHeader([
-                html.Span("Saved portfolios", className="fw-bold"),
+                html.Span("Saved portfolios", id="portfolio-saved-title",
+                          className="fw-bold"),
                 html.Span(" — name + Save to persist the current holdings to "
                           "Supabase. Once saved, they show up as synthetic "
                           "tickers (e.g. @CORE, @CORE$OPT) in the Risk "
@@ -73,6 +76,7 @@ def build_portfolio_tab() -> html.Div:
                 dbc.Row([
                     dbc.Col([
                         html.Label("Portfolio name",
+                                    id="portfolio-label-name",
                                     className="text-muted small mb-1"),
                         dbc.Input(
                             id="portfolio-name-input",
@@ -85,6 +89,7 @@ def build_portfolio_tab() -> html.Div:
                     ], xs=12, md=5),
                     dbc.Col([
                         html.Label("Existing portfolios",
+                                    id="portfolio-label-existing",
                                     className="text-muted small mb-1"),
                         dcc.Dropdown(
                             id="portfolio-saved-dropdown",
@@ -144,7 +149,8 @@ def build_portfolio_tab() -> html.Div:
         # ============== Holdings table ==============
         dbc.Card([
             dbc.CardHeader([
-                html.Span("Holdings", className="fw-bold"),
+                html.Span("Holdings", id="portfolio-holdings-title",
+                          className="fw-bold"),
                 html.Span(" — type ticker (e.g. 0700.HK or ^HSI) + shares. "
                           "Use shares=0 for candidates you're considering.",
                           style={"color": T.TEXT_MUTED, "fontSize": "0.8rem",
@@ -194,11 +200,13 @@ def build_portfolio_tab() -> html.Div:
         # flex-wrap fix, this prevents the button-group overflow that used
         # to push 1Y/3Y/5Y buttons into the 5d/21d/63d column.
         dbc.Card([
-            dbc.CardHeader("Parameters", className="fw-bold"),
+            dbc.CardHeader("Parameters", id="portfolio-params-title",
+                              className="fw-bold"),
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
                         html.Label("Lookback (estimation window)",
+                                    id="portfolio-label-lookback",
                                     className="text-muted small mb-1"),
                         dbc.RadioItems(
                             id="portfolio-lookback",
@@ -212,6 +220,7 @@ def build_portfolio_tab() -> html.Div:
                     ], xs=12, sm=6, md=3),
                     dbc.Col([
                         html.Label("Rebalance frequency (backtest)",
+                                    id="portfolio-label-rebal",
                                     className="text-muted small mb-1"),
                         dbc.RadioItems(
                             id="portfolio-rebalance",
@@ -225,7 +234,8 @@ def build_portfolio_tab() -> html.Div:
                     ], xs=12, sm=6, md=4),
                     dbc.Col([
                         html.Label([
-                            "Per-asset cap ",
+                            html.Span("Per-asset cap ",
+                                          id="portfolio-label-weight-cap"),
                             html.Span(id="portfolio-cap-label",
                                        style={"color": T.PRIMARY,
                                               "fontWeight": "600"}),
@@ -240,6 +250,7 @@ def build_portfolio_tab() -> html.Div:
                     ], xs=12, sm=6, md=3),
                     dbc.Col([
                         html.Label("Risk-free rate (%, ann.)",
+                                    id="portfolio-label-rf",
                                     className="text-muted small mb-1"),
                         dcc.Input(
                             id="portfolio-rf",

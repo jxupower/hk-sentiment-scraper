@@ -20,6 +20,63 @@ from dashboard.screener_presets import INVESTOR_PRESETS
 _manual_price_refresh_lock = threading.Lock()
 
 
+# ---- Tier-1 perf caches ---------------------------------------------------
+# All caches are in-process. Flushed in `_flush_perf_caches()` when the
+# manual "Refresh prices now" button fires so a price refresh is reflected
+# without waiting for natural TTL expiry.
+
+# 60s TTL on the Screener's universe-wide latest-snapshot pull. Underlying
+# data refreshes daily via cron; auto-refresh interval is 5 min anyway, so
+# 60s lag is well within tolerance.
+_QUERY_LATEST_CACHE: dict = {"rows": None, "expires": 0.0}
+_QUERY_LATEST_TTL = 60
+
+# 5-min TTL on per-row "Get price" clicks. Same ticker re-clicked during a
+# session returns instantly. Cron refreshes prices once a day.
+_PRICE_CACHE: dict = {}   # {ticker: (price, expires)}
+_PRICE_TTL = 300
+
+# 60s TTL on built P/E figures keyed by (chart_id, aggregation, row_set
+# signature). Sliders that drag without changing bucket membership re-use
+# the cached figure instead of triggering a fresh Plotly SVG build.
+_PE_CHART_CACHE: dict = {}
+_PE_CHART_TTL = 60
+
+
+def _flush_perf_caches() -> None:
+    """Wipe price + query + chart caches. Called from the manual price-
+    refresh button so freshly-pulled prices surface immediately."""
+    _QUERY_LATEST_CACHE["rows"] = None
+    _QUERY_LATEST_CACHE["expires"] = 0.0
+    _PRICE_CACHE.clear()
+    _PE_CHART_CACHE.clear()
+
+
+def _row_set_signature(rows: list) -> tuple:
+    """Cheap signature that flips whenever the filtered row set's identity
+    or aggregate stats would change which bucket-sums the P/E chart sees.
+    Hashes ticker count + cumulative trailing_pe + market_cap so adding,
+    removing, or value-shifting any row in the filtered set invalidates
+    the cached figure."""
+    n = len(rows)
+    sum_pe = 0.0
+    sum_mc = 0.0
+    for r in rows:
+        pe = r.get("trailing_pe")
+        mc = r.get("market_cap")
+        if pe:
+            try:
+                sum_pe += float(pe)
+            except (TypeError, ValueError):
+                pass
+        if mc:
+            try:
+                sum_mc += float(mc)
+            except (TypeError, ValueError):
+                pass
+    return (n, round(sum_pe, 2), round(sum_mc, 0))
+
+
 # Range-filter primitives — moved to analysis/preset_filter.py so the
 # Backtest engine can apply preset constraints with identical semantics.
 # Re-exported here so the existing call sites below don't need rewriting.
@@ -73,6 +130,158 @@ _AGG = {
 
 
 def register_screener_callbacks(app, db_path: str):
+    # ----- i18n: flip every translatable element when the language Store changes -----
+    # Fires on language toggle. Outputs every visible label on the Screener
+    # tab. DataTable columns + dropdown placeholders + button children + stat
+    # labels + accordion titles + preset button text are all updated in one
+    # shot here (single round-trip on language change).
+    @app.callback(
+        # Stat-block labels
+        Output("screener-stat-total-label", "children"),
+        Output("screener-stat-with-data-label", "children"),
+        Output("screener-stat-latest-label", "children"),
+        # Buttons (children) and refresh-prices button label
+        Output("screener-refresh-btn", "children"),
+        Output("screener-refresh-prices-btn", "children"),
+        Output("screener-clear-filters-btn", "children"),
+        Output("screener-load-subsector-btn", "children"),
+        # Presets card
+        Output("screener-presets-title", "children"),
+        Output("screener-presets-subtitle", "children"),
+        # Filters card title + accordion titles
+        Output("screener-filters-title", "children"),
+        Output("screener-acc-search", "title"),
+        Output("screener-acc-classification", "title"),
+        Output("screener-acc-valuation", "title"),
+        Output("screener-acc-quality", "title"),
+        Output("screener-acc-size", "title"),
+        # Labels inside Search + Classification accordion items
+        Output("screener-label-ticker-contains", "children"),
+        Output("screener-label-name-contains", "children"),
+        Output("screener-label-sector", "children"),
+        Output("screener-label-sub-sector", "children"),
+        Output("screener-label-min-completeness", "children"),
+        Output("screener-label-pe-agg", "children"),
+        # Placeholders
+        Output("screener-ticker-search", "placeholder"),
+        Output("screener-name-search", "placeholder"),
+        Output("screener-sector-filter", "placeholder"),
+        Output("screener-subsector-filter", "placeholder"),
+        # Range filter labels (Valuation + Quality + Size)
+        Output("screener-pe-range-label", "children"),
+        Output("screener-fwdpe-range-label", "children"),
+        Output("screener-pb-range-label", "children"),
+        Output("screener-evebitda-range-label", "children"),
+        Output("screener-divyield-range-label", "children"),
+        Output("screener-roe-range-label", "children"),
+        Output("screener-egrowth-range-label", "children"),
+        Output("screener-de-range-label", "children"),
+        Output("screener-beta-range-label", "children"),
+        Output("screener-mcap-range-label", "children"),
+        # P/E aggregation toggle options
+        Output("screener-pe-aggregation", "options"),
+        # Range hint blurb
+        Output("screener-range-hint", "children"),
+        # Sub-sector chart loader blurb
+        Output("screener-subsector-loader-blurb", "children"),
+        # Table title + columns
+        Output("screener-table-title", "children"),
+        Output("screener-table", "columns"),
+        # Investor preset button labels + sub-titles
+        *[Output(f"screener-preset-{p['id']}-label", "children")
+          for p in INVESTOR_PRESETS],
+        *[Output(f"screener-preset-{p['id']}-title", "children")
+          for p in INVESTOR_PRESETS],
+        Input("user-language", "data"),
+    )
+    def i18n_screener(lang):
+        from dashboard.i18n import T as I
+        lang = lang or "en"
+        # Range filter labels keyed by slug — order must match the Outputs above
+        range_labels = [
+            I("screener.label.trailing_pe", lang),
+            I("screener.label.forward_pe", lang),
+            I("screener.label.pb", lang),
+            I("screener.label.evebitda", lang),
+            I("screener.label.dividend_yield", lang),
+            I("screener.label.roe", lang),
+            I("screener.label.earnings_growth", lang),
+            I("screener.label.de", lang),
+            I("screener.label.beta", lang),
+            I("screener.label.mcap", lang),
+        ]
+        agg_options = [
+            {"label": I("common.median", lang), "value": "median"},
+            {"label": I("common.mean", lang), "value": "mean"},
+            {"label": I("common.cap_weighted", lang), "value": "cap_weighted"},
+        ]
+        cols = [
+            {"name": I("screener.col.ticker", lang),       "id": "ticker"},
+            {"name": I("screener.col.name", lang),         "id": "name"},
+            {"name": I("screener.col.sector", lang),       "id": "yf_sector"},
+            {"name": I("screener.col.sub_sector", lang),   "id": "sub_sector"},
+            {"name": I("screener.col.price", lang),        "id": "current_price"},
+            {"name": I("screener.col.mcap_b", lang),       "id": "market_cap_b",
+             "type": "numeric"},
+            {"name": I("screener.col.pe", lang),           "id": "trailing_pe",
+             "type": "numeric"},
+            {"name": I("screener.col.fwd_pe", lang),       "id": "forward_pe",
+             "type": "numeric"},
+            {"name": I("screener.col.pb", lang),           "id": "price_to_book",
+             "type": "numeric"},
+            {"name": I("screener.col.evebitda", lang),     "id": "ev_to_ebitda",
+             "type": "numeric"},
+            {"name": I("screener.col.div_yield", lang),    "id": "dividend_yield",
+             "type": "numeric"},
+            {"name": I("screener.col.roe", lang),          "id": "return_on_equity_pct",
+             "type": "numeric"},
+            {"name": I("screener.col.de", lang),           "id": "debt_to_equity",
+             "type": "numeric"},
+            {"name": I("screener.col.beta", lang),         "id": "beta",
+             "type": "numeric"},
+            {"name": I("screener.col.completeness", lang), "id": "completeness_pct",
+             "type": "numeric"},
+        ]
+        preset_labels = [I(f"screener.preset.{p['id']}.label", lang)
+                          for p in INVESTOR_PRESETS]
+        preset_titles = [I(f"screener.preset.{p['id']}.title", lang)
+                          for p in INVESTOR_PRESETS]
+        return (
+            I("screener.stat.universe", lang),
+            I("screener.stat.with_data", lang),
+            I("screener.stat.latest", lang),
+            I("screener.btn.refresh", lang),
+            I("screener.btn.refresh_prices", lang),
+            I("screener.btn.clear_filters", lang),
+            I("screener.btn.load_subsector_chart", lang),
+            I("screener.presets.title", lang),
+            I("screener.presets.subtitle", lang),
+            I("screener.filters", lang),
+            I("screener.accordion.search", lang),
+            I("screener.accordion.classification", lang),
+            I("screener.accordion.valuation", lang),
+            I("screener.accordion.quality", lang),
+            I("screener.accordion.size", lang),
+            I("screener.label.ticker_contains", lang),
+            I("screener.label.name_contains", lang),
+            I("screener.label.sector", lang),
+            I("screener.label.sub_sector", lang),
+            I("screener.label.min_completeness", lang),
+            I("screener.label.pe_aggregation", lang),
+            I("screener.ph.ticker", lang),
+            I("screener.ph.name", lang),
+            I("screener.ph.all_sectors", lang),
+            I("screener.ph.all_subsectors", lang),
+            *range_labels,
+            agg_options,
+            I("screener.range_hint", lang),
+            I("screener.chart.defer_blurb", lang),
+            I("screener.table.title", lang),
+            cols,
+            *preset_labels,
+            *preset_titles,
+        )
+
     # Cell-click on the screener table's ticker column → jump to Research tab
     # and load that ticker. Uses the cross-tab-nav Store as the trigger, which
     # the Research-tab callbacks listen for.
@@ -116,7 +325,12 @@ def register_screener_callbacks(app, db_path: str):
             raise PreventUpdate
         # Don't refetch — once a row holds a number (or the "—" miss marker),
         # leave it. Clicking again would be a no-op tax on Supabase.
-        if row.get("current_price") != "Get price":
+        # Accept the English placeholder OR its translated form so a row
+        # populated under one language still recognises a re-click under the
+        # other.
+        from dashboard.i18n import EN, ZH
+        placeholders = {EN.get("screener.get_price"), ZH.get("screener.get_price")}
+        if row.get("current_price") not in placeholders:
             raise PreventUpdate
         ticker = row.get("ticker")
         if not ticker:
@@ -173,12 +387,20 @@ def register_screener_callbacks(app, db_path: str):
     @app.callback(
         Output("screener-refresh-prices-status", "children"),
         Input("screener-refresh-prices-btn", "n_clicks"),
+        State("user-language", "data"),
         prevent_initial_call=True,
     )
-    def refresh_prices_manually(_n):
+    def refresh_prices_manually(_n, lang):
+        from dashboard.i18n import T as I
+        lang = lang or "en"
         if not _manual_price_refresh_lock.acquire(blocking=False):
-            return "Already running — please wait."
+            return I("screener.status.refresh_running", lang)
         started = datetime.now().strftime("%H:%M:%S")
+        # Flush perf caches immediately so the user's next interaction
+        # picks up the refreshed snapshot rather than waiting for natural
+        # TTL expiry. (The refresh itself runs in a daemon thread; cache
+        # warming for new prices happens on the next click after it lands.)
+        _flush_perf_caches()
 
         def _run():
             try:
@@ -191,10 +413,12 @@ def register_screener_callbacks(app, db_path: str):
                 fetch_many(tickers, get_prices_repo(db), period="5d")
             finally:
                 _manual_price_refresh_lock.release()
+                # Second flush after the refresh lands so any stale-cached
+                # rows from BEFORE the refresh started don't linger.
+                _flush_perf_caches()
 
         threading.Thread(target=_run, daemon=True).start()
-        return (f"Refresh started at {started} — completes in ~5-10 min. "
-                "Dashboard auto-refresh will pick up new data.")
+        return I("screener.status.refresh_started", lang, time=started)
 
     # Click-to-filter on the sector P/E chart. Two click sources, same handler:
     #   * Bar click -> Dash fires `clickData`
@@ -297,14 +521,18 @@ def register_screener_callbacks(app, db_path: str):
         Output("screener-sector-filter", "options"),
         Output("screener-subsector-filter", "options"),
         *update_inputs,
+        State("user-language", "data"),
     )
     def update_screener(_n, _clicks, sector_filter, subsector_filter,
                           min_completeness, pe_aggregation,
-                          ticker_query, name_query, *slider_values_then_loaded):
-        # Last positional arg is the load-flag Input; everything before it is
-        # the slider [lo, hi] for each NUMERIC_FILTERS entry, in declaration order.
-        subsector_loaded = slider_values_then_loaded[-1]
-        slider_values = slider_values_then_loaded[:-1]
+                          ticker_query, name_query, *slider_values_then_loaded_lang):
+        from dashboard.i18n import T as I
+        from config.settings import get_sector_label, get_subsector_label
+        # Last positional arg is the user-language State; second-to-last is
+        # the load-flag Input; everything before is the slider [lo, hi].
+        lang = slider_values_then_loaded_lang[-1] or "en"
+        subsector_loaded = slider_values_then_loaded_lang[-2]
+        slider_values = slider_values_then_loaded_lang[:-2]
 
         rows = _query_latest(db_path)
         total_universe = _count_universe(db_path)
@@ -348,13 +576,19 @@ def register_screener_callbacks(app, db_path: str):
                         if _in_range(_xform_value(xform_key, r.get(key)),
                                       lo, hi)]
 
-        table_data = [_format_row(r) for r in filtered]
+        table_data = [_format_row(r, lang) for r in filtered]
 
-        # Dropdown options come from the full snapshot population, not filtered view
+        # Dropdown options come from the full snapshot population, not filtered
+        # view. The displayed label translates via the sub_sectors_zh / parent_
+        # sectors_zh maps in config/sub_sectors.yaml; the underlying `value`
+        # stays English so the SQL filter keeps matching the DB column.
         sector_set = sorted({r["yf_sector"] for r in rows if r.get("yf_sector")})
-        sector_options = [{"label": s, "value": s} for s in sector_set]
-        subsector_set = sorted({r["sub_sector"] for r in rows if r.get("sub_sector")})
-        subsector_options = [{"label": s, "value": s} for s in subsector_set]
+        sector_options = [{"label": get_sector_label(s, lang), "value": s}
+                            for s in sector_set]
+        subsector_set = sorted({r["sub_sector"] for r in rows
+                                  if r.get("sub_sector")})
+        subsector_options = [{"label": get_subsector_label(s, lang), "value": s}
+                              for s in subsector_set]
 
         agg = pe_aggregation or "median"
         chart = _build_sector_pe_chart(filtered, aggregation=agg)
@@ -362,16 +596,21 @@ def register_screener_callbacks(app, db_path: str):
         # at least once this session. Saves ~1s per filter change before then.
         subsector_chart = (_build_subsector_pe_chart(filtered, aggregation=agg)
                             if subsector_loaded else dash.no_update)
-        agg_label = _AGG.get(agg, _AGG["median"])[0]
-        sector_header = f"{agg_label} P/E by Sector"
-        subsector_header = f"{agg_label} P/E by Sub-Sector"
+        agg_lookup = {"median": "common.median", "mean": "common.mean",
+                       "cap_weighted": "common.cap_weighted"}
+        agg_label_translated = I(agg_lookup.get(agg, "common.median"), lang)
+        sector_header = I("screener.chart.sector_pe", lang,
+                            agg=agg_label_translated)
+        subsector_header = I("screener.chart.subsector_pe", lang,
+                                agg=agg_label_translated)
 
         return (
             table_data,
             f"{total_universe:,}",
             f"{len(rows):,}",
             latest_date,
-            f"{len(filtered):,} of {len(rows):,} matching filters",
+            I("screener.row_count", lang,
+                count=len(filtered), total=len(rows)),
             chart,
             subsector_chart,
             sector_header,
@@ -444,7 +683,13 @@ def _register_range_sync(app, slug: str, lo: float, hi: float):
 
 
 def _query_latest(db_path: str) -> list[dict]:
-    """Latest snapshot per ticker, joined with securities for name + watchlist flag."""
+    """Latest snapshot per ticker, joined with securities for name + watchlist flag.
+    60s TTL cached: every filter slider + auto-refresh tick used to re-run
+    this 500-800ms query; now it hits warm cache for the next minute."""
+    now = time.time()
+    if (_QUERY_LATEST_CACHE["rows"] is not None
+            and _QUERY_LATEST_CACHE["expires"] > now):
+        return _QUERY_LATEST_CACHE["rows"]
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
@@ -465,7 +710,10 @@ def _query_latest(db_path: str) -> list[dict]:
             WHERE s.is_active = 1
             ORDER BY f.market_cap DESC NULLS LAST
         """).fetchall()
-        return [dict(r) for r in rows]
+        out = [dict(r) for r in rows]
+        _QUERY_LATEST_CACHE["rows"] = out
+        _QUERY_LATEST_CACHE["expires"] = now + _QUERY_LATEST_TTL
+        return out
 
 
 def _count_universe(db_path: str) -> int:
@@ -493,19 +741,31 @@ def _latest_price_date(db_path: str) -> str | None:
 def _fetch_one_price(db_path: str, ticker: str) -> float | None:
     """Single-ticker latest adj_close — backs the per-row 'Get price' click.
     Routes through the factory so it hits Supabase under USE_CLOUD_DB=true.
-    Indexed lookup; sub-second even on the pooler."""
+    Indexed lookup; sub-second even on the pooler. 5-min TTL cache means
+    re-clicking the same ticker (or returning to the Screener within the
+    session) is instant."""
+    now = time.time()
+    hit = _PRICE_CACHE.get(ticker)
+    if hit and hit[1] > now:
+        return hit[0]
     try:
         from storage.database import Database
         from storage.factory import get_prices_repo
         repo = get_prices_repo(Database(db_path))
-        return repo.latest_price(ticker)
+        price = repo.latest_price(ticker)
     except Exception:
-        return None
+        price = None
+    _PRICE_CACHE[ticker] = (price, now + _PRICE_TTL)
+    return price
 
 
-def _format_row(r: dict) -> dict:
-    """Apply display formatting (rounding, ROE→%, market cap→billions, watchlist star)."""
+def _format_row(r: dict, lang: str = "en") -> dict:
+    """Apply display formatting (rounding, ROE→%, market cap→billions, watchlist star).
+    `lang` translates the sector / sub-sector labels (display only) and the
+    'Get price' placeholder."""
     import math
+    from dashboard.i18n import T as I
+    from config.settings import get_sector_label, get_subsector_label
     def rnd(v, digits=2):
         if v is None:
             return None
@@ -520,16 +780,18 @@ def _format_row(r: dict) -> dict:
     market_cap = r.get("market_cap")
     roe = r.get("return_on_equity")
     completeness = r.get("data_completeness")
+    sector_raw = r.get("yf_sector") or r.get("watchlist_sector") or "—"
+    sub_raw = r.get("sub_sector") or "—"
 
     return {
         "ticker": r.get("ticker"),
         "name": (r.get("name") or "")[:30],
-        "yf_sector": r.get("yf_sector") or r.get("watchlist_sector") or "—",
-        "sub_sector": r.get("sub_sector") or "—",
+        "yf_sector": get_sector_label(sector_raw, lang) if sector_raw != "—" else "—",
+        "sub_sector": get_subsector_label(sub_raw, lang) if sub_raw != "—" else "—",
         # Lazy-fetched: click the cell to populate. Avoids the ~20s Supabase
         # bulk pull at page-load and lets the user pay the cost only for
         # tickers they care about.
-        "current_price": "Get price",
+        "current_price": I("screener.get_price", lang),
         "market_cap_b": rnd(market_cap / 1e9, 1) if market_cap else None,
         "trailing_pe": rnd(r.get("trailing_pe"), 1),
         "forward_pe": rnd(r.get("forward_pe"), 1),
@@ -544,13 +806,23 @@ def _format_row(r: dict) -> dict:
 
 
 def _build_sector_pe_chart(rows: list[dict], aggregation: str = "median") -> go.Figure:
-    """Trailing P/E per sector (only sectors with ≥3 tickers, P/E in 0-200 range)."""
-    return _build_pe_chart_by_key(
+    """Trailing P/E per sector (only sectors with ≥3 tickers, P/E in 0-200 range).
+    Memoised by (chart_id, aggregation, row-set signature) — slider drags
+    that don't change membership re-use the cached Plotly figure instead of
+    re-doing ~2s of SVG generation."""
+    now = time.time()
+    key = ("sector", aggregation, _row_set_signature(rows))
+    cached = _PE_CHART_CACHE.get(key)
+    if cached and cached[1] > now:
+        return cached[0]
+    fig = _build_pe_chart_by_key(
         rows, aggregation=aggregation,
         bucket_key=lambda r: r.get("yf_sector") or r.get("watchlist_sector"),
         empty_message=("Need ≥3 tickers per sector with valid P/E. "
                        "Run 'fundamentals refresh --tickers ALL' to populate."),
     )
+    _PE_CHART_CACHE[key] = (fig, now + _PE_CHART_TTL)
+    return fig
 
 
 def _build_subsector_pe_chart(rows: list[dict], aggregation: str = "median") -> go.Figure:
@@ -562,14 +834,23 @@ def _build_subsector_pe_chart(rows: list[dict], aggregation: str = "median") -> 
     `clickable_labels=False` — with ~75 buckets, the captureevents annotations
     used to make y-tick labels clickable were the dominant client-side render
     cost (each annotation = an SVG element with event listeners). Bars stay
-    clickable for filtering; only the text label loses click affordance."""
-    return _build_pe_chart_by_key(
+    clickable for filtering; only the text label loses click affordance.
+
+    Memoised the same way as _build_sector_pe_chart."""
+    now = time.time()
+    key = ("subsector", aggregation, _row_set_signature(rows))
+    cached = _PE_CHART_CACHE.get(key)
+    if cached and cached[1] > now:
+        return cached[0]
+    fig = _build_pe_chart_by_key(
         rows, aggregation=aggregation,
         bucket_key=lambda r: r.get("sub_sector"),
         empty_message=("Need ≥3 tickers per sub-sector with valid P/E. "
                        "Filter to a parent sector or backfill yfinance metadata."),
         clickable_labels=False,
     )
+    _PE_CHART_CACHE[key] = (fig, now + _PE_CHART_TTL)
+    return fig
 
 
 def _build_pe_chart_by_key(rows: list[dict], bucket_key, empty_message: str,

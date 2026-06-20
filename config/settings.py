@@ -143,6 +143,48 @@ def get_subsector_for_ticker(ticker: str, watchlist: dict,
     return _get_sub_sector_map(watchlist, securities_repo).get(ticker)
 
 
+# ============================================================================
+# 中文 display-label helpers — purely cosmetic, no resolver behaviour.
+# Backends store English labels as canonical values; these functions only
+# translate at the display boundary when `lang == "zh"`.
+# ============================================================================
+
+_SUB_SECTORS_YAML_CACHE: dict | None = None
+
+
+def _load_sub_sectors_yaml() -> dict:
+    """Lazy-load `config/sub_sectors.yaml` once per process. The translation
+    maps live in the same file as the resolver taxonomy so all sub-sector
+    state stays co-located."""
+    global _SUB_SECTORS_YAML_CACHE
+    if _SUB_SECTORS_YAML_CACHE is None:
+        import os
+        import yaml
+        path = os.path.join(os.path.dirname(__file__), "sub_sectors.yaml")
+        with open(path, "r", encoding="utf-8") as f:
+            _SUB_SECTORS_YAML_CACHE = yaml.safe_load(f) or {}
+    return _SUB_SECTORS_YAML_CACHE
+
+
+def get_subsector_label(name: str | None, lang: str = "en") -> str:
+    """Translate a sub-sector display label. Returns the input unchanged
+    when `lang != "zh"`, when `name` is empty/None, or when no Chinese
+    label is registered for that sub-sector (graceful fall-back keeps the
+    English form visible rather than crashing)."""
+    if lang != "zh" or not name:
+        return name or ""
+    cfg = _load_sub_sectors_yaml()
+    return ((cfg.get("sub_sectors_zh") or {}).get(name)) or name
+
+
+def get_sector_label(name: str | None, lang: str = "en") -> str:
+    """Same as `get_subsector_label` but for the 11 parent sectors."""
+    if lang != "zh" or not name:
+        return name or ""
+    cfg = _load_sub_sectors_yaml()
+    return ((cfg.get("parent_sectors_zh") or {}).get(name)) or name
+
+
 _SECTOR_BROAD_TERMS: dict[str, list[str]] = {
     "Platforms & Cloud Infrastructure": ["China tech", "Chinese tech", "China internet", "China platform",
                               "China e-commerce", "China digital", "China app", "China mobile internet",

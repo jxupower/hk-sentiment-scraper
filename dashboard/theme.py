@@ -41,9 +41,17 @@ WARNING_SOFT    = "#fef3c7"
 INFO            = "#0ea5e9"      # cyan-ish info
 INFO_SOFT        = "#e0f2fe"
 
-# Sentiment direction (replaces old DIRECTION_COLORS)
-UP              = SUCCESS
-DOWN            = DANGER
+# Stock-price direction (CN/HK convention: red = up, green = down).
+# PRICE_UP and PRICE_DOWN are the canonical names; UP and DOWN are kept as
+# backward-compat aliases that now follow the same convention. Use these
+# everywhere a colour encodes a price / return / sentiment direction.
+# Use SUCCESS / DANGER directly only for non-price semantics: BUY/SELL
+# action labels, save-success messages, SWOT strengths/threats, severity
+# flags, screen-pass indicators.
+PRICE_UP        = DANGER         # red — bullish, prices rising
+PRICE_DOWN      = SUCCESS        # green — bearish, prices falling
+UP              = PRICE_UP
+DOWN            = PRICE_DOWN
 MIXED           = WARNING
 NEUTRAL         = "#94a3b8"      # slate
 

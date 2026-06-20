@@ -17,6 +17,34 @@ from dashboard.risk_layout import INDEX_OPTIONS
 
 
 def register_risk_callbacks(app, db_path: str):
+    # ----- i18n: flip every translatable label on language change -----
+    @app.callback(
+        Output("risk-label-ticker", "children"),
+        Output("risk-label-window", "children"),
+        Output("risk-label-horizon", "children"),
+        Output("risk-load-btn", "children"),
+        Output("risk-fan-title", "children"),
+        Output("risk-volcone-title", "children"),
+        Output("risk-var-title", "children"),
+        Output("risk-prob-title", "children"),
+        Output("risk-dd-title", "children"),
+        Input("user-language", "data"),
+    )
+    def i18n_risk(lang):
+        from dashboard.i18n import T as I
+        lang = lang or "en"
+        return (
+            I("risk.label.ticker", lang),
+            I("risk.label.window", lang),
+            I("risk.label.horizon", lang),
+            I("risk.btn.load", lang),
+            I("risk.fan_chart", lang),
+            I("risk.vol_cone", lang),
+            I("risk.var_table", lang),
+            I("risk.prob_table", lang),
+            I("risk.drawdown_hist", lang),
+        )
+
 
     # ----- Ticker autocomplete dropdown -----
     # Indices are always pinned to the top of the list. Stocks come from
@@ -34,6 +62,10 @@ def register_risk_callbacks(app, db_path: str):
         # runs it on the max-Sharpe optimal-weight series. These are pinned
         # right under the indices so the user can find them fast.
         portfolio_opts = _build_portfolio_options(search)
+        # Sub-sector composite tickers (`&BANKS`, `&SEMICONDUCTORS_AND_EQUIPMENT`, …)
+        # also surface in the dropdown so the Risk Forecast can fit GARCH on a
+        # whole sub-sector. Pinned between portfolios and stocks.
+        composite_opts = _build_subsector_options(db_path, search)
 
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -55,11 +87,11 @@ def register_risk_callbacks(app, db_path: str):
             stock_opts = [{"label": f"{r['ticker']} — {r['name']}",
                             "value": r["ticker"]} for r in rows]
 
-            options = list(INDEX_OPTIONS) + portfolio_opts + stock_opts
+            options = list(INDEX_OPTIONS) + portfolio_opts + composite_opts + stock_opts
 
             # Safeguard: always include the currently-selected value
             if current_value and not any(o["value"] == current_value for o in options):
-                if current_value.startswith("@"):
+                if current_value.startswith("@") or current_value.startswith("&"):
                     options.insert(len(INDEX_OPTIONS),
                                     {"label": current_value, "value": current_value})
                 else:
@@ -168,6 +200,33 @@ def _build_portfolio_options(search: Optional[str] = None) -> list[dict]:
     return options
 
 
+# ============== Sub-sector composite dropdown options ==============
+
+def _build_subsector_options(db_path: str,
+                                search: Optional[str] = None) -> list[dict]:
+    """Pull every distinct active sub-sector and expose its composite
+    ticker as a dropdown option (`&NAME`). Filtering matches either the
+    composite slug or the human label so 'semi' finds Semiconductors."""
+    try:
+        from analysis.subsector_synth import list_subsector_composites
+        from storage.database import Database
+        composites = list_subsector_composites(Database(db_path))
+    except Exception:
+        return []
+    if search:
+        q = search.lstrip("&").upper()
+        composites = [
+            c for c in composites
+            if q in c["ticker"].upper() or q in c["sub_sector"].upper()
+        ]
+    return [
+        {"label": f"⊕ {c['ticker']} — {c['sub_sector']} composite "
+                   f"({c['n_constituents']} names)",
+         "value": c["ticker"]}
+        for c in composites
+    ]
+
+
 # ============== Helper builders (HTML/Bootstrap tables) ==============
 
 def _error_state(msg: str):
@@ -184,8 +243,9 @@ def _error_state(msg: str):
 def _build_var_table(m) -> html.Table:
     """VaR + CVaR at 95/99% over 1d / 5d / horizon."""
     def fmt(v):
+        # CN/HK convention: loss (negative VaR) = green, positive = red.
         return html.Span(f"{v:+.2%}",
-                          style={"color": T.DANGER if v < 0 else T.SUCCESS,
+                          style={"color": T.PRICE_DOWN if v < 0 else T.PRICE_UP,
                                  "fontWeight": "600"})
 
     rows = [
@@ -208,7 +268,9 @@ def _build_var_table(m) -> html.Table:
 def _build_prob_table(m) -> html.Table:
     """P(loss > 10%) and P(loss > 20%) over the chosen horizon."""
     def fmt_pct(p):
-        col = T.DANGER if p > 0.10 else (T.WARNING if p > 0.02 else T.SUCCESS)
+        # P(big loss). In CN/HK convention high probability of large loss
+        # is bullish-bad → green; low probability of loss = red.
+        col = T.PRICE_DOWN if p > 0.10 else (T.WARNING if p > 0.02 else T.PRICE_UP)
         return html.Span(f"{p:.1%}", style={"color": col, "fontWeight": "700"})
 
     rows = [

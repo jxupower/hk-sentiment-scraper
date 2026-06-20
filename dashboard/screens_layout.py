@@ -10,12 +10,14 @@ def build_screens_tab() -> html.Div:
     return html.Div([
         dcc.Interval(id="screens-auto-refresh", interval=600_000, n_intervals=0),
 
-        dbc.Alert([
+        dbc.Alert(id="screens-alert-banner", color="info",
+                    className="small mb-3", dismissable=True,
+                    children=[
             html.Strong("Rule-based screens. "),
             "Stocks either pass or don't pass each screen — no ranking, no scoring. "
             "Use absolute valuation/quality thresholds that disciplined value investors care about. "
             "Compare with the Discovery tab (percentile ranks) to see how the two approaches differ.",
-        ], color="info", className="small mb-3", dismissable=True),
+        ]),
 
         dbc.Tabs(
             id="screen-subtabs",

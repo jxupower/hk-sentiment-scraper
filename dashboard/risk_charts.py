@@ -178,8 +178,9 @@ def drawdown_histogram(max_drawdowns: np.ndarray, ticker: str) -> go.Figure:
     fig = go.Figure(go.Histogram(
         x=dd_pct,
         nbinsx=40,
-        marker_color=_hex_to_rgba(T.DANGER, 0.45),
-        marker_line=dict(color=T.DANGER, width=0.5),
+        # CN/HK convention: drawdown (price-down) histogram = green.
+        marker_color=_hex_to_rgba(T.PRICE_DOWN, 0.45),
+        marker_line=dict(color=T.PRICE_DOWN, width=0.5),
         name="Per-path max drawdown",
         hovertemplate="drawdown %{x:.1f}%<br>%{y} paths<extra></extra>",
     ))
@@ -187,10 +188,10 @@ def drawdown_histogram(max_drawdowns: np.ndarray, ticker: str) -> go.Figure:
                    annotation_text=f"median {p50:.1f}%",
                    annotation_position="top right",
                    annotation_font=dict(color=T.PRIMARY, size=10))
-    fig.add_vline(x=p95, line=dict(color=T.DANGER, width=1.5, dash="dash"),
+    fig.add_vline(x=p95, line=dict(color=T.PRICE_DOWN, width=1.5, dash="dash"),
                    annotation_text=f"p95 {p95:.1f}%",
                    annotation_position="top right",
-                   annotation_font=dict(color=T.DANGER, size=10))
+                   annotation_font=dict(color=T.PRICE_DOWN, size=10))
 
     fig.update_layout(**T.chart_layout(
         title=f"{ticker} — max-drawdown distribution across simulated paths",

@@ -23,6 +23,95 @@ def register_recommendations_callbacks(app, db_path: str):
                                          "sector_risk.yaml")
     engine = FactorScoringEngine(db_path, sector_risk_path)
 
+    # ----- i18n: flip every translatable element on language change -----
+    @app.callback(
+        Output("rec-alert-banner", "children"),
+        Output("rec-stat-scorable-label", "children"),
+        Output("rec-stat-disqualified-label", "children"),
+        Output("rec-stat-flagged-label", "children"),
+        Output("rec-refresh-btn", "children"),
+        Output("rec-weights-title", "children"),
+        Output("rec-label-value", "children"),
+        Output("rec-label-quality", "children"),
+        Output("rec-label-growth", "children"),
+        Output("rec-label-sentiment", "children"),
+        Output("rec-label-window", "children"),
+        Output("rec-label-filters", "children"),
+        Output("rec-label-min-composite", "children"),
+        Output("rec-label-show", "children"),
+        Output("rec-label-sector", "children"),
+        Output("rec-show-filter", "options"),
+        Output("rec-sector-filter", "placeholder"),
+        Output("rec-dist-title", "children"),
+        Output("rec-table-title", "children"),
+        Output("rec-table", "columns"),
+        Input("user-language", "data"),
+    )
+    def i18n_discovery(lang):
+        from dash import html as _h
+        from dashboard.i18n import T as I
+        lang = lang or "en"
+        # Reconstruct the alert banner with translated parts
+        alert_children = [
+            _h.Strong(I("discovery.alert.title", lang)),
+            I("discovery.alert.body", lang),
+        ]
+        show_options = [
+            {"label": " " + I("discovery.filter.include_flagged", lang),
+             "value": "include_flagged"},
+            {"label": " " + I("discovery.filter.include_dq", lang),
+             "value": "include_dq"},
+        ]
+        cols = [
+            {"name": I("discovery.col.ticker", lang),       "id": "ticker"},
+            {"name": I("discovery.col.name", lang),         "id": "name"},
+            {"name": I("discovery.col.sector", lang),       "id": "sector"},
+            {"name": I("discovery.col.price", lang),        "id": "current_price"},
+            {"name": I("discovery.col.composite", lang),    "id": "composite_pctile",
+             "type": "numeric"},
+            {"name": I("discovery.col.value", lang),        "id": "value_pctile",
+             "type": "numeric"},
+            {"name": I("discovery.col.quality", lang),      "id": "quality_pctile",
+             "type": "numeric"},
+            {"name": I("discovery.col.growth", lang),       "id": "growth_pctile",
+             "type": "numeric"},
+            {"name": I("discovery.col.sentiment", lang),    "id": "sentiment_pctile",
+             "type": "numeric"},
+            {"name": I("discovery.col.articles", lang),     "id": "article_count",
+             "type": "numeric"},
+            {"name": I("discovery.col.pe", lang),           "id": "trailing_pe",
+             "type": "numeric"},
+            {"name": I("discovery.col.roe", lang),          "id": "roe_display",
+             "type": "numeric"},
+            {"name": I("discovery.col.earn_growth", lang),  "id": "earn_growth_display",
+             "type": "numeric"},
+            {"name": I("discovery.col.mcap_b", lang),       "id": "market_cap_b",
+             "type": "numeric"},
+            {"name": I("discovery.col.status", lang),       "id": "status_badge"},
+        ]
+        return (
+            alert_children,
+            I("discovery.stat.scorable", lang),
+            I("discovery.stat.disqualified", lang),
+            I("discovery.stat.flagged", lang),
+            I("discovery.btn.recompute", lang),
+            I("discovery.weights.title", lang),
+            I("discovery.weights.value", lang),
+            I("discovery.weights.quality", lang),
+            I("discovery.weights.growth", lang),
+            I("discovery.weights.sentiment", lang),
+            I("discovery.filter.window", lang),
+            I("discovery.filter.show", lang),
+            I("discovery.filter.min_composite", lang),
+            I("discovery.filter.show", lang),
+            I("discovery.filter.sector", lang),
+            show_options,
+            I("screener.ph.all_sectors", lang),
+            I("discovery.dist_title", lang),
+            I("discovery.table.title", lang),
+            cols,
+        )
+
     @app.callback(
         Output("rec-table", "data"),
         Output("rec-stat-scorable", "children"),
@@ -44,9 +133,14 @@ def register_recommendations_callbacks(app, db_path: str):
         Input("rec-min-composite-filter", "value"),
         Input("rec-show-filter", "value"),
         Input("rec-sector-filter", "value"),
+        State("user-language", "data"),
     )
     def update_recommendations(_n, _clicks, w_val, w_qual, w_growth, w_sent,
-                                window_days, min_composite, show_filter, sector_filter):
+                                window_days, min_composite, show_filter, sector_filter,
+                                lang):
+        from dashboard.i18n import T as I
+        from config.settings import get_sector_label
+        lang = lang or "en"
         weights = {
             "value":     max(0, int(w_val or 0)),
             "quality":   max(0, int(w_qual or 0)),
@@ -75,29 +169,30 @@ def register_recommendations_callbacks(app, db_path: str):
                 continue
             filtered.append(r)
 
-        table_data = [_format_row(r) for r in filtered]
+        table_data = [_format_row(r, lang=lang) for r in filtered]
         chart = _build_distribution_chart(results, show_filter)
 
         # Normalized weight display
         total_w = sum(weights.values())
         if total_w > 0:
             norm = {k: 100 * v / total_w for k, v in weights.items()}
-            weights_str = (f"(normalized: V {norm['value']:.0f}% / "
-                           f"Q {norm['quality']:.0f}% / "
-                           f"G {norm['growth']:.0f}% / "
-                           f"S {norm['sentiment']:.0f}%)")
+            weights_str = I("discovery.weights.normalized", lang,
+                              v=norm["value"], q=norm["quality"],
+                              g=norm["growth"], s=norm["sentiment"])
         else:
-            weights_str = "(weights all zero — please set at least one)"
+            weights_str = I("discovery.weights.zero", lang)
 
         sector_set = sorted({r.sector for r in results if r.sector and r.sector != "—"})
-        sector_options = [{"label": s, "value": s} for s in sector_set]
-
+        # Translate sector display labels in the dropdown; value stays English
+        sector_options = [{"label": get_sector_label(s, lang), "value": s}
+                            for s in sector_set]
+        total = diag.scorable_count + diag.disqualified_count
         return (
             table_data,
             f"{diag.scorable_count:,}",
             f"{diag.disqualified_count:,}",
             f"{diag.flagged_count:,}",
-            f"{len(filtered):,} of {diag.scorable_count + diag.disqualified_count:,} after filters",
+            I("discovery.row_count", lang, count=len(filtered), total=total),
             chart,
             diag.note,
             bool(diag.note),
@@ -119,7 +214,11 @@ def register_recommendations_callbacks(app, db_path: str):
             row = table_rows[active_cell["row"]]
         except (IndexError, TypeError):
             raise PreventUpdate
-        if row.get("current_price") != "Get price":
+        # Accept either-language placeholder so a row populated under one
+        # language still detects the re-click correctly under the other.
+        from dashboard.i18n import EN, ZH
+        placeholders = {EN.get("screener.get_price"), ZH.get("screener.get_price")}
+        if row.get("current_price") not in placeholders:
             raise PreventUpdate
         ticker = row.get("ticker")
         if not ticker:
@@ -129,7 +228,9 @@ def register_recommendations_callbacks(app, db_path: str):
         return table_rows
 
 
-def _format_row(r) -> dict:
+def _format_row(r, lang: str = "en") -> dict:
+    from dashboard.i18n import T as I
+    from config.settings import get_sector_label
     def rnd(v, n=1):
         if v is None:
             return None
@@ -152,13 +253,14 @@ def _format_row(r) -> dict:
     else:
         status = "OK"
 
+    sector_raw = (r.sector or "—")[:25]
     return {
         "ticker": r.ticker,
         "name": (r.name or "")[:30],
-        "sector": (r.sector or "—")[:25],
+        "sector": get_sector_label(sector_raw, lang) if sector_raw != "—" else "—",
         # Lazy-fetched: click the cell to populate. See the screener's
         # fetch_price_on_click handler for the matching pattern.
-        "current_price": "Get price",
+        "current_price": I("screener.get_price", lang),
         "composite_pctile": rnd(r.composite_pctile, 1),
         "value_pctile": rnd(r.value_pctile, 1),
         "quality_pctile": rnd(r.quality_pctile, 1),

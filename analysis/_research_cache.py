@@ -48,19 +48,25 @@ _DEFAULT_TTL_SECONDS = 900  # 15 minutes
 
 
 def get_or_build(db_path: str, sector_risk_path: Optional[str] = None,
-                  *, ttl_seconds: int = _DEFAULT_TTL_SECONDS) -> _CacheBundle:
+                  *, ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+                  pre_loaded_universe: Optional[list] = None) -> _CacheBundle:
     """Return the cached universe computation, building it under lock if
     missing, stale, or keyed to a different db/sector_risk path.
 
     Concurrent calls coalesce: if thread A is mid-build, threads B/C wait on
     the lock and reuse A's result instead of all three recomputing.
+
+    `pre_loaded_universe` lets the caller hand in the universe rows it
+    already loaded (saves an extra Supabase round-trip during a cache
+    rebuild). Ignored when the cache is warm.
     """
     global _bundle
     key = (db_path, sector_risk_path)
     with _lock:
         if _is_fresh(key, ttl_seconds):
             return _bundle
-        _bundle = _build(db_path, sector_risk_path, key)
+        _bundle = _build(db_path, sector_risk_path, key,
+                          pre_loaded_universe=pre_loaded_universe)
         return _bundle
 
 
@@ -82,9 +88,10 @@ def _is_fresh(key: tuple, ttl_seconds: int) -> bool:
 
 
 def _build(db_path: str, sector_risk_path: Optional[str],
-            key: tuple) -> _CacheBundle:
+            key: tuple,
+            pre_loaded_universe: Optional[list] = None) -> _CacheBundle:
     engine = FactorScoringEngine(db_path, sector_risk_path)
-    all_results, diagnostics = engine.compute()
+    all_results, diagnostics = engine.compute(pre_loaded_rows=pre_loaded_universe)
     factor_by_ticker = {r.ticker: r for r in all_results}
 
     screen_results_by_id: dict[str, list[ScreenResult]] = {}

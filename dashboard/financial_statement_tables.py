@@ -156,7 +156,7 @@ def build_earnings_chart(income_rows: list[dict]) -> go.Figure:
 
     fig = go.Figure(go.Bar(
         x=periods, y=eps,
-        marker_color=[T.SUCCESS if (e or 0) >= 0 else T.DANGER for e in eps],
+        marker_color=[T.PRICE_UP if (e or 0) >= 0 else T.PRICE_DOWN for e in eps],
         marker_line_width=0,
         text=[f"{e:.2f}" if e is not None else "" for e in eps],
         textposition="outside",

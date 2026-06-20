@@ -6,9 +6,11 @@ from dashboard import theme as T
 FLAG_COLORS = {"high": T.DANGER, "medium": T.WARNING, "low": T.INFO}
 
 
-def _stat_block(label: str, value_id: str, color: str = None):
+def _stat_block(label: str, value_id: str, color: str = None,
+                  label_id: str = None):
     return html.Div([
-        html.Div(label, className="stat-label"),
+        html.Div(label, className="stat-label",
+                  id=label_id if label_id else f"{value_id}-label"),
         html.Div(id=value_id, className="hero-number",
                   style={"color": color} if color else {}),
     ])
@@ -20,7 +22,9 @@ def build_recommendations_tab() -> html.Div:
         dcc.Interval(id="rec-auto-refresh", interval=300_000, n_intervals=0),
 
         # Caveat banner
-        dbc.Alert([
+        dbc.Alert(id="rec-alert-banner", color="info", className="small mb-3",
+                    dismissable=True,
+                    children=[
             html.Strong("Discovery, not recommendations. "),
             "Candidates for further research, not buy/sell advice. ",
             "Scores are sector-relative percentile ranks (0=worst, 100=best). ",
@@ -28,7 +32,7 @@ def build_recommendations_tab() -> html.Div:
             "it does NOT account for business catalysts, governance, capital structure, or qualitative risks. ",
             "Flagged tickers carry known macro/regulatory issues that may distort valuation; ",
             "they remain visible but should be researched extra-carefully.",
-        ], color="info", className="small mb-3", dismissable=True),
+        ]),
 
         dbc.Alert(id="rec-diagnostic-banner", color="warning", className="small mb-3",
                   is_open=False, dismissable=True),
@@ -54,8 +58,9 @@ def build_recommendations_tab() -> html.Div:
         # Factor weight controls
         dbc.Card([
             dbc.CardHeader([
-                html.Span("Factor Weights", style={"fontWeight": "600",
-                                                    "marginRight": "10px"}),
+                html.Span("Factor Weights",
+                          id="rec-weights-title",
+                          style={"fontWeight": "600", "marginRight": "10px"}),
                 html.Span(id="rec-weights-normalized",
                           style={"color": T.PRIMARY, "fontSize": "0.85rem",
                                  "fontWeight": "500"}),
@@ -63,7 +68,9 @@ def build_recommendations_tab() -> html.Div:
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Value (cheap)", className="stat-label mb-2"),
+                        html.Label("Value (cheap)",
+                                      id="rec-label-value",
+                                      className="stat-label mb-2"),
                         dbc.InputGroup([
                             dbc.Input(id="rec-weight-value", type="number",
                                       min=0, max=100, step=5, value=30,
@@ -72,7 +79,9 @@ def build_recommendations_tab() -> html.Div:
                         ], size="sm"),
                     ], width=3),
                     dbc.Col([
-                        html.Label("Quality (ROE, low debt)", className="stat-label mb-2"),
+                        html.Label("Quality (ROE, low debt)",
+                                      id="rec-label-quality",
+                                      className="stat-label mb-2"),
                         dbc.InputGroup([
                             dbc.Input(id="rec-weight-quality", type="number",
                                       min=0, max=100, step=5, value=30,
@@ -81,7 +90,9 @@ def build_recommendations_tab() -> html.Div:
                         ], size="sm"),
                     ], width=3),
                     dbc.Col([
-                        html.Label("Growth (earnings, revenue)", className="stat-label mb-2"),
+                        html.Label("Growth (earnings, revenue)",
+                                      id="rec-label-growth",
+                                      className="stat-label mb-2"),
                         dbc.InputGroup([
                             dbc.Input(id="rec-weight-growth", type="number",
                                       min=0, max=100, step=5, value=20,
@@ -90,7 +101,9 @@ def build_recommendations_tab() -> html.Div:
                         ], size="sm"),
                     ], width=3),
                     dbc.Col([
-                        html.Label("Sentiment (news mood)", className="stat-label mb-2"),
+                        html.Label("Sentiment (news mood)",
+                                      id="rec-label-sentiment",
+                                      className="stat-label mb-2"),
                         dbc.InputGroup([
                             dbc.Input(id="rec-weight-sentiment", type="number",
                                       min=0, max=100, step=5, value=20,
@@ -101,6 +114,7 @@ def build_recommendations_tab() -> html.Div:
                 ], className="g-2"),
                 html.Div([
                     html.Label("Sentiment window (days)",
+                                id="rec-label-window",
                                 className="stat-label mb-2 mt-3"),
                     dcc.Slider(
                         id="rec-window-slider",
@@ -110,11 +124,14 @@ def build_recommendations_tab() -> html.Div:
                     ),
                 ]),
                 html.Hr(style={"borderColor": T.BORDER, "margin": "20px 0"}),
-                html.Label("Filters", className="stat-label mb-2"),
+                html.Label("Filters",
+                              id="rec-label-filters",
+                              className="stat-label mb-2"),
                 dbc.Row([
                     dbc.Col([
                         html.Label("Min composite percentile",
-                                    className="stat-label mb-2"),
+                                      id="rec-label-min-composite",
+                                      className="stat-label mb-2"),
                         dcc.Slider(
                             id="rec-min-composite-filter",
                             min=0, max=100, step=5, value=0,
@@ -123,7 +140,9 @@ def build_recommendations_tab() -> html.Div:
                         ),
                     ], width=4),
                     dbc.Col([
-                        html.Label("Show", className="stat-label mb-2"),
+                        html.Label("Show",
+                                      id="rec-label-show",
+                                      className="stat-label mb-2"),
                         dcc.Checklist(
                             id="rec-show-filter",
                             options=[
@@ -137,7 +156,9 @@ def build_recommendations_tab() -> html.Div:
                         ),
                     ], width=4),
                     dbc.Col([
-                        html.Label("Sector", className="stat-label mb-2"),
+                        html.Label("Sector",
+                                      id="rec-label-sector",
+                                      className="stat-label mb-2"),
                         dcc.Dropdown(id="rec-sector-filter", multi=True,
                                      placeholder="All sectors"),
                     ], width=4),
@@ -147,7 +168,8 @@ def build_recommendations_tab() -> html.Div:
 
         # Composite distribution chart
         dbc.Card([
-            dbc.CardHeader("Composite Percentile Distribution"),
+            dbc.CardHeader("Composite Percentile Distribution",
+                              id="rec-dist-title"),
             dbc.CardBody([
                 dcc.Graph(id="rec-distribution-chart",
                           config={"displayModeBar": False}, figure={}),
@@ -158,6 +180,7 @@ def build_recommendations_tab() -> html.Div:
         dbc.Card([
             dbc.CardHeader([
                 html.Span("Discovery Candidates",
+                          id="rec-table-title",
                           style={"fontWeight": "600", "marginRight": "10px"}),
                 html.Span(id="rec-row-count",
                           style={"color": T.TEXT_MUTED, "fontSize": "0.85rem"}),
@@ -202,16 +225,18 @@ def build_recommendations_tab() -> html.Div:
                     ],
                     style_header=T.DATATABLE_HEADER,
                     style_data_conditional=[
+                        # CN/HK convention: high composite percentile (this
+                        # stock leads its peers) = red; low = green.
                         {"if": {"filter_query": "{composite_pctile} >= 90",
                                 "column_id": "composite_pctile"},
-                         "color": T.SUCCESS, "fontWeight": "700"},
+                         "color": T.PRICE_UP, "fontWeight": "700"},
                         {"if": {"filter_query":
                                 "{composite_pctile} >= 75 && {composite_pctile} < 90",
                                 "column_id": "composite_pctile"},
-                         "color": T.SUCCESS, "fontWeight": "600"},
+                         "color": T.PRICE_UP, "fontWeight": "600"},
                         {"if": {"filter_query": "{composite_pctile} <= 25",
                                 "column_id": "composite_pctile"},
-                         "color": T.DANGER},
+                         "color": T.PRICE_DOWN},
                         {"if": {"filter_query": '{status_badge} contains "FLAG"'},
                          "backgroundColor": T.WARNING_SOFT},
                         {"if": {"filter_query": '{status_badge} contains "DQ"'},
