@@ -159,24 +159,35 @@ def _latest_shares_outstanding(db: Database,
     return out
 
 
-def list_subsector_composites(db: Database) -> list[dict]:
+def list_subsector_composites(db: Database, market: str | None = None) -> list[dict]:
     """One row per distinct, non-null sub_sector in active securities.
     Each row carries the composite ticker, the human label, the constituent
     count, and a representative parent yf_sector (the modal — sub-sectors
     occasionally span parent sectors via ticker overrides, but the modal
-    is the right grouping for browse-mode UI)."""
+    is the right grouping for browse-mode UI). Scoped to one market when
+    `market` is set so the HK browse doesn't show US sub-sectors."""
     with db.get_connection() as conn:
-        rows = conn.execute(
-            "SELECT sub_sector, COUNT(*) AS n, "
-            # Modal parent sector via MAX over GROUP-BY emulation: take any
-            # one — sufficient for browse-mode grouping. NULLs are tolerated.
-            "MAX(COALESCE(effective_sector, yf_sector, watchlist_sector)) "
-            "  AS parent_sector "
-            "FROM securities "
-            "WHERE is_active = 1 AND sub_sector IS NOT NULL "
-            "AND sub_sector != '' "
-            "GROUP BY sub_sector ORDER BY sub_sector"
-        ).fetchall()
+        if market is None:
+            rows = conn.execute(
+                "SELECT sub_sector, COUNT(*) AS n, "
+                "MAX(COALESCE(effective_sector, yf_sector, watchlist_sector)) "
+                "  AS parent_sector "
+                "FROM securities "
+                "WHERE is_active = 1 AND sub_sector IS NOT NULL "
+                "AND sub_sector != '' "
+                "GROUP BY sub_sector ORDER BY sub_sector"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT sub_sector, COUNT(*) AS n, "
+                "MAX(COALESCE(effective_sector, yf_sector, watchlist_sector)) "
+                "  AS parent_sector "
+                "FROM securities "
+                "WHERE is_active = 1 AND market = ? "
+                "AND sub_sector IS NOT NULL AND sub_sector != '' "
+                "GROUP BY sub_sector ORDER BY sub_sector",
+                (market,),
+            ).fetchall()
     out = []
     for label, n, parent in rows:
         if n < 2:

@@ -36,21 +36,25 @@ class CloudFundamentalsRepository:
         """Insert or replace a snapshot for (ticker, snapshot_date, source).
         `source` defaults to 'yfinance_daily' to match the cron caller; the
         bulk akshare loader should pass source='akshare_annual'."""
+        from utils.market import market_of_ticker
+        market = market_of_ticker(ticker)
         values = [fields.get(c) for c in _FUNDAMENTALS_COLS]
-        placeholders = ", ".join(["%s"] * (len(_FUNDAMENTALS_COLS) + 3))
+        # +4 placeholders for ticker, market, snapshot_date, source
+        placeholders = ", ".join(["%s"] * (len(_FUNDAMENTALS_COLS) + 4))
         update_clause = ", ".join(
             f"{c} = EXCLUDED.{c}" for c in _FUNDAMENTALS_COLS
         )
         sql = f"""
             INSERT INTO fundamentals_snapshots
-                (ticker, snapshot_date, source, {", ".join(_FUNDAMENTALS_COLS)})
+                (ticker, market, snapshot_date, source, {", ".join(_FUNDAMENTALS_COLS)})
             VALUES ({placeholders})
             ON CONFLICT (ticker, snapshot_date, source) DO UPDATE SET
+                market = EXCLUDED.market,
                 {update_clause},
                 fetched_at = NOW()
         """
         with cursor() as cur:
-            cur.execute(sql, (ticker, snapshot_date, source, *values))
+            cur.execute(sql, (ticker, market, snapshot_date, source, *values))
 
     def has_snapshot_for_date(self, ticker: str, snapshot_date: str,
                                source: Optional[str] = None) -> bool:
@@ -122,21 +126,26 @@ class CloudHistoricalPricesRepository:
         Uses psycopg2.extras.execute_values to batch all rows into a single
         multi-VALUES INSERT — orders-of-magnitude faster than executemany over
         the Supabase pooler (executemany = one round-trip per row; this is
-        one round-trip per call).
+        one round-trip per call). The `market` column is derived from the
+        ticker via market_of_ticker() — single source of truth.
         """
         if not rows:
             return 0
+        from utils.market import market_of_ticker
+        market = market_of_ticker(ticker)
         sql = """
             INSERT INTO historical_prices
-                (ticker, date, open, high, low, close, adj_close, volume)
+                (ticker, market, date, open, high, low, close, adj_close, volume)
             VALUES %s
             ON CONFLICT (ticker, date) DO UPDATE SET
+                market = EXCLUDED.market,
                 open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
                 close = EXCLUDED.close, adj_close = EXCLUDED.adj_close,
                 volume = EXCLUDED.volume, fetched_at = NOW()
         """
-        params = [(ticker, r["date"], r.get("open"), r.get("high"), r.get("low"),
-                   r.get("close"), r.get("adj_close"), r.get("volume")) for r in rows]
+        params = [(ticker, market, r["date"], r.get("open"), r.get("high"),
+                   r.get("low"), r.get("close"), r.get("adj_close"), r.get("volume"))
+                   for r in rows]
         with cursor() as cur:
             execute_values(cur, sql, params, page_size=1000)
         return len(rows)

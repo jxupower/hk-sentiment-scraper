@@ -80,6 +80,54 @@ def register_portfolio_callbacks(app, db_path: str):
     def add_holdings_row(_n, current):
         return (current or []) + [{"ticker": "", "shares": 0}]
 
+    # ----- Swap seed defaults + the hint text when the market toggle flips.
+    # On market change the existing rows might mix HK + US (which the
+    # compute callback rejects), so we replace the table with a
+    # market-appropriate starter set. The user can still edit / add rows;
+    # this only fires when the market actually changes, not on every
+    # interaction.
+    @app.callback(
+        Output("portfolio-holdings-table", "data", allow_duplicate=True),
+        Output("portfolio-holdings-hint", "children"),
+        Input("user-market", "data"),
+        State("portfolio-holdings-table", "data"),
+        prevent_initial_call=True,
+    )
+    def reset_holdings_on_market_change(market, current):
+        from utils.market import market_of_ticker
+        market = (market or "HK").upper()
+        if market == "US":
+            defaults = [
+                {"ticker": "AAPL", "shares": 100},
+                {"ticker": "MSFT", "shares": 50},
+                {"ticker": "NVDA", "shares": 50},
+                {"ticker": "GOOGL", "shares": 0},
+                {"ticker": "BRK-B", "shares": 0},
+            ]
+            hint = (" — type ticker (e.g. AAPL or ^GSPC) + shares. "
+                     "Use shares=0 for candidates you're considering.")
+        else:
+            defaults = [
+                {"ticker": "0700.HK", "shares": 100},
+                {"ticker": "0005.HK", "shares": 200},
+                {"ticker": "9988.HK", "shares": 50},
+                {"ticker": "1810.HK", "shares": 0},
+                {"ticker": "0823.HK", "shares": 0},
+            ]
+            hint = (" — type ticker (e.g. 0700.HK or ^HSI) + shares. "
+                     "Use shares=0 for candidates you're considering.")
+        # If the existing table is already pure-market for the new market,
+        # leave it alone (preserves the user's edits during a quick toggle).
+        if current:
+            equity_rows = [r for r in current
+                            if (r.get("ticker") or "").strip()
+                            and (r["ticker"] or "")[0] not in ("@", "&", "^")]
+            if equity_rows:
+                markets_now = {market_of_ticker(r["ticker"]) for r in equity_rows}
+                if markets_now == {market}:
+                    return current, hint
+        return defaults, hint
+
     # ----- Saved portfolios: dropdown options refresh -----
     # Triggered on initial tab load (n_intervals=0 fires once via the input
     # below being non-None) and after any save/delete operation via the
@@ -385,6 +433,29 @@ def register_portfolio_callbacks(app, db_path: str):
         if not table_data:
             return _error_state("Add holdings first.")
 
+        # Single-market validation — FX modelling (USD/HKD vol +
+        # correlation) is out of scope for v1, so mixed-market portfolios
+        # are rejected with a clear error rather than producing nonsense
+        # numbers. Synthetic tickers (`@…`, `&…`) and indices (`^…`) pass
+        # through because their market is determined by their underlying
+        # constituents.
+        from utils.market import market_of_ticker
+        tickers_in_input = [
+            (r.get("ticker") or "").strip().upper()
+            for r in table_data
+            if (r.get("ticker") or "").strip()
+        ]
+        equity_tickers = [t for t in tickers_in_input
+                            if t and t[0] not in ("@", "&", "^")]
+        markets_present = {market_of_ticker(t) for t in equity_tickers}
+        if len(markets_present) > 1:
+            return _error_state(
+                "Mixed-market portfolio: holdings span "
+                f"{sorted(markets_present)}. "
+                "FX modelling (USD/HKD vol + correlation) is not yet "
+                "supported — split into separate portfolios per market."
+            )
+
         from analysis._portfolio_cache import get_or_build
         from storage.database import Database
 
@@ -428,11 +499,18 @@ def register_portfolio_callbacks(app, db_path: str):
                                                   bundle.m_full_optimal)
         backtest_fig = backtest_equity_chart(bundle.backtest)
 
+        # Currency for downstream display — sole HK ticker → HKD, sole
+        # US ticker → USD (mixed-market portfolios are already rejected
+        # by the single-market validation above).
+        sole_market = (next(iter(markets_present)) if markets_present
+                        else "HK")
+        currency = "USD" if sole_market == "US" else "HKD"
+
         # Tables
         backtest_table = _build_backtest_table(bundle.backtest)
         candidate_table = _build_candidate_table(bundle)
-        trade_list = _build_trade_list(bundle)
-        diagnostics = _build_diagnostics(bundle)
+        trade_list = _build_trade_list(bundle, currency=currency)
+        diagnostics = _build_diagnostics(bundle, currency=currency)
 
         status = (f"Built {len(bundle.tickers)} tickers, {bundle.mu_sigma.n_obs} "
                   f"returns, data through {bundle.last_price_date}")
@@ -545,7 +623,7 @@ def _build_candidate_table(bundle) -> html.Div:
     return html.Table(rows, className="table table-sm w-100 small")
 
 
-def _build_trade_list(bundle) -> html.Div:
+def _build_trade_list(bundle, currency: str = "HKD") -> html.Div:
     """What to buy/sell to move from status-quo to full-optimal weights."""
     if bundle.w_status_quo.sum() == 0:
         return html.P("No current holdings — can't compute trade list.",
@@ -562,7 +640,7 @@ def _build_trade_list(bundle) -> html.Div:
 
     rows = [html.Tr([html.Th(c) for c in
                        ["Ticker", "Current shares", "Target shares",
-                        "Δ shares", "Δ HKD"]],
+                        "Δ shares", f"Δ {currency}"]],
                       className="small text-muted")]
     holdings_by_ticker = {h["ticker"]: float(h.get("shares") or 0) for h in bundle.holdings}
     for i, t in enumerate(bundle.tickers):
@@ -704,7 +782,7 @@ def _build_saved_options() -> list[dict]:
     return options
 
 
-def _build_diagnostics(bundle) -> html.Div:
+def _build_diagnostics(bundle, currency: str = "HKD") -> html.Div:
     """Estimation noise + cap info + total portfolio value."""
     ms = bundle.mu_sigma
     total_value = sum(
@@ -734,7 +812,7 @@ def _build_diagnostics(bundle) -> html.Div:
         html.Span(f"T = {ms.n_obs} obs · ", style={"color": T.TEXT_MUTED}),
         html.Span(f"Ledoit-Wolf shrinkage α = {ms.shrinkage:.3f} · ",
                    style={"color": T.TEXT_MUTED}),
-        html.Span(f"Total portfolio value: HKD {total_value:,.0f}",
+        html.Span(f"Total portfolio value: {currency} {total_value:,.0f}",
                    style={"color": T.TEXT, "fontWeight": "600"}),
     ], className="small mb-2")
 

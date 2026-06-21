@@ -213,6 +213,7 @@ class FactorScoringEngine:
                 min_articles: int = DEFAULT_MIN_ARTICLES,
                 as_of_date: Optional[str] = None,
                 pre_loaded_rows: Optional[list[dict]] = None,
+                market: Optional[str] = None,
                 ) -> tuple[list[FactorResult], EngineDiagnostics]:
         weights = self._normalize_weights(weights or DEFAULT_WEIGHTS)
         self._reload_flags()
@@ -224,6 +225,12 @@ class FactorScoringEngine:
         # "no core fundamentals".
         fund_rows = (pre_loaded_rows if pre_loaded_rows is not None
                       else self._load_fundamentals(as_of_date=as_of_date))
+        # Market scoping: rows carry `market` post-Phase-1; filter here so
+        # the percentile ranking only compares apples to apples (a HK row
+        # in the US universe would skew Banks percentiles).
+        if market is not None:
+            fund_rows = [f for f in fund_rows
+                          if (f.get("market") or "HK") == market.upper()]
         sent_by_ticker = self._load_sentiment(sentiment_window_days)
 
         # Pass 1: disqualify + categorize

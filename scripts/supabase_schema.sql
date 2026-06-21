@@ -11,26 +11,59 @@
 
 -- ============== historical_prices ==============
 
+-- NUMERIC(14,4): max ~10^10 = $10B per share. Stretches to cover
+-- pathological backward-split-adjusted prices on US micro-caps (a stock
+-- doing a 1:1000 reverse split causes its yfinance `adj_close` to
+-- spike historically into the 10^7+ range). HK names + indices fit
+-- comfortably in (12,4) but the wider type costs ~0 storage and
+-- removes a class of silent-failure cases.
 CREATE TABLE IF NOT EXISTS historical_prices (
     ticker        TEXT          NOT NULL,
+    market        TEXT          NOT NULL DEFAULT 'HK',
     date          DATE          NOT NULL,
-    open          NUMERIC(12, 4),
-    high          NUMERIC(12, 4),
-    low           NUMERIC(12, 4),
-    close         NUMERIC(12, 4),
-    adj_close     NUMERIC(12, 4),
+    open          NUMERIC(14, 4),
+    high          NUMERIC(14, 4),
+    low           NUMERIC(14, 4),
+    close         NUMERIC(14, 4),
+    adj_close     NUMERIC(14, 4),
     volume        BIGINT,
     fetched_at    TIMESTAMPTZ   DEFAULT NOW(),
     PRIMARY KEY (ticker, date)
 );
 
+-- Idempotent column widening for existing deployments.
+ALTER TABLE historical_prices
+    ALTER COLUMN open      TYPE NUMERIC(14, 4),
+    ALTER COLUMN high      TYPE NUMERIC(14, 4),
+    ALTER COLUMN low       TYPE NUMERIC(14, 4),
+    ALTER COLUMN close     TYPE NUMERIC(14, 4),
+    ALTER COLUMN adj_close TYPE NUMERIC(14, 4);
+
+-- Idempotent: add `market` to pre-existing deployments.
+ALTER TABLE historical_prices
+    ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'HK';
+
+-- Backfill any row whose ticker convention says US (one-shot for legacy data).
+UPDATE historical_prices
+   SET market = 'US'
+ WHERE market = 'HK'
+   AND ticker NOT LIKE '%.HK'
+   AND ticker NOT IN ('^HSI','^HSCEI','^HSTECH')
+   AND ticker NOT LIKE '&HK:%'
+   AND ticker NOT LIKE '&%'
+   AND ticker NOT LIKE '@%';
+
 CREATE INDEX IF NOT EXISTS idx_hp_ticker_date
     ON historical_prices (ticker, date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_hp_market_ticker_date
+    ON historical_prices (market, ticker, date DESC);
 
 -- ============== fundamentals_snapshots ==============
 
 CREATE TABLE IF NOT EXISTS fundamentals_snapshots (
     ticker             TEXT          NOT NULL,
+    market             TEXT          NOT NULL DEFAULT 'HK',
     snapshot_date      DATE          NOT NULL,
     source             TEXT          NOT NULL DEFAULT 'akshare_annual',
     -- Per-share / shares
@@ -65,11 +98,23 @@ CREATE TABLE IF NOT EXISTS fundamentals_snapshots (
     PRIMARY KEY (ticker, snapshot_date, source)
 );
 
+-- Idempotent: add `market` to pre-existing deployments + backfill by convention.
+ALTER TABLE fundamentals_snapshots
+    ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'HK';
+
+UPDATE fundamentals_snapshots
+   SET market = 'US'
+ WHERE market = 'HK'
+   AND ticker NOT LIKE '%.HK';
+
 CREATE INDEX IF NOT EXISTS idx_fs_ticker_date
     ON fundamentals_snapshots (ticker, snapshot_date DESC);
 
 CREATE INDEX IF NOT EXISTS idx_fs_source
     ON fundamentals_snapshots (source);
+
+CREATE INDEX IF NOT EXISTS idx_fs_market_ticker
+    ON fundamentals_snapshots (market, ticker);
 
 -- ============== financial_statements ==============
 -- Raw filings: income statement, balance sheet, cash flow per period.

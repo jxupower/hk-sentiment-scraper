@@ -1,0 +1,31 @@
+feeds:
+  # General US business news — broad coverage. CNBC's US feed is the cleanest;
+  # Reuters and Yahoo Finance fill in macro / earnings angles.
+  - name: CNBC US Markets
+    url: https://www.cnbc.com/id/15839135/device/rss/rss.html
+  - name: Reuters Business News
+    url: https://feeds.reuters.com/reuters/businessNews
+  - name: Yahoo Finance Headlines
+    url: https://finance.yahoo.com/news/rssindex
+  - name: MarketWatch Top Stories
+    url: https://feeds.content.dowjones.io/public/rss/mw_topstories
+
+  # Broad Google News queries targeting US-listed equities and the macro
+  # context that moves them. The TickerMatcher decides which tickers each
+  # article is about, so feeds intentionally avoid being per-sector.
+  - name: Google News - S&P 500 / Nasdaq macro
+    url: https://news.google.com/rss/search?q=%22S%26P+500%22+OR+%22Nasdaq%22+OR+%22Dow+Jones%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - US equities macro
+    url: https://news.google.com/rss/search?q=%22US+stocks%22+OR+%22US+equities%22+OR+%22Wall+Street%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - Fed policy
+    url: https://news.google.com/rss/search?q=%22Federal+Reserve%22+OR+%22FOMC%22+OR+%22Powell%22+OR+%22Fed+rate%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - earnings season
+    url: https://news.google.com/rss/search?q=%22earnings%22+%22quarter%22+%22US%22+OR+%22revenue+miss%22+OR+%22guidance%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - US tech / AI stocks
+    url: https://news.google.com/rss/search?q=%22US+tech%22+OR+%22AI+stocks%22+OR+%22Magnificent+Seven%22+OR+%22semiconductor%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - US bank financials
+    url: https://news.google.com/rss/search?q=%22US+banks%22+OR+%22US+financials%22+OR+%22regional+banks%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - US energy commodities
+    url: https://news.google.com/rss/search?q=%22US+oil%22+OR+%22shale%22+OR+%22US+gas%22+OR+%22ExxonMobil%22+OR+%22Chevron%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - US healthcare biotech
+    url: https://news.google.com/rss/search?q=%22US+biotech%22+OR+%22FDA+approval%22+OR+%22US+pharma%22&hl=en-US&gl=US&ceid=US:en

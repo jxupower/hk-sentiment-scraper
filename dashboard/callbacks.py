@@ -39,18 +39,45 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         prevent_initial_call=True,
     )
 
-    # Server-side: rebuild the tab strip with translated labels when language
-    # changes. dbc.Tab.label is static at render time so we hand back a fresh
-    # children list. Tab children (the per-tab layouts) re-render but their
-    # own ids stay stable; per-tab i18n callbacks update the inner text.
+    # ----- Market toggle (global) -----
+    # Clientside: flips user-market Store + button outline states instantly
+    # on click. Mirrors the language-toggle pattern.
+    app.clientside_callback(
+        """
+        function(hk_clicks, us_clicks) {
+            const ctx = window.dash_clientside.callback_context;
+            const trig = ctx.triggered && ctx.triggered.length ? ctx.triggered[0] : null;
+            if (!trig || !trig.prop_id) {
+                return window.dash_clientside.no_update;
+            }
+            const choice = trig.prop_id.indexOf("market-us-btn") === 0 ? "US" : "HK";
+            return [choice, choice !== "HK", choice !== "US"];
+        }
+        """,
+        Output("user-market", "data"),
+        Output("market-hk-btn", "outline"),
+        Output("market-us-btn", "outline"),
+        Input("market-hk-btn", "n_clicks"),
+        Input("market-us-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+
+    # Server-side: rebuild the tab strip when either language OR market
+    # changes. dbc.Tab.label is static at render time so we hand back a
+    # fresh children list. Re-mounting the tabs also forces every per-tab
+    # callback (Screener row builder, Discovery rank, Stock Research, etc.)
+    # to refire from a clean slate so they pick up the new market filter.
     @app.callback(
         Output("main-tabs", "children"),
         Input("user-language", "data"),
+        Input("user-market", "data"),
         State("sentiment-sectors-store", "data"),
         prevent_initial_call=True,
     )
-    def rebuild_tabs_on_language(lang, sectors):
+    def rebuild_tabs_on_language(lang, market, sectors):
         from dashboard.layout import build_tabs
+        # `market` is read by per-tab callbacks via State("user-market"); the
+        # tab factory itself only needs the language for the labels.
         return build_tabs(lang or "en", sectors or [])
 
     # Server-side: update the global chrome (header tagline + last-updated
@@ -109,18 +136,39 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
     def update_timestamp(*_):
         return datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
+    def _market_subsector_set(market: str) -> set[str]:
+        """Sub-sectors with at least one active ticker in the given market.
+        Used to filter `sector_signals` (which has no market column of its
+        own; we infer membership through the underlying securities)."""
+        with db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT sub_sector FROM securities "
+                "WHERE is_active = 1 AND market = ? "
+                "AND sub_sector IS NOT NULL AND sub_sector != ''",
+                (market,),
+            ).fetchall()
+            return {r[0] for r in rows}
+
     @app.callback(Output("sector-cards", "children"),
                   Input("auto-refresh", "n_intervals"),
-                  Input("refresh-btn", "n_clicks"))
-    def update_sector_cards(*_):
+                  Input("refresh-btn", "n_clicks"),
+                  Input("user-market", "data"))
+    def update_sector_cards(_n, _c, market):
+        market = (market or "HK").upper()
         signals = sector_signal_repo.get_latest_signals()
+        in_market = _market_subsector_set(market)
+        signals = [s for s in signals if s.get("sector") in in_market]
         return sector_direction_cards(signals)
 
     @app.callback(Output("sector-heatmap-container", "children"),
                   Input("auto-refresh", "n_intervals"),
-                  Input("refresh-btn", "n_clicks"))
-    def update_sector_heatmap(*_):
+                  Input("refresh-btn", "n_clicks"),
+                  Input("user-market", "data"))
+    def update_sector_heatmap(_n, _c, market):
+        market = (market or "HK").upper()
         signals = sector_signal_repo.get_latest_signals()
+        in_market = _market_subsector_set(market)
+        signals = [s for s in signals if s.get("sector") in in_market]
         fig = sector_heatmap(signals)
         return dbc.Card([
             dbc.CardHeader("Heatmap", className="fw-bold small"),
@@ -168,8 +216,9 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         Output("sector-signal-updated", "children"),
         Input("selected-sector", "data"),
         Input("auto-refresh", "n_intervals"),
+        Input("user-market", "data"),
     )
-    def update_sector_detail(sector, _):
+    def update_sector_detail(sector, _, market):
         if not sector:
             return (
                 "Sector Detail",
@@ -180,11 +229,19 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
                 "--", "secondary", "", "",
             )
 
+        market = (market or "HK").upper()
+        # Load the right watchlist for the active market — _get_sub_sector_map
+        # only walks the watchlist's sector entries, so passing the HK YAML
+        # while market=US would return zero tickers for any US sub-sector.
+        active_watchlist = (settings.load_watchlist(market="US")
+                              if market == "US" else watchlist)
         # `sector` is now a sub_sector (post 2026-06 sentiment retag).
         # get_tickers_for_subsector resolves through watchlist YAML's
-        # per-entry sub_sector + securities.sub_sector.
+        # per-entry sub_sector + securities.sub_sector, and the extra
+        # `market` filter rejects any HK ticker that snuck in via the
+        # shared sub-sector taxonomy.
         tickers = settings.get_tickers_for_subsector(
-            sector, watchlist, securities_repo,
+            sector, active_watchlist, securities_repo, market=market,
         )
         scores_24h = sentiment_repo.get_scores_for_sector(tickers, hours=24)
         sentiment_ts = sentiment_repo.get_sector_timeseries(tickers, hours=168)

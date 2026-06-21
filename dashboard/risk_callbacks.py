@@ -13,7 +13,7 @@ import dash_bootstrap_components as dbc
 
 from dashboard import theme as T
 from dashboard.risk_charts import drawdown_histogram, fan_chart, vol_cone_chart
-from dashboard.risk_layout import INDEX_OPTIONS
+from dashboard.risk_layout import INDEX_OPTIONS, index_options_for_market
 
 
 def register_risk_callbacks(app, db_path: str):
@@ -28,13 +28,38 @@ def register_risk_callbacks(app, db_path: str):
         Output("risk-var-title", "children"),
         Output("risk-prob-title", "children"),
         Output("risk-dd-title", "children"),
+        Output("risk-alert-banner", "children"),
         Input("user-language", "data"),
+        Input("user-market", "data"),
     )
-    def i18n_risk(lang):
+    def i18n_risk(lang, market):
         from dashboard.i18n import T as I
+        from dash import html
         lang = lang or "en"
+        market = (market or "HK").upper()
+        # Market-aware ticker label + banner — the "HK stock" / "US stock"
+        # split is short enough to compute inline rather than burn 4 new
+        # i18n keys on a single string.
+        if market == "US":
+            ticker_label = ("代码 (指数或美股)" if lang == "zh"
+                              else "Ticker (index or US stock)")
+            index_name = "S&P 500" if lang == "en" else "标普 500 指数"
+        else:
+            ticker_label = ("代码 (指数或港股)" if lang == "zh"
+                              else "Ticker (index or HK stock)")
+            index_name = ("恒生指数" if lang == "zh" else "Hang Seng index")
+        banner = [
+            html.Strong("Risk Forecast — GJR-GARCH(1,1) with Student-t innovations. "),
+            f"Pick a stock or {index_name}, click Load. The fan chart shows "
+            "5,000 Monte Carlo paths over the chosen horizon. ",
+            html.Br(),
+            html.Em("Honest gaps: GARCH is slow to adapt to regime breaks; "
+                    "Monte Carlo with a fitted parametric model can't generate "
+                    "tail events outside the fitted distribution; forecasts "
+                    "beyond ~5 days are illustrative, not precise."),
+        ]
         return (
-            I("risk.label.ticker", lang),
+            ticker_label,
             I("risk.label.window", lang),
             I("risk.label.horizon", lang),
             I("risk.btn.load", lang),
@@ -43,7 +68,19 @@ def register_risk_callbacks(app, db_path: str):
             I("risk.var_table", lang),
             I("risk.prob_table", lang),
             I("risk.drawdown_hist", lang),
+            banner,
         )
+
+    # Reset the selected ticker when the user flips markets — otherwise a
+    # HK→US flip leaves them looking at ^HSI in the US universe (or vice
+    # versa). Lands them on the right benchmark for the new market.
+    @app.callback(
+        Output("risk-ticker-select", "value"),
+        Input("user-market", "data"),
+        prevent_initial_call=True,
+    )
+    def reset_risk_ticker_on_market_change(market):
+        return "^GSPC" if (market or "HK").upper() == "US" else "^HSI"
 
 
     # ----- Ticker autocomplete dropdown -----
@@ -54,9 +91,14 @@ def register_risk_callbacks(app, db_path: str):
     @app.callback(
         Output("risk-ticker-select", "options"),
         Input("risk-ticker-select", "search_value"),
+        Input("user-market", "data"),
         State("risk-ticker-select", "value"),
     )
-    def populate_risk_ticker_options(search, current_value):
+    def populate_risk_ticker_options(search, market, current_value):
+        market = (market or "HK").upper()
+        # Market-aware index list pinned to the top (HK indices for HK,
+        # US indices for US).
+        market_indices = index_options_for_market(market)
         # Saved portfolios become first-class tickers in the Risk Forecast
         # dropdown — `@CORE` runs GARCH on the status-quo series, `@CORE$OPT`
         # runs it on the max-Sharpe optimal-weight series. These are pinned
@@ -72,27 +114,29 @@ def register_risk_callbacks(app, db_path: str):
             if search:
                 rows = conn.execute("""
                     SELECT ticker, name FROM securities
-                    WHERE is_active = 1 AND (
+                    WHERE is_active = 1 AND market = ? AND (
                         UPPER(ticker) LIKE UPPER(?) OR UPPER(name) LIKE UPPER(?)
                     )
                     ORDER BY (is_watchlist = 1) DESC, ticker
                     LIMIT 30
-                """, (f"{search}%", f"%{search}%")).fetchall()
+                """, (market, f"{search}%", f"%{search}%")).fetchall()
             else:
                 rows = conn.execute("""
                     SELECT ticker, name FROM securities
-                    WHERE is_active = 1 AND is_watchlist = 1
+                    WHERE is_active = 1 AND market = ? AND is_watchlist = 1
                     ORDER BY ticker LIMIT 30
-                """).fetchall()
+                """, (market,)).fetchall()
             stock_opts = [{"label": f"{r['ticker']} — {r['name']}",
                             "value": r["ticker"]} for r in rows]
 
-            options = list(INDEX_OPTIONS) + portfolio_opts + composite_opts + stock_opts
+            options = list(market_indices) + portfolio_opts + composite_opts + stock_opts
 
-            # Safeguard: always include the currently-selected value
+            # Safeguard: always include the currently-selected value, even
+            # if it belongs to the other market — the user can still
+            # interact with it but new dropdown searches are market-scoped.
             if current_value and not any(o["value"] == current_value for o in options):
                 if current_value.startswith("@") or current_value.startswith("&"):
-                    options.insert(len(INDEX_OPTIONS),
+                    options.insert(len(market_indices),
                                     {"label": current_value, "value": current_value})
                 else:
                     cur_row = conn.execute(
@@ -101,7 +145,7 @@ def register_risk_callbacks(app, db_path: str):
                     ).fetchone()
                     label = (f"{cur_row['ticker']} — {cur_row['name']}"
                              if cur_row else current_value)
-                    options.insert(len(INDEX_OPTIONS),
+                    options.insert(len(market_indices),
                                     {"label": label, "value": current_value})
         return options
 

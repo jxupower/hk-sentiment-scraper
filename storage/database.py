@@ -22,6 +22,7 @@ class Database:
                     published_at DATETIME,
                     author       TEXT,
                     raw_score    REAL,
+                    market       TEXT NOT NULL DEFAULT 'HK',
                     fetched_at   DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -69,7 +70,7 @@ class Database:
 
                 CREATE TABLE IF NOT EXISTS securities (
                     ticker            TEXT PRIMARY KEY,
-                    hkex_code         TEXT NOT NULL,
+                    hkex_code         TEXT,
                     name              TEXT NOT NULL,
                     listing_category  TEXT,
                     lot_size          INTEGER,
@@ -78,6 +79,7 @@ class Database:
                     aliases_json      TEXT,
                     yf_sector         TEXT,
                     yf_industry       TEXT,
+                    market            TEXT NOT NULL DEFAULT 'HK',
                     is_active         INTEGER NOT NULL DEFAULT 1,
                     first_seen        DATETIME DEFAULT CURRENT_TIMESTAMP,
                     last_refreshed    DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -86,6 +88,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS fundamentals_snapshots (
                     id                INTEGER PRIMARY KEY AUTOINCREMENT,
                     ticker            TEXT NOT NULL,
+                    market            TEXT NOT NULL DEFAULT 'HK',
                     snapshot_date     DATE NOT NULL,
                     trailing_pe       REAL,
                     forward_pe        REAL,
@@ -125,6 +128,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS historical_prices (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
                     ticker      TEXT NOT NULL,
+                    market      TEXT NOT NULL DEFAULT 'HK',
                     date        DATE NOT NULL,
                     open        REAL,
                     high        REAL,
@@ -242,7 +246,122 @@ class Database:
                 ("sub_sector",       "TEXT"),
                 ("effective_sector", "TEXT"),
             ])
+            # US-market expansion migration: every table that holds per-ticker
+            # rows gains a `market` column ('HK' | 'US'). Default 'HK' keeps
+            # existing rows unchanged. SQLite's ADD COLUMN can only set a
+            # constant default (not an expression), so historical_prices /
+            # fundamentals_snapshots get backfilled by ticker convention via
+            # _backfill_market_by_ticker() below.
+            self._add_columns_if_missing(conn, "articles", [
+                ("market", "TEXT NOT NULL DEFAULT 'HK'"),
+            ])
+            self._add_columns_if_missing(conn, "securities", [
+                ("market", "TEXT NOT NULL DEFAULT 'HK'"),
+            ])
+            self._add_columns_if_missing(conn, "fundamentals_snapshots", [
+                ("market", "TEXT NOT NULL DEFAULT 'HK'"),
+            ])
+            self._add_columns_if_missing(conn, "historical_prices", [
+                ("market", "TEXT NOT NULL DEFAULT 'HK'"),
+            ])
+            # Backfill rows where the convention says US but the column was
+            # filled with the 'HK' default during the ADD COLUMN. Safe to
+            # re-run; only touches mis-tagged rows.
+            self._backfill_market_by_ticker(conn)
+            # Loosen the legacy NOT NULL constraint on securities.hkex_code so
+            # US rows (which have no HKEX code) can be inserted by Phase 2's
+            # reconcile_us(). Idempotent — only rebuilds the table if the
+            # legacy constraint is still in place.
+            self._drop_hkex_code_not_null(conn)
+            # Composite indexes keyed on market — the existing single-column
+            # indexes still serve HK-only queries, but cross-market queries
+            # benefit from the leading-market column.
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_securities_market_active "
+                "ON securities(market, is_active)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_articles_market_published "
+                "ON articles(market, published_at)"
+            )
+            conn.commit()
         logger.info("Database initialized at %s", self.db_path)
+
+    def _backfill_market_by_ticker(self, conn):
+        """For rows where `market` is the default 'HK' but the ticker
+        convention says otherwise, write the correct market. Idempotent —
+        safe to re-run; an already-correct row is a no-op."""
+        # historical_prices: tickers without `.HK` suffix and not in the
+        # HK-indices/composite-prefix set are US.
+        conn.execute("""
+            UPDATE historical_prices
+               SET market = 'US'
+             WHERE market = 'HK'
+               AND ticker NOT LIKE '%.HK'
+               AND ticker NOT IN ('^HSI','^HSCEI','^HSTECH')
+               AND ticker NOT LIKE '&HK:%'
+               AND ticker NOT LIKE '&%'
+               AND ticker NOT LIKE '@%'
+        """)
+        conn.execute("""
+            UPDATE fundamentals_snapshots
+               SET market = 'US'
+             WHERE market = 'HK'
+               AND ticker NOT LIKE '%.HK'
+        """)
+        conn.commit()
+
+    def _drop_hkex_code_not_null(self, conn):
+        """Rebuild `securities` without the NOT NULL constraint on hkex_code
+        so US rows can omit it. Idempotent — only runs when the constraint
+        is still in place. SQLite has no ALTER COLUMN DROP NOT NULL, so we
+        use the standard create-new / copy / drop / rename pattern."""
+        # Cheap probe: look at the column definition.
+        info = conn.execute("PRAGMA table_info(securities)").fetchall()
+        hkex_col = next((r for r in info if r[1] == "hkex_code"), None)
+        # PRAGMA columns: (cid, name, type, notnull, dflt_value, pk)
+        if hkex_col is None or hkex_col[3] == 0:
+            return  # already nullable
+        logger.info("Migration: rebuilding securities table to drop hkex_code NOT NULL")
+        conn.executescript("""
+            BEGIN;
+            CREATE TABLE securities_new (
+                ticker            TEXT PRIMARY KEY,
+                hkex_code         TEXT,
+                name              TEXT NOT NULL,
+                listing_category  TEXT,
+                lot_size          INTEGER,
+                is_watchlist      INTEGER NOT NULL DEFAULT 0,
+                watchlist_sector  TEXT,
+                aliases_json      TEXT,
+                yf_sector         TEXT,
+                yf_industry       TEXT,
+                sub_sector        TEXT,
+                effective_sector  TEXT,
+                market            TEXT NOT NULL DEFAULT 'HK',
+                is_active         INTEGER NOT NULL DEFAULT 1,
+                first_seen        DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_refreshed    DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO securities_new (
+                ticker, hkex_code, name, listing_category, lot_size,
+                is_watchlist, watchlist_sector, aliases_json,
+                yf_sector, yf_industry, sub_sector, effective_sector,
+                market, is_active, first_seen, last_refreshed
+            )
+            SELECT
+                ticker, hkex_code, name, listing_category, lot_size,
+                is_watchlist, watchlist_sector, aliases_json,
+                yf_sector, yf_industry, sub_sector, effective_sector,
+                market, is_active, first_seen, last_refreshed
+            FROM securities;
+            DROP TABLE securities;
+            ALTER TABLE securities_new RENAME TO securities;
+            CREATE INDEX IF NOT EXISTS idx_securities_watchlist ON securities(is_watchlist);
+            CREATE INDEX IF NOT EXISTS idx_securities_category  ON securities(listing_category);
+            CREATE INDEX IF NOT EXISTS idx_securities_market_active ON securities(market, is_active);
+            COMMIT;
+        """)
 
     def _add_columns_if_missing(self, conn, table: str, columns: list[tuple[str, str]]):
         """Idempotently add columns; SQLite has no IF NOT EXISTS for ADD COLUMN."""

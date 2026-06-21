@@ -12,7 +12,9 @@ BASE_DIR = Path(__file__).parent.parent
 # Paths
 DB_PATH = str(BASE_DIR / "data" / "sentiment.db")
 WATCHLIST_PATH = str(BASE_DIR / "config" / "watchlist.yaml")
+WATCHLIST_PATH_US = str(BASE_DIR / "config" / "watchlist_us.yaml")
 RSS_FEEDS_PATH = str(BASE_DIR / "config" / "rss_feeds.yaml")
+RSS_FEEDS_PATH_US = str(BASE_DIR / "config" / "rss_feeds_us.yaml")
 HKEX_CACHE_DIR = BASE_DIR / "data" / "cache"
 
 # External data sources
@@ -57,14 +59,26 @@ def _normalize_entry(entry) -> dict:
     }
 
 
-def load_watchlist() -> dict:
-    with open(WATCHLIST_PATH) as f:
-        data = yaml.safe_load(f)
+def load_watchlist(market: str = "HK") -> dict:
+    """Load the watchlist YAML for the given market.
+
+    HK uses `config/watchlist.yaml`; US uses `config/watchlist_us.yaml`.
+    Falls back to an empty `sectors` dict if the file is missing (so the US
+    path can ship before the YAML is curated).
+    """
+    path = WATCHLIST_PATH_US if (market or "HK").upper() == "US" else WATCHLIST_PATH
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {"sectors": {}}
     s = data.get("settings", {})
-    global SCRAPE_INTERVAL_MINUTES, MAX_ARTICLES_PER_SOURCE, SENTIMENT_HISTORY_DAYS
-    SCRAPE_INTERVAL_MINUTES = s.get("default_scrape_interval_minutes", SCRAPE_INTERVAL_MINUTES)
-    MAX_ARTICLES_PER_SOURCE = s.get("max_articles_per_source", MAX_ARTICLES_PER_SOURCE)
-    SENTIMENT_HISTORY_DAYS = s.get("sentiment_history_days", SENTIMENT_HISTORY_DAYS)
+    # Only the HK YAML drives the global interval settings — US is additive.
+    if (market or "HK").upper() == "HK":
+        global SCRAPE_INTERVAL_MINUTES, MAX_ARTICLES_PER_SOURCE, SENTIMENT_HISTORY_DAYS
+        SCRAPE_INTERVAL_MINUTES = s.get("default_scrape_interval_minutes", SCRAPE_INTERVAL_MINUTES)
+        MAX_ARTICLES_PER_SOURCE = s.get("max_articles_per_source", MAX_ARTICLES_PER_SOURCE)
+        SENTIMENT_HISTORY_DAYS = s.get("sentiment_history_days", SENTIMENT_HISTORY_DAYS)
     # Normalize all entries
     normalized = {}
     for sector, entries in data.get("sectors", {}).items():
@@ -129,12 +143,21 @@ def get_subsectors_for_sentiment(watchlist: dict, securities_repo) -> list[str]:
 
 
 def get_tickers_for_subsector(sub_sector: str, watchlist: dict,
-                                securities_repo) -> list[str]:
+                                securities_repo,
+                                market: str | None = None) -> list[str]:
     """Watchlist tickers whose resolved sub_sector matches. Used by the
     Sentiment tab's per-bucket score queries + by job_runner when computing
-    sub_sector-level sector_signals."""
+    sub_sector-level sector_signals. When `market` is set, the result is
+    additionally filtered to tickers belonging to that market — needed so
+    the Sentiment tab doesn't blend HK + US scores under one sub-sector
+    name like 'Banks'."""
+    from utils.market import market_of_ticker
     smap = _get_sub_sector_map(watchlist, securities_repo)
-    return [t for t, s in smap.items() if s == sub_sector]
+    tickers = [t for t, s in smap.items() if s == sub_sector]
+    if market is not None:
+        m = market.upper()
+        tickers = [t for t in tickers if market_of_ticker(t) == m]
+    return tickers
 
 
 def get_subsector_for_ticker(ticker: str, watchlist: dict,
@@ -241,6 +264,55 @@ _SECTOR_BROAD_TERMS: dict[str, list[str]] = {
 }
 
 
+_SECTOR_BROAD_TERMS_US: dict[str, list[str]] = {
+    "Platforms & Cloud Infrastructure": ["US tech", "Big Tech", "Magnificent Seven",
+                                          "FAANG", "MAANG", "US cloud", "AWS",
+                                          "Azure", "Google Cloud", "US AI",
+                                          "generative AI", "OpenAI", "ChatGPT"],
+    "Semiconductors & Equipment": ["US chip", "American semiconductor",
+                                    "US foundry", "US chipmaker",
+                                    "CHIPS Act", "semiconductor equipment",
+                                    "GPU", "datacenter chip", "AI chip"],
+    "Application Software": ["US SaaS", "enterprise software", "American software"],
+    "Consumer Electronics": ["US consumer electronics", "iPhone sales", "American hardware"],
+    "Banks": ["US bank", "American bank", "US regional banks", "US lender",
+              "Federal Reserve", "FDIC", "US banking", "money center bank"],
+    "Capital Markets": ["Wall Street", "NYSE", "Nasdaq exchange", "US broker",
+                          "US investment bank", "US asset manager"],
+    "Credit Services": ["US payments", "American payments", "US fintech",
+                         "Visa", "Mastercard"],
+    "Insurance": ["US insurance", "American insurer", "P&C insurance"],
+    "Health Insurance": ["US health insurance", "US health insurer",
+                          "Medicare Advantage", "Medicaid managed care"],
+    "Biotechnology": ["US biotech", "American biotech", "FDA approval",
+                       "FDA trial", "Phase 3 trial", "biotech IPO"],
+    "Drug Manufacturing": ["US pharma", "American pharmaceutical",
+                            "US drugmaker", "drug pricing"],
+    "Oil & Gas": ["US oil", "American oil", "US shale", "US natural gas",
+                   "WTI crude", "Permian basin", "US LNG"],
+    "Auto Manufacturers": ["US auto", "American carmaker", "Detroit Three",
+                            "US EV", "US auto sales"],
+    "Auto Tech": ["EV charging", "US electric vehicle", "Tesla",
+                   "autonomous driving", "robotaxi"],
+    "Retail (Defensive)": ["US retail", "American retailer", "US consumer spending"],
+    "Packaged Foods & Beverages": ["US consumer staples", "American grocery",
+                                     "US food", "US beverage"],
+    "Media & Entertainment": ["US streaming", "Hollywood", "US box office",
+                                "Netflix subscribers", "Disney+ subscribers"],
+    "Telecom Services": ["US telecom", "US wireless", "American telecommunications",
+                          "AT&T", "Verizon", "T-Mobile"],
+    "Aerospace & Defense": ["US defense", "Pentagon contract", "US aerospace",
+                              "Boeing", "Lockheed", "US military aircraft"],
+    "Real Estate Developers": ["US homebuilder", "US housing market",
+                                 "American homebuilder"],
+    "Diversified Real Estate": ["US REIT", "US commercial real estate"],
+    "Regulated Electric Utilities": ["US utility", "American power utility",
+                                       "US grid"],
+    "Renewable Utilities": ["US renewable energy", "US solar", "US wind",
+                              "IRA tax credit"],
+}
+
+
 def build_search_terms(watchlist: dict) -> dict[str, list[str]]:
     """Returns {ticker: [name, alias1, alias2, ...]} for article text matching.
 
@@ -256,9 +328,16 @@ def build_search_terms(watchlist: dict) -> dict[str, list[str]]:
     return result
 
 
-def load_rss_feeds() -> list[dict]:
-    with open(RSS_FEEDS_PATH) as f:
-        data = yaml.safe_load(f)
+def load_rss_feeds(market: str = "HK") -> list[dict]:
+    """Load the RSS feeds YAML for the given market. Falls back to empty
+    list if the US YAML is missing so the scraper can ship before the
+    feeds are curated."""
+    path = RSS_FEEDS_PATH_US if (market or "HK").upper() == "US" else RSS_FEEDS_PATH
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return []
     return data.get("feeds", [])
 
 
@@ -276,12 +355,18 @@ def clean_hkex_name(name: str) -> str:
 
 
 def build_search_terms_from_db(securities_rows: list[dict],
-                               watchlist_only: bool = False) -> dict[str, list[str]]:
+                               watchlist_only: bool = False,
+                               market: str = "HK") -> dict[str, list[str]]:
     """Build {ticker: [terms]} from the securities table.
 
-    For watchlist tickers, terms = aliases_json + sector broad terms.
-    For universe tickers, terms = [cleaned_hkex_name].
+    For watchlist tickers, terms = aliases_json + sector broad terms (sourced
+    from the market-appropriate broad-terms dict).
+    For universe tickers, terms = [cleaned_name] (clean_hkex_name strips
+    HKEX suffixes; for US rows the name passes through unchanged).
     """
+    market = (market or "HK").upper()
+    broad_terms_map = (_SECTOR_BROAD_TERMS_US if market == "US"
+                        else _SECTOR_BROAD_TERMS)
     result: dict[str, list[str]] = {}
     for row in securities_rows:
         ticker = row["ticker"]
@@ -291,13 +376,13 @@ def build_search_terms_from_db(securities_rows: list[dict],
             except json.JSONDecodeError:
                 aliases = []
             sector = row.get("watchlist_sector") or ""
-            broad = _SECTOR_BROAD_TERMS.get(sector, [])
-            # Aliases already start with the YAML name (set by reconciler in Phase 3 migration);
-            # for older rows that don't, fall back to cleaned HKEX name.
+            broad = broad_terms_map.get(sector, [])
             terms = list(aliases) if aliases else [clean_hkex_name(row["name"])]
             terms.extend(broad)
             result[ticker] = [t for t in terms if t]
         elif not watchlist_only:
+            # clean_hkex_name() is a no-op for US tickers (no .HK suffix /
+            # share-class artefact to strip), so the same helper works for both.
             cleaned = clean_hkex_name(row["name"])
             if cleaned:
                 result[ticker] = [cleaned]

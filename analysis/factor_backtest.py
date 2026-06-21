@@ -37,7 +37,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_REPORTING_LAG_DAYS = 60
 RISK_FREE_RATE_ANNUAL = 0.03   # locked per plan
 TARGET_TOP_N = 10
-BENCHMARK_TICKER = "^HSI"
+BENCHMARK_TICKER = "^HSI"     # HK default; US runs swap in '^GSPC' via benchmark_for_market
+BENCHMARK_TICKER_US = "^GSPC"
+
+
+def benchmark_for_market(market: str | None) -> str:
+    """Default benchmark per market — used by the dashboard Backtest tab so
+    a US run is naturally compared to the S&P 500, an HK run to the Hang
+    Seng. The user can still override either via the Risk Forecast dropdown
+    for ad-hoc comparisons."""
+    return BENCHMARK_TICKER_US if (market or "HK").upper() == "US" else BENCHMARK_TICKER
 # Cap any single position at this fraction of the portfolio. Cap-weighting
 # the top 10 by raw market_cap was producing 40-55% concentrations on a
 # single mega-cap; that's not a diversified portfolio, it's a 2-name bet.
@@ -151,11 +160,13 @@ class PresetBacktestResult:
 # Helpers
 # ============================================================================
 
-def _hsi_trading_days(repo, start_date: str, end_date: str) -> list[str]:
+def _hsi_trading_days(repo, start_date: str, end_date: str,
+                       benchmark: str = BENCHMARK_TICKER) -> list[str]:
     """Trading days between [start_date, end_date] inclusive, derived from
-    ^HSI rows in historical_prices. Honest about HK public holidays without
-    having to maintain a calendar table."""
-    rows = repo.get_price_series(BENCHMARK_TICKER, start_date, end_date)
+    benchmark rows in historical_prices. Honest about market holidays
+    without maintaining a calendar table. Default benchmark is ^HSI for
+    backwards compatibility; pass `benchmark='^GSPC'` for US."""
+    rows = repo.get_price_series(benchmark, start_date, end_date)
     return [r["date"] for r in rows]
 
 
@@ -620,10 +631,11 @@ def _sector_breakdown(holdings: list[Holding]) -> list[tuple[str, float]]:
 
 
 def _build_daily_benchmark_curve(repo, start_date: str, end_date: str,
-                                    base_date: str) -> list[tuple[str, float]]:
-    """Daily ^HSI normalised to 100 at the strategy's first rebalance date
-    (`base_date`), so the two daily curves overlay cleanly on the chart."""
-    rows = repo.get_price_series(BENCHMARK_TICKER, start_date, end_date)
+                                    base_date: str,
+                                    benchmark: str = BENCHMARK_TICKER) -> list[tuple[str, float]]:
+    """Daily benchmark normalised to 100 at the strategy's first rebalance
+    date (`base_date`), so the two daily curves overlay cleanly on the chart."""
+    rows = repo.get_price_series(benchmark, start_date, end_date)
     if not rows:
         return []
     by_date = {r["date"]: r.get("adj_close") for r in rows
@@ -659,10 +671,11 @@ def _build_equity_curve(rebalance_log: list[RebalanceSnapshot]) -> list[tuple[st
 
 
 def _benchmark_curve(repo, start_date: str, end_date: str,
-                      rebalance_dates: list[str]) -> list[tuple[str, float]]:
-    """^HSI normalized to 100 at start, sampled at the same dates as the
-    equity curve so they overlay cleanly on the chart."""
-    rows = repo.get_price_series(BENCHMARK_TICKER, start_date, end_date)
+                      rebalance_dates: list[str],
+                      benchmark: str = BENCHMARK_TICKER) -> list[tuple[str, float]]:
+    """Benchmark normalized to 100 at start, sampled at the same dates as
+    the equity curve so they overlay cleanly on the chart."""
+    rows = repo.get_price_series(benchmark, start_date, end_date)
     if not rows:
         return []
     base = next((r["adj_close"] for r in rows if r.get("adj_close")), None)
@@ -769,9 +782,11 @@ def run_preset_backtest(preset_id: str,
                           db_path: str,
                           sector_risk_path: Optional[str] = None,
                           weight_cap: float = DEFAULT_MAX_WEIGHT,
+                          market: str = "HK",
                           ) -> PresetBacktestResult:
     """Run a preset + V/Q/G top-10 walk-forward backtest. See module
-    docstring for the algorithm."""
+    docstring for the algorithm. `market` scopes the universe (HK / US)
+    and flips the benchmark + trading-day calendar to the market default."""
     from analysis.factor_scores import FactorScoringEngine
     from analysis.preset_filter import apply_preset
     from dashboard.screener_layout import NUMERIC_FILTERS
@@ -783,14 +798,18 @@ def run_preset_backtest(preset_id: str,
     if preset is None:
         raise ValueError(f"Unknown preset id: {preset_id}")
 
+    market = (market or "HK").upper()
+    benchmark = benchmark_for_market(market)
+
     db = Database(db_path)
     prices_repo = get_prices_repo(db)
 
     # --- Build rebalance calendar ---------------------------------------
-    trading_days = _hsi_trading_days(prices_repo, start_date, end_date)
+    trading_days = _hsi_trading_days(prices_repo, start_date, end_date,
+                                       benchmark=benchmark)
     if not trading_days:
         raise RuntimeError(
-            f"No ^HSI trading days between {start_date} and {end_date}. "
+            f"No {benchmark} trading days between {start_date} and {end_date}. "
             "Run a price refresh first."
         )
     rebal_dates = _rebalance_dates(trading_days, rebalance_freq)
@@ -858,7 +877,8 @@ def run_preset_backtest(preset_id: str,
                      for r in raw_rows]
         enriched_by_snap[snap_date] = {r["ticker"]: r for r in enriched}
         results, _diag = engine.compute(as_of_date=snap_date,
-                                          pre_loaded_rows=enriched)
+                                          pre_loaded_rows=enriched,
+                                          market=market)
         score_cache[snap_date] = results
 
     # --- Per rebalance: filter → top-10 → cap-weight → next-period return -
@@ -951,7 +971,8 @@ def run_preset_backtest(preset_id: str,
     # --- Curves + metrics ------------------------------------------------
     equity_curve = _build_equity_curve(rebalance_log)
     benchmark_curve = _benchmark_curve(prices_repo, start_date, end_date,
-                                         [s.date for s in rebalance_log])
+                                         [s.date for s in rebalance_log],
+                                         benchmark=benchmark)
     metrics = _compute_metrics(rebalance_log, benchmark_curve, rebalance_freq)
 
     # --- Shares + trade log (needs equity_curve to know notional value) --
@@ -966,6 +987,7 @@ def run_preset_backtest(preset_id: str,
     daily_benchmark = _build_daily_benchmark_curve(
         prices_repo, start_date, end_date,
         rebalance_log[0].date if rebalance_log else start_date,
+        benchmark=benchmark,
     )
     drawdown = _drawdown_series(daily_equity)
     turnover = _turnover_per_rebalance(rebalance_log)

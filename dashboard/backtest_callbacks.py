@@ -73,12 +73,21 @@ def register_backtest_callbacks(app, db_path: str):
         Output("bt-save-subtitle", "children"),
         Output("bt-save-btn", "children"),
         Output("bt-run-btn", "children", allow_duplicate=True),
+        Output("bt-alert-banner", "children"),
         Input("user-language", "data"),
+        Input("user-market", "data"),
         prevent_initial_call="initial_duplicate",
     )
-    def i18n_backtest(lang):
+    def i18n_backtest(lang, market):
         from dashboard.i18n import T as I
+        from dash import html
         lang = lang or "en"
+        market = (market or "HK").upper()
+        # Market-aware benchmark label — sneaks into the hit-rate /
+        # excess-return stat labels + the equity-curve header + the alert
+        # banner. Keeps users in US mode from reading "vs ^HSI" on a
+        # ^GSPC-benchmarked run.
+        bench = "^GSPC" if market == "US" else "^HSI"
         preset_options = [{"label": I(f"screener.preset.{p['id']}.label", lang),
                              "value": p["id"]}
                             for p in INVESTOR_PRESETS]
@@ -142,10 +151,10 @@ def register_backtest_callbacks(app, db_path: str):
             I("backtest.stat.vol", lang),
             I("backtest.stat.sharpe", lang),
             I("backtest.stat.maxdd", lang),
-            I("backtest.stat.hit", lang),
-            I("backtest.stat.excess", lang),
+            f"Hit rate vs {bench}",
+            f"Excess vs {bench}",
             I("backtest.stat.turnover", lang),
-            I("backtest.section.equity", lang),
+            f"Equity curve vs {bench}",
             I("backtest.section.drawdown", lang),
             I("backtest.section.sector", lang),
             I("backtest.section.initial", lang),
@@ -156,6 +165,22 @@ def register_backtest_callbacks(app, db_path: str):
             I("backtest.save_sub", lang),
             I("backtest.btn.save", lang),
             I("backtest.btn.run", lang),
+            # Market-aware alert banner — swaps ^HSI ↔ ^GSPC in the
+            # "Returns are compounded vs <bench>" sentence.
+            [
+                html.Strong("Preset + V/Q/G top-10 walk-forward backtest. "),
+                "At every rebalance date the engine applies the chosen "
+                "investor preset to as-of fundamentals, ranks survivors by "
+                "composite V/Q/G percentile, and holds the top 10 ",
+                html.Em("market-cap-weighted"),
+                f". Returns are compounded vs {bench}; Sharpe uses rf = 3%. ",
+                html.Br(),
+                html.Strong("Honest caveats: ", className="ms-2"),
+                "fundamentals are as-restated (60-day reporting lag "
+                "applied); survivor bias from delisted tickers; no transaction "
+                "costs; daily rebalances mostly re-equalise cap weights since "
+                "snapshots are quarterly/annual.",
+            ],
         )
 
     # --- Run-button feedback (clientside, fires instantly on click) ----
@@ -214,11 +239,13 @@ def register_backtest_callbacks(app, db_path: str):
         State("bt-rebal-select", "value"),
         State("bt-weight-cap", "value"),
         State("user-language", "data"),
+        State("user-market", "data"),
         prevent_initial_call=True,
     )
-    def run_backtest(_n, preset_id, horizon_years, rebal_freq, weight_cap, lang):
+    def run_backtest(_n, preset_id, horizon_years, rebal_freq, weight_cap, lang, market):
         from dashboard.i18n import T as I
         lang = lang or "en"
+        market = (market or "HK").upper()
         run_btn_text = I("backtest.btn.run", lang)
         if not preset_id or not horizon_years or not rebal_freq:
             raise PreventUpdate
@@ -241,7 +268,7 @@ def register_backtest_callbacks(app, db_path: str):
         try:
             result = run_preset_backtest(
                 preset_id, start_iso, end_iso, rebal_freq,
-                db_path, sector_risk_path, weight_cap=cap,
+                db_path, sector_risk_path, weight_cap=cap, market=market,
             )
         except Exception as e:
             logger.exception("Backtest failed")
@@ -299,11 +326,12 @@ def register_backtest_callbacks(app, db_path: str):
                     "shares": round(h.shares, 2),
                     "shares_delta": round(h.shares - init_sh, 2)}
 
+        ccy_sym = "US$" if market == "US" else "HK$"
         initial_holdings = sorted(result.rebalance_log[0].holdings,
                                     key=lambda h: -h.weight)
         initial_rows = [_row(h) for h in initial_holdings]
         initial_date = (f"as of {result.rebalance_log[0].date} "
-                          f"— notional capital HK$1,000,000")
+                          f"— notional capital {ccy_sym}1,000,000")
 
         final_holdings = sorted(result.rebalance_log[-1].holdings,
                                   key=lambda h: -h.weight)
@@ -323,11 +351,11 @@ def register_backtest_callbacks(app, db_path: str):
                        key=lambda tr: tr.units * (tr.price or 0),
                        default=None)
         biggest_str = (f"biggest: {biggest.action} {biggest.ticker} "
-                        f"HK${biggest.units * biggest.price:,.0f}"
+                        f"{ccy_sym}{biggest.units * biggest.price:,.0f}"
                         if biggest else "")
         trades_summary = (
             f"{len(result.trade_log)} trades — {n_buy} buys, {n_sell} sells "
-            f"· total volume HK${total_vol:,.0f}  ·  {biggest_str}"
+            f"· total volume {ccy_sym}{total_vol:,.0f}  ·  {biggest_str}"
         )
 
         n_surv = len(result.preset_survivors_at_start)

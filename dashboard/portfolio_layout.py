@@ -153,6 +153,7 @@ def build_portfolio_tab() -> html.Div:
                           className="fw-bold"),
                 html.Span(" — type ticker (e.g. 0700.HK or ^HSI) + shares. "
                           "Use shares=0 for candidates you're considering.",
+                          id="portfolio-holdings-hint",
                           style={"color": T.TEXT_MUTED, "fontSize": "0.8rem",
                                  "marginLeft": "8px"}),
             ]),

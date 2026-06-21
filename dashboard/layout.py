@@ -54,6 +54,11 @@ def build_layout(sectors: list[str]) -> html.Div:
         # so the choice survives page reloads + opening the dashboard in a
         # new browser tab on the same machine.
         dcc.Store(id="user-language", data="en", storage_type="local"),
+        # Market toggle state (HK / US). Same persistence as user-language —
+        # the choice scopes every tab's data queries (Screener universe,
+        # Discovery rank, Stock Research, Backtest benchmark, Risk Forecast
+        # indices, Portfolio holdings, Sentiment sector cards).
+        dcc.Store(id="user-market", data="HK", storage_type="local"),
         _header_bar(),
         dbc.Container([
             dbc.Tabs(id="main-tabs", active_tab="tab-screener",
@@ -123,6 +128,17 @@ def _header_bar():
                     html.Span(id="last-updated",
                                 style={"color": T.PRIMARY, "fontSize": "0.8rem",
                                          "fontWeight": "500", "marginRight": "12px"}),
+                    # Market toggle (HK / US). Clientside callback flips the
+                    # user-market Store + outline state on click; server-side
+                    # callbacks re-fetch every tab's data scoped to the
+                    # active market. The store is localStorage-persisted so
+                    # the choice survives reloads.
+                    dbc.ButtonGroup([
+                        dbc.Button("HK", id="market-hk-btn", color="primary",
+                                     size="sm", outline=False, n_clicks=0),
+                        dbc.Button("US", id="market-us-btn", color="primary",
+                                     size="sm", outline=True, n_clicks=0),
+                    ], size="sm", className="me-2"),
                     # English / 中文 segmented toggle. Clientside callback
                     # flips the user-language Store + this button's `outline`
                     # state on click; server-side callbacks rebuild every

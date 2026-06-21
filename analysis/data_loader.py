@@ -81,14 +81,16 @@ def get_or_fetch_prices(ticker: str, db: Database, *,
 
 def get_or_fetch_index_prices(index_ticker: str, db: Database, *,
                                 force_refresh: bool = False) -> list[dict]:
-    """Cache-aside read for HK index prices (HSI/HSCEI/HSTECH).
+    """Cache-aside read for index prices.
 
-    `index_ticker` uses our "^"-prefix convention (e.g. "^HSI") so it's
-    distinguishable from equities in the same `historical_prices` table
-    and doesn't pollute the screener (which queries securities, not
-    historical_prices). Internally we strip the prefix before calling
-    akshare. Source is fetch_one_index() in akshare_price_scraper.
+    HK indices (`^HSI`, `^HSCEI`, `^HSTECH`) hit akshare (Eastmoney via
+    sina) because yfinance occasionally returns sparse HK index history.
+    US indices (`^GSPC`, `^IXIC`, `^DJI`, `^NDX`, `^RUT`, `^VIX`) hit
+    yfinance directly — they're natively supported. The "^"-prefix is
+    preserved in storage so equity queries are never polluted by index
+    rows.
     """
+    from utils.market import market_of_ticker
     repo = get_prices_repo(db)
 
     if not force_refresh:
@@ -97,16 +99,22 @@ def get_or_fetch_index_prices(index_ticker: str, db: Database, *,
         if latest_str and not _is_price_stale(latest_str):
             return _get_full_series(repo, index_ticker)
 
-    bare = index_ticker.lstrip("^")
-    log.info("Cache-aside fetch: akshare index %s", bare)
-    try:
-        from scrapers.akshare_price_scraper import fetch_one_index
-        rows = fetch_one_index(bare)
-    except Exception as e:
-        log.warning("akshare index fetch failed for %s: %s", bare, e)
-        rows = []
+    market = market_of_ticker(index_ticker)
+    rows: list[dict] = []
+    if market == "HK":
+        bare = index_ticker.lstrip("^")
+        log.info("Cache-aside fetch: akshare index %s", bare)
+        try:
+            from scrapers.akshare_price_scraper import fetch_one_index
+            rows = fetch_one_index(bare)
+        except Exception as e:
+            log.warning("akshare index fetch failed for %s: %s", bare, e)
+    else:
+        log.info("Cache-aside fetch: yfinance index %s", index_ticker)
+        rows = _fetch_yfinance_prices(index_ticker, period="10y")
+
     if rows:
-        repo.upsert_rows(index_ticker, rows)  # stored under "^HSI", not "HSI"
+        repo.upsert_rows(index_ticker, rows)
         log.info("  upserted %d rows for %s", len(rows), index_ticker)
     return _get_full_series(repo, index_ticker)
 
@@ -303,6 +311,11 @@ def _is_fundamentals_stale(latest_date) -> bool:
 
 
 def _fetch_akshare_history(ticker: str) -> list:
+    # akshare is HK-only — skip silently for US tickers so the cache-aside
+    # caller falls through to yfinance .info / .financials.
+    from utils.market import market_of_ticker
+    if market_of_ticker(ticker) != "HK":
+        return []
     try:
         from scrapers.akshare_historical_scraper import fetch_history
         return fetch_history(ticker)

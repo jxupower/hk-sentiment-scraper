@@ -1,0 +1,209 @@
+settings:
+  default_scrape_interval_minutes: 30
+  max_articles_per_source: 50
+  sentiment_history_days: 90
+
+# US curated deep-tracking list — ~40 mega-cap names organized by sector.
+# Each entry has a yfinance ticker (US uses bare symbols, e.g. "AAPL"; share
+# classes use dashes per yfinance convention, e.g. "BRK-B"), a name, and
+# aliases used by the matcher to catch articles that mention the company
+# without the ticker.
+#
+# Optional `sub_sector` field overrides the yf_industry-based mapping in
+# config/sub_sectors.yaml (highest-priority winner in the resolution chain).
+sectors:
+  Platforms & Cloud Infrastructure:
+    - ticker: "GOOGL"
+      name: "Alphabet"
+      sub_sector: "Platforms & Cloud Infrastructure"
+      aliases: ["Google", "YouTube", "Google Cloud", "GCP", "Waymo", "DeepMind", "Gemini AI"]
+    - ticker: "META"
+      name: "Meta Platforms"
+      sub_sector: "Platforms & Cloud Infrastructure"
+      aliases: ["Facebook", "Instagram", "WhatsApp", "Meta AI", "Threads", "Reality Labs"]
+    - ticker: "AMZN"
+      name: "Amazon"
+      sub_sector: "Platforms & Cloud Infrastructure"
+      aliases: ["AWS", "Amazon Web Services", "Prime", "Whole Foods", "Kindle"]
+    - ticker: "MSFT"
+      name: "Microsoft"
+      sub_sector: "Platforms & Cloud Infrastructure"
+      aliases: ["Azure", "Office 365", "Microsoft 365", "Xbox", "LinkedIn", "Copilot", "Bing"]
+
+  Semiconductors & Equipment:
+    - ticker: "NVDA"
+      name: "NVIDIA"
+      sub_sector: "Semiconductors & Equipment"
+      aliases: ["Nvidia", "GeForce", "CUDA", "H100", "Blackwell", "Hopper"]
+    - ticker: "AMD"
+      name: "Advanced Micro Devices"
+      sub_sector: "Semiconductors & Equipment"
+      aliases: ["AMD", "Ryzen", "EPYC", "Radeon", "Instinct"]
+    - ticker: "INTC"
+      name: "Intel"
+      sub_sector: "Semiconductors & Equipment"
+      aliases: ["Intel Corp", "Core processor", "Xeon", "Intel Foundry"]
+    - ticker: "AVGO"
+      name: "Broadcom"
+      sub_sector: "Semiconductors & Equipment"
+      aliases: ["Broadcom", "VMware"]
+    - ticker: "TSM"
+      name: "Taiwan Semiconductor"
+      sub_sector: "Semiconductors & Equipment"
+      aliases: ["TSMC", "Taiwan Semi"]
+    - ticker: "ASML"
+      name: "ASML"
+      sub_sector: "Semiconductors & Equipment"
+      aliases: ["ASML Holding", "EUV", "extreme ultraviolet"]
+
+  Consumer Electronics:
+    - ticker: "AAPL"
+      name: "Apple"
+      aliases: ["iPhone", "iPad", "Apple Watch", "Mac", "Vision Pro", "App Store", "Apple Intelligence"]
+    - ticker: "TSLA"
+      name: "Tesla"
+      sub_sector: "Auto Tech"
+      aliases: ["Tesla Motors", "Model Y", "Model 3", "Cybertruck", "Robotaxi", "FSD", "Full Self-Driving"]
+
+  Banks:
+    - ticker: "JPM"
+      name: "JPMorgan Chase"
+      aliases: ["JPMorgan", "JP Morgan", "Chase Bank", "Jamie Dimon"]
+    - ticker: "BAC"
+      name: "Bank of America"
+      aliases: ["BofA", "Merrill Lynch"]
+    - ticker: "WFC"
+      name: "Wells Fargo"
+      aliases: ["Wells Fargo Bank"]
+    - ticker: "C"
+      name: "Citigroup"
+      aliases: ["Citi", "Citibank"]
+
+  Capital Markets:
+    - ticker: "GS"
+      name: "Goldman Sachs"
+      aliases: ["Goldman", "Marcus by Goldman Sachs"]
+    - ticker: "MS"
+      name: "Morgan Stanley"
+      aliases: ["Morgan Stanley Wealth Management", "E-Trade"]
+    - ticker: "BLK"
+      name: "BlackRock"
+      aliases: ["BlackRock Inc", "iShares", "Aladdin"]
+    - ticker: "SCHW"
+      name: "Charles Schwab"
+      aliases: ["Schwab", "TD Ameritrade"]
+
+  Credit Services:
+    - ticker: "V"
+      name: "Visa"
+      aliases: ["Visa Inc", "Visa Direct"]
+    - ticker: "MA"
+      name: "Mastercard"
+      aliases: ["Mastercard Inc"]
+    - ticker: "AXP"
+      name: "American Express"
+      aliases: ["AmEx", "Amex"]
+
+  Biotechnology:
+    - ticker: "LLY"
+      name: "Eli Lilly"
+      aliases: ["Lilly", "Mounjaro", "Zepbound", "GLP-1"]
+    - ticker: "ABBV"
+      name: "AbbVie"
+      aliases: ["AbbVie Inc", "Humira", "Skyrizi", "Rinvoq"]
+    - ticker: "MRNA"
+      name: "Moderna"
+      aliases: ["Moderna Therapeutics", "mRNA vaccine"]
+    - ticker: "REGN"
+      name: "Regeneron"
+      aliases: ["Regeneron Pharmaceuticals", "Eylea"]
+
+  Drug Manufacturing:
+    - ticker: "JNJ"
+      name: "Johnson & Johnson"
+      aliases: ["J&J", "Janssen"]
+    - ticker: "PFE"
+      name: "Pfizer"
+      aliases: ["Pfizer Inc", "Paxlovid"]
+    - ticker: "MRK"
+      name: "Merck"
+      aliases: ["Merck & Co", "Keytruda"]
+
+  Health Insurance:
+    - ticker: "UNH"
+      name: "UnitedHealth"
+      sub_sector: "Health Insurance"
+      aliases: ["UnitedHealth Group", "Optum"]
+
+  Oil & Gas:
+    - ticker: "XOM"
+      name: "ExxonMobil"
+      aliases: ["Exxon Mobil", "Exxon"]
+    - ticker: "CVX"
+      name: "Chevron"
+      aliases: ["Chevron Corp"]
+    - ticker: "COP"
+      name: "ConocoPhillips"
+      aliases: ["Conoco"]
+
+  Auto Manufacturers:
+    - ticker: "F"
+      name: "Ford"
+      aliases: ["Ford Motor", "F-150 Lightning", "Mustang Mach-E"]
+    - ticker: "GM"
+      name: "General Motors"
+      aliases: ["GM", "Chevrolet", "Cadillac", "Cruise robotaxi"]
+
+  Retail (Defensive):
+    - ticker: "WMT"
+      name: "Walmart"
+      aliases: ["Walmart Inc", "Sam's Club"]
+    - ticker: "COST"
+      name: "Costco"
+      aliases: ["Costco Wholesale"]
+    - ticker: "HD"
+      name: "Home Depot"
+      aliases: ["The Home Depot"]
+
+  Packaged Foods & Beverages:
+    - ticker: "PG"
+      name: "Procter & Gamble"
+      aliases: ["P&G", "Procter and Gamble"]
+    - ticker: "KO"
+      name: "Coca-Cola"
+      aliases: ["Coke", "Coca Cola"]
+    - ticker: "PEP"
+      name: "PepsiCo"
+      aliases: ["Pepsi", "Frito-Lay"]
+
+  Media & Entertainment:
+    - ticker: "NFLX"
+      name: "Netflix"
+      aliases: ["Netflix Inc"]
+    - ticker: "DIS"
+      name: "Disney"
+      aliases: ["Walt Disney", "Disney+", "ESPN", "Marvel", "Lucasfilm"]
+
+  Telecom Services:
+    - ticker: "T"
+      name: "AT&T"
+      aliases: ["AT&T Inc"]
+    - ticker: "VZ"
+      name: "Verizon"
+      aliases: ["Verizon Communications"]
+
+  Aerospace & Defense:
+    - ticker: "BA"
+      name: "Boeing"
+      aliases: ["Boeing Company", "737 MAX", "Dreamliner"]
+    - ticker: "RTX"
+      name: "RTX Corp"
+      aliases: ["Raytheon", "RTX Corporation", "Pratt & Whitney"]
+    - ticker: "LMT"
+      name: "Lockheed Martin"
+      aliases: ["Lockheed", "F-35"]
+
+  Conglomerates:
+    - ticker: "BRK-B"
+      name: "Berkshire Hathaway"
+      aliases: ["Berkshire Hathaway B", "Warren Buffett", "Buffett"]

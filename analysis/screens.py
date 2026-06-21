@@ -272,16 +272,22 @@ def _load_flagged_tickers(sector_risk_path: Optional[str]) -> set[str]:
 
 def run_screen(db_path: str, screen: ScreenDefinition,
                sector_risk_path: Optional[str] = None,
-               params: Optional[ScreenParams] = None) -> list[ScreenResult]:
+               params: Optional[ScreenParams] = None,
+               market: Optional[str] = None) -> list[ScreenResult]:
     """Apply the screen to the latest fundamentals snapshot of every active ticker.
 
     `params` defaults to `screen.default_params` for backward compatibility with
-    the dashboard. The optimizer / backtest engine pass custom params."""
+    the dashboard. The optimizer / backtest engine pass custom params.
+    `market` (HK / US / None) scopes the universe; None preserves the
+    historical cross-market behaviour."""
     use_params = params if params is not None else screen.default_params
     flagged = _load_flagged_tickers(sector_risk_path)
     from analysis.data_loader import get_universe_fundamentals
     from storage.database import Database
     rows = get_universe_fundamentals(Database(db_path))
+    if market is not None:
+        rows = [r for r in rows
+                 if (r.get("market") or "HK") == market.upper()]
 
     results: list[ScreenResult] = []
     for row in rows:

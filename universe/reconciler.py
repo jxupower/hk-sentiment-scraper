@@ -27,7 +27,8 @@ def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
       4. Deactivate any active row whose ticker isn't in the current HKEX list or
          the YAML watchlist (i.e. delisted equities that the upserts didn't touch).
          Skipped when hkex_records is empty (offline-fallback path) so we don't
-         wrongly deactivate everything.
+         wrongly deactivate everything. Scoped to market='HK' so US rows are
+         left alone.
 
     Returns a summary dict for the CLI to print.
     """
@@ -38,10 +39,13 @@ def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
             name=rec["name"],
             listing_category=rec["listing_category"],
             lot_size=rec["lot_size"],
+            market="HK",
         )
     logger.info("Upserted %d HKEX rows into securities", len(hkex_records))
 
-    securities_repo.clear_watchlist_flags()
+    # Watchlist flags are cleared then re-applied — but ONLY for HK rows.
+    # The US-side watchlist (if/when added) clears+re-applies via reconcile_us.
+    securities_repo.clear_watchlist_flags_for_market("HK")
 
     hkex_tickers = {r["ticker"] for r in hkex_records}
     missing_from_hkex: list[str] = []
@@ -79,9 +83,9 @@ def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
                         for entries in watchlist.get("sectors", {}).values()
                         for entry in entries}
         current_set = hkex_tickers | yaml_tickers
-        deactivated = securities_repo.deactivate_missing(current_set)
+        deactivated = securities_repo.deactivate_missing(current_set, market="HK")
         if deactivated:
-            logger.warning("Deactivated %d delisted ticker(s) no longer in HKEX list", deactivated)
+            logger.warning("Deactivated %d delisted HK ticker(s) no longer in HKEX list", deactivated)
 
     # Sub-sector resolution pass — runs over every active row in securities
     # and writes sub_sector + effective_sector based on the config layered
@@ -98,6 +102,93 @@ def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
         **sub_sector_summary,
     }
     logger.info("Reconcile summary: %s", summary)
+    return summary
+
+
+def reconcile_us(securities_repo: SecuritiesRepository, us_records: list[dict],
+                  watchlist_us: Optional[dict] = None) -> dict:
+    """Sync US records (Russell 3000 from iShares, or Wikipedia fallback) into
+    the `securities` table with market='US'.
+
+    Mirrors reconcile() but adapted to US conventions:
+      * `hkex_code` left empty (the schema now allows NULL on this column)
+      * `lot_size` = 1
+      * `listing_category` = 'Equity'
+      * Watchlist application is optional — pass `watchlist_us={}` if there
+        isn't one yet. When provided, same priority as HK: watchlist takes
+        precedence over universe data for is_watchlist + aliases.
+      * Deactivation is scoped to market='US' so HK rows are never touched.
+      * Sub-sector resolution runs the same global mapping (yfinance industry
+        strings are global), so no separate config needed.
+
+    Returns a summary dict suitable for the CLI to print.
+    """
+    if watchlist_us is None:
+        watchlist_us = {}
+
+    for rec in us_records:
+        securities_repo.upsert_security(
+            ticker=rec["ticker"],
+            hkex_code=rec.get("hkex_code") or "",
+            name=rec["name"],
+            listing_category=rec.get("listing_category") or "Equity",
+            lot_size=rec.get("lot_size") or 1,
+            market="US",
+        )
+    logger.info("Upserted %d US rows into securities", len(us_records))
+
+    securities_repo.clear_watchlist_flags_for_market("US")
+
+    us_tickers = {r["ticker"] for r in us_records}
+    missing_from_universe: list[str] = []
+    watchlist_count = 0
+    for sector, entries in (watchlist_us.get("sectors") or {}).items():
+        for entry in entries:
+            ticker = entry["ticker"]
+            primary_name = entry.get("name") or ticker
+            raw_aliases = entry.get("aliases", []) or []
+            terms = [primary_name] + [a for a in raw_aliases if a != primary_name]
+            aliases_json = json.dumps(terms)
+            if ticker not in us_tickers:
+                missing_from_universe.append(ticker)
+                securities_repo.set_watchlist(
+                    ticker=ticker, sector=sector, aliases_json=aliases_json,
+                    hkex_code="", name=entry.get("name", ticker),
+                )
+                # The set_watchlist insert path doesn't set market — patch it.
+                securities_repo.set_market(ticker, "US")
+            else:
+                securities_repo.set_watchlist(
+                    ticker=ticker, sector=sector, aliases_json=aliases_json,
+                )
+            watchlist_count += 1
+
+    if missing_from_universe:
+        logger.warning("US watchlist tickers not in the universe list "
+                       "(inserted as overrides): %s", missing_from_universe)
+
+    deactivated = 0
+    if us_records:
+        wl_tickers = {entry["ticker"]
+                       for entries in (watchlist_us.get("sectors") or {}).values()
+                       for entry in entries}
+        current_set = us_tickers | wl_tickers
+        deactivated = securities_repo.deactivate_missing(current_set, market="US")
+        if deactivated:
+            logger.warning("Deactivated %d US ticker(s) no longer in the universe",
+                            deactivated)
+
+    sub_sector_summary = _reconcile_sub_sectors(securities_repo, watchlist_us)
+
+    summary = {
+        "total_us": securities_repo.count_active_for_market("US"),
+        "us_ingested": len(us_records),
+        "watchlist_us": watchlist_count,
+        "missing_from_universe": missing_from_universe,
+        "deactivated": deactivated,
+        **sub_sector_summary,
+    }
+    logger.info("US reconcile summary: %s", summary)
     return summary
 
 

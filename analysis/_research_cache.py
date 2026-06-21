@@ -49,9 +49,13 @@ _DEFAULT_TTL_SECONDS = 900  # 15 minutes
 
 def get_or_build(db_path: str, sector_risk_path: Optional[str] = None,
                   *, ttl_seconds: int = _DEFAULT_TTL_SECONDS,
-                  pre_loaded_universe: Optional[list] = None) -> _CacheBundle:
+                  pre_loaded_universe: Optional[list] = None,
+                  market: Optional[str] = None) -> _CacheBundle:
     """Return the cached universe computation, building it under lock if
-    missing, stale, or keyed to a different db/sector_risk path.
+    missing, stale, or keyed to a different db/sector_risk path/market.
+
+    Market is part of the cache key — HK and US results must not share a
+    bundle (different rank distributions, different screen pass lists).
 
     Concurrent calls coalesce: if thread A is mid-build, threads B/C wait on
     the lock and reuse A's result instead of all three recomputing.
@@ -61,12 +65,13 @@ def get_or_build(db_path: str, sector_risk_path: Optional[str] = None,
     rebuild). Ignored when the cache is warm.
     """
     global _bundle
-    key = (db_path, sector_risk_path)
+    key = (db_path, sector_risk_path, (market or "HK").upper())
     with _lock:
         if _is_fresh(key, ttl_seconds):
             return _bundle
         _bundle = _build(db_path, sector_risk_path, key,
-                          pre_loaded_universe=pre_loaded_universe)
+                          pre_loaded_universe=pre_loaded_universe,
+                          market=market)
         return _bundle
 
 
@@ -89,9 +94,11 @@ def _is_fresh(key: tuple, ttl_seconds: int) -> bool:
 
 def _build(db_path: str, sector_risk_path: Optional[str],
             key: tuple,
-            pre_loaded_universe: Optional[list] = None) -> _CacheBundle:
+            pre_loaded_universe: Optional[list] = None,
+            market: Optional[str] = None) -> _CacheBundle:
     engine = FactorScoringEngine(db_path, sector_risk_path)
-    all_results, diagnostics = engine.compute(pre_loaded_rows=pre_loaded_universe)
+    all_results, diagnostics = engine.compute(pre_loaded_rows=pre_loaded_universe,
+                                                market=market)
     factor_by_ticker = {r.ticker: r for r in all_results}
 
     screen_results_by_id: dict[str, list[ScreenResult]] = {}

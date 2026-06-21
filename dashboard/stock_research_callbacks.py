@@ -60,10 +60,23 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-export-btn", "children"),
         Output("sr-devil-btn", "children"),
         Input("user-language", "data"),
+        Input("user-market", "data"),
     )
-    def i18n_research(lang):
+    def i18n_research(lang, market):
         from dashboard.i18n import T as I
         lang = lang or "en"
+        market = (market or "HK").upper()
+        # Per-market overrides for the ticker label + placeholder text so
+        # users in US mode don't see "e.g. 0700.HK" / "Type to search HK
+        # tickers…". Other strings come from the i18n table as usual.
+        if market == "US":
+            ticker_label = ("代码 (例如 AAPL)" if lang == "zh"
+                              else "Ticker (e.g. AAPL)")
+            ticker_ph = ("输入代码搜索美股…" if lang == "zh"
+                          else "Type to search US tickers…")
+        else:
+            ticker_label = I("research.label.ticker", lang)
+            ticker_ph = I("research.ph.ticker", lang)
         status_options = [
             {"label": I("research.status.raw", lang),         "value": "raw"},
             {"label": I("research.status.researched", lang),  "value": "researched"},
@@ -80,9 +93,9 @@ def register_stock_research_callbacks(app, db_path: str):
         ]
         return (
             I("research.alert", lang),
-            I("research.label.ticker", lang),
+            ticker_label,
             I("research.label.status", lang),
-            I("research.ph.ticker", lang),
+            ticker_ph,
             I("research.ph.status", lang),
             status_options,
             I("research.btn.load", lang),
@@ -117,10 +130,12 @@ def register_stock_research_callbacks(app, db_path: str):
     @app.callback(
         Output("sr-ticker-select", "options", allow_duplicate=True),
         Input("sr-ticker-select", "search_value"),
+        Input("user-market", "data"),
         State("sr-ticker-select", "value"),
         prevent_initial_call=True,
     )
-    def populate_ticker_options(search, current_value):
+    def populate_ticker_options(search, market, current_value):
+        market = (market or "HK").upper()
         # Build composite options (≤75 entries; filtered by search if given).
         # These render above the equity matches with a distinct prefix marker.
         composite_options = _build_composite_dropdown_options(db_path, search)
@@ -130,19 +145,19 @@ def register_stock_research_callbacks(app, db_path: str):
             if search:
                 rows = conn.execute("""
                     SELECT ticker, name FROM securities
-                    WHERE is_active = 1 AND (
+                    WHERE is_active = 1 AND market = ? AND (
                         UPPER(ticker) LIKE UPPER(?) OR UPPER(name) LIKE UPPER(?)
                     )
                     ORDER BY (is_watchlist = 1) DESC, ticker
                     LIMIT 30
-                """, (f"{search}%", f"%{search}%")).fetchall()
+                """, (market, f"{search}%", f"%{search}%")).fetchall()
             else:
-                # Default to watchlist when no search
+                # Default to watchlist (of the active market) when no search
                 rows = conn.execute("""
                     SELECT ticker, name FROM securities
-                    WHERE is_active = 1 AND is_watchlist = 1
+                    WHERE is_active = 1 AND market = ? AND is_watchlist = 1
                     ORDER BY ticker LIMIT 30
-                """).fetchall()
+                """, (market,)).fetchall()
             equity_options = [{"label": f"{r['ticker']} — {r['name']}",
                                 "value": r["ticker"]}
                                for r in rows]
@@ -199,13 +214,15 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-subsector-browse-table", "data"),
         Input("sr-browse-trigger", "n_intervals"),
         Input("user-language", "data"),
+        Input("user-market", "data"),
     )
-    def populate_subsector_browse(_, lang):
+    def populate_subsector_browse(_, lang, market):
         from analysis.subsector_synth import list_subsector_composites
         from config.settings import get_sector_label, get_subsector_label
         from storage.database import Database
+        market = (market or "HK").upper()
         try:
-            rows = list_subsector_composites(Database(db_path))
+            rows = list_subsector_composites(Database(db_path), market=market)
         except Exception:
             return []
         lang = lang or "en"

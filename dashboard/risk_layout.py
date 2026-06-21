@@ -9,11 +9,29 @@ from dashboard import theme as T
 
 # Indices pinned to the top of the ticker selector. The "^" prefix
 # distinguishes them from equities in the historical_prices table.
-INDEX_OPTIONS = [
+# Per-market lists — the risk-tab callback picks one based on user-market.
+INDEX_OPTIONS_HK = [
     {"label": "★ ^HSI — Hang Seng Index", "value": "^HSI"},
     {"label": "★ ^HSCEI — Hang Seng China Enterprises", "value": "^HSCEI"},
     {"label": "★ ^HSTECH — Hang Seng Tech", "value": "^HSTECH"},
 ]
+INDEX_OPTIONS_US = [
+    {"label": "★ ^GSPC — S&P 500", "value": "^GSPC"},
+    {"label": "★ ^IXIC — Nasdaq Composite", "value": "^IXIC"},
+    {"label": "★ ^DJI — Dow Jones Industrial Average", "value": "^DJI"},
+    {"label": "★ ^NDX — Nasdaq 100", "value": "^NDX"},
+    {"label": "★ ^RUT — Russell 2000", "value": "^RUT"},
+    {"label": "★ ^VIX — CBOE Volatility Index", "value": "^VIX"},
+]
+# Backwards-compat alias — callers that still import INDEX_OPTIONS get HK
+# (the historical behaviour). The Risk-tab callback should pick per-market
+# via the dispatch helper below.
+INDEX_OPTIONS = INDEX_OPTIONS_HK
+
+
+def index_options_for_market(market: str | None):
+    """Return the right INDEX_OPTIONS list for the active market."""
+    return INDEX_OPTIONS_US if (market or "HK").upper() == "US" else INDEX_OPTIONS_HK
 
 # History-window radio: how much past data to feed the GARCH fit.
 # Values are TRADING days, not calendar days — the prices list contains

@@ -134,13 +134,15 @@ def register_recommendations_callbacks(app, db_path: str):
         Input("rec-show-filter", "value"),
         Input("rec-sector-filter", "value"),
         State("user-language", "data"),
+        State("user-market", "data"),
     )
     def update_recommendations(_n, _clicks, w_val, w_qual, w_growth, w_sent,
                                 window_days, min_composite, show_filter, sector_filter,
-                                lang):
+                                lang, market):
         from dashboard.i18n import T as I
         from config.settings import get_sector_label
         lang = lang or "en"
+        market = (market or "HK").upper()
         weights = {
             "value":     max(0, int(w_val or 0)),
             "quality":   max(0, int(w_qual or 0)),
@@ -152,7 +154,7 @@ def register_recommendations_callbacks(app, db_path: str):
         show_filter = show_filter or []
 
         results, diag = engine.compute(
-            weights=weights, sentiment_window_days=window_days,
+            weights=weights, sentiment_window_days=window_days, market=market,
         )
 
         # Apply filters

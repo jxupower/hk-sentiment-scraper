@@ -22,9 +22,11 @@ def _register_one_screen(app, db_path: str, sector_risk_path: str, screen):
         Output(f"screen-{screen.id}-count", "children"),
         Output(f"screen-{screen.id}-meta", "children"),
         Input("screens-auto-refresh", "n_intervals"),
+        Input("user-market", "data"),
     )
-    def update_screen_table(_n, _screen=screen):
-        results = run_screen(db_path, _screen, sector_risk_path)
+    def update_screen_table(_n, market, _screen=screen):
+        market = (market or "HK").upper()
+        results = run_screen(db_path, _screen, sector_risk_path, market=market)
         rows = [_format_row(r) for r in results]
         count_str = f"{len(results)} matching"
         # Meta: how many watchlist, how many flagged

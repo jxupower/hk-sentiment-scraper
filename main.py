@@ -112,6 +112,14 @@ def _reconcile_universe_at_startup(securities_repo, watchlist, settings):
 @click.group()
 def cli():
     """Stock Sentiment Analysis Tool — scrapes news & social media to predict stock trends."""
+    # Windows defaults stdout to cp1252; reconfigure so non-ASCII log lines
+    # (e.g. Chinese sub-sector labels) don't crash the CLI with UnicodeEncodeError.
+    try:
+        import sys
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 @cli.command()
@@ -149,14 +157,17 @@ To unlock Reddit data and Claude AI-enhanced scoring, follow these steps:
 
 @cli.command()
 @click.option("--once", is_flag=True, default=False, help="Run a single scrape cycle and exit.")
-def scrape(once: bool):
+@click.option("--market", default="HK", show_default=True,
+              type=click.Choice(["HK", "US", "ALL"]),
+              help="HK / US / ALL — which market's feeds + watchlist to scrape.")
+def scrape(once: bool, market: str):
     """Scrape news and social media, analyze sentiment, and update signals."""
-    console.print("[bold cyan]Starting scraper...[/bold cyan]")
+    console.print(f"[bold cyan]Starting scraper (market={market})...[/bold cyan]")
     components = _build_components()
     runner = components["runner"]
 
     if once:
-        runner.run_once()
+        runner.run_once(market=market)
         console.print("[bold green]Scrape complete.[/bold green]")
         _print_sector_signals(components["sector_signal_repo"])
     else:
@@ -231,6 +242,69 @@ def universe_refresh():
                       f"{summary['missing_from_hkex']}[/yellow]")
 
 
+@cli.group("universe-us")
+def universe_us():
+    """Manage the US-listed securities universe (Russell 3000)."""
+
+
+@universe_us.command("seed")
+@click.option("--source",
+                type=click.Choice(["nasdaqtrader", "ishares", "wikipedia"]),
+                default="nasdaqtrader", show_default=True,
+                help="nasdaqtrader = NASDAQ+NYSE common stock (~7,000 names, "
+                     "recommended) | ishares = Russell 3000 (~3,000, requires "
+                     "session cookie — often blocked) | wikipedia = "
+                     "S&P 500 + Nasdaq-100 + Dow 30 union (~600).")
+def universe_us_seed(source: str):
+    """Download the US universe list and reconcile into the `securities` table."""
+    import config.settings as settings
+    from storage.database import Database
+    from storage.repository import SecuritiesRepository
+    from universe import us_loader, reconciler
+
+    console.print(f"[bold cyan]Seeding US universe (source={source})...[/bold cyan]")
+    db = Database(settings.DB_PATH)
+    db.initialize()
+    securities_repo = SecuritiesRepository(db)
+
+    records = us_loader.download_and_parse(settings.HKEX_CACHE_DIR, source=source)
+    if not records:
+        console.print("[red]No US records obtained from any source. Aborting.[/red]")
+        return
+
+    # Load the curated US watchlist YAML (~40 mega-cap names) so the
+    # reconciler flags them as is_watchlist=1 + applies aliases for the
+    # ticker matcher. The file may be empty/missing in early bootstraps —
+    # load_watchlist() returns {"sectors": {}} as a graceful fallback.
+    watchlist_us = settings.load_watchlist(market="US")
+    summary = reconciler.reconcile_us(securities_repo, records, watchlist_us=watchlist_us)
+
+    table = Table(title="US Universe Reconcile Summary", show_lines=False)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("US securities (active)", str(summary["total_us"]))
+    table.add_row("US rows ingested", str(summary["us_ingested"]))
+    table.add_row("US watchlist tickers", str(summary["watchlist_us"]))
+    table.add_row("US tickers missing from universe",
+                    str(len(summary["missing_from_universe"])))
+    table.add_row("US deactivated (delisted)", str(summary.get("deactivated", 0)))
+    table.add_row("Sub-sector assignments",
+                    str(summary.get("sub_sector_assigned", 0)))
+    console.print(table)
+    if summary["missing_from_universe"]:
+        console.print(f"[yellow]Missing from universe (kept as overrides): "
+                        f"{summary['missing_from_universe']}[/yellow]")
+
+
+@universe_us.command("refresh")
+@click.option("--source", type=click.Choice(["ishares", "wikipedia"]),
+                default="ishares", show_default=True)
+def universe_us_refresh(source: str):
+    """Alias for `seed` — same idempotent flow, intended for scheduled runs."""
+    ctx = click.get_current_context()
+    ctx.invoke(universe_us_seed, source=source)
+
+
 @cli.group()
 def fundamentals():
     """Manage the per-ticker fundamentals snapshot pipeline."""
@@ -290,6 +364,10 @@ def historical():
 @historical.command("seed")
 @click.option("--tickers", default="WATCHLIST", show_default=True,
               help="ALL | WATCHLIST | comma-separated tickers")
+@click.option("--market", default="HK", show_default=True,
+              type=click.Choice(["HK", "US", "ALL"]),
+              help="Restrict ALL/WATCHLIST targets to this market. "
+                   "Ignored when --tickers is a comma-separated list.")
 @click.option("--throttle", default=0.5, show_default=True, type=float,
               help="Seconds between akshare requests.")
 @click.option("--skip-prices", is_flag=True, default=False,
@@ -298,38 +376,54 @@ def historical():
               help="Skip the akshare fundamentals pull (only seed prices).")
 @click.option("--price-period", default="10y", show_default=True,
               help="Period for yfinance history (e.g. 5y, 10y, max).")
-def historical_seed(tickers, throttle, skip_prices, skip_fundamentals, price_period):
-    """One-time backfill: pull akshare historical fundamentals + yfinance multi-year prices."""
+def historical_seed(tickers, market, throttle, skip_prices, skip_fundamentals,
+                     price_period):
+    """One-time backfill: pull akshare historical fundamentals (HK only) +
+    yfinance multi-year prices (both markets). akshare is HK-only — for US
+    targets, Stage A is automatically skipped."""
     import config.settings as settings
     from storage.database import Database
     from storage.repository import (SecuritiesRepository, FundamentalsRepository,
                                      HistoricalPricesRepository)
     from scrapers.akshare_historical_scraper import fetch_many as ak_fetch_many
     from scrapers.historical_price_scraper import fetch_many as price_fetch_many
+    from storage.factory import get_prices_repo
 
     db = Database(settings.DB_PATH)
     db.initialize()
     securities_repo = SecuritiesRepository(db)
     fundamentals_repo = FundamentalsRepository(db)
-    prices_repo = HistoricalPricesRepository(db)
+    prices_repo = get_prices_repo(db)  # honours USE_CLOUD_DB
 
     selector = tickers.strip().upper()
+
+    def _market_filter(rows):
+        if market == "ALL":
+            return rows
+        return [r for r in rows if (r.get("market") or "HK") == market]
+
     if selector == "ALL":
-        target = [s["ticker"] for s in securities_repo.get_universe()]
-        console.print(f"[bold cyan]Seeding historical data for ALL {len(target)} active securities...[/bold cyan]")
+        target = [s["ticker"] for s in _market_filter(securities_repo.get_universe())]
+        console.print(f"[bold cyan]Seeding historical data for {len(target)} active securities "
+                      f"(market={market})...[/bold cyan]")
         console.print("[yellow]Fundamentals: ~6-8 hours at 0.5s throttle. Prices: ~10-15 min in batches.[/yellow]")
     elif selector == "WATCHLIST":
-        target = [s["ticker"] for s in securities_repo.get_watchlist()]
-        console.print(f"[bold cyan]Seeding historical data for {len(target)} watchlist tickers...[/bold cyan]")
+        target = [s["ticker"] for s in _market_filter(securities_repo.get_watchlist())]
+        console.print(f"[bold cyan]Seeding historical data for {len(target)} watchlist tickers "
+                      f"(market={market})...[/bold cyan]")
     else:
         target = [t.strip() for t in tickers.split(",") if t.strip()]
         console.print(f"[bold cyan]Seeding historical data for {len(target)} ticker(s): {target}[/bold cyan]")
 
     if not target:
-        console.print("[red]No tickers. Did you run 'universe refresh' first?[/red]")
+        console.print("[red]No tickers. Did you run the right `universe-*` seed first?[/red]")
         return
 
-    if not skip_fundamentals:
+    # akshare is HK-only. If the explicit market filter says US, skip Stage A
+    # without even calling. For 'ALL' or 'HK', let it run; the scraper itself
+    # gates each per-ticker call.
+    skip_ak_for_market = (market == "US")
+    if not skip_fundamentals and not skip_ak_for_market:
         console.print(f"\n[bold]Stage A: akshare historical fundamentals (annual, ~9 years)[/bold]")
         ak_summary = ak_fetch_many(target, fundamentals_repo, securities_repo,
                                     throttle_seconds=throttle)
@@ -337,6 +431,8 @@ def historical_seed(tickers, throttle, skip_prices, skip_fundamentals, price_per
                       f"snapshots_written: {ak_summary['snapshots_written']}, "
                       f"no_data: {ak_summary['no_data_tickers']}, "
                       f"failed: {ak_summary['failed_tickers']}")
+    elif skip_ak_for_market:
+        console.print(f"\n[dim]Stage A skipped — akshare is HK-only and market={market}.[/dim]")
 
     if not skip_prices:
         console.print(f"\n[bold]Stage B: yfinance multi-year price history (period={price_period})[/bold]")

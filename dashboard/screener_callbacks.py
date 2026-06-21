@@ -193,11 +193,22 @@ def register_screener_callbacks(app, db_path: str):
         *[Output(f"screener-preset-{p['id']}-title", "children")
           for p in INVESTOR_PRESETS],
         Input("user-language", "data"),
+        Input("user-market", "data"),
     )
-    def i18n_screener(lang):
+    def i18n_screener(lang, market):
         from dashboard.i18n import T as I
         lang = lang or "en"
-        # Range filter labels keyed by slug — order must match the Outputs above
+        market = (market or "HK").upper()
+        # Currency label flips with the market: HK uses HKD, US uses USD.
+        # The Screener's mcap-related labels reference the active currency
+        # so the user reads the right unit without having to know the
+        # backend semantics.
+        currency = "USD" if market == "US" else "HKD"
+        mcap_label = f"Market cap (B {currency})"
+        mcap_col_label = f"Mkt Cap (B {currency})"
+        # Range filter labels keyed by slug — order must match the Outputs above.
+        # All but the last label come from i18n; the mcap label is computed
+        # above so it flips per market without growing the i18n key count.
         range_labels = [
             I("screener.label.trailing_pe", lang),
             I("screener.label.forward_pe", lang),
@@ -208,7 +219,7 @@ def register_screener_callbacks(app, db_path: str):
             I("screener.label.earnings_growth", lang),
             I("screener.label.de", lang),
             I("screener.label.beta", lang),
-            I("screener.label.mcap", lang),
+            mcap_label,
         ]
         agg_options = [
             {"label": I("common.median", lang), "value": "median"},
@@ -221,7 +232,7 @@ def register_screener_callbacks(app, db_path: str):
             {"name": I("screener.col.sector", lang),       "id": "yf_sector"},
             {"name": I("screener.col.sub_sector", lang),   "id": "sub_sector"},
             {"name": I("screener.col.price", lang),        "id": "current_price"},
-            {"name": I("screener.col.mcap_b", lang),       "id": "market_cap_b",
+            {"name": mcap_col_label,                          "id": "market_cap_b",
              "type": "numeric"},
             {"name": I("screener.col.pe", lang),           "id": "trailing_pe",
              "type": "numeric"},
@@ -522,20 +533,26 @@ def register_screener_callbacks(app, db_path: str):
         Output("screener-subsector-filter", "options"),
         *update_inputs,
         State("user-language", "data"),
+        State("user-market", "data"),
     )
     def update_screener(_n, _clicks, sector_filter, subsector_filter,
                           min_completeness, pe_aggregation,
-                          ticker_query, name_query, *slider_values_then_loaded_lang):
+                          ticker_query, name_query, *slider_values_then_loaded_lang_market):
         from dashboard.i18n import T as I
         from config.settings import get_sector_label, get_subsector_label
-        # Last positional arg is the user-language State; second-to-last is
-        # the load-flag Input; everything before is the slider [lo, hi].
-        lang = slider_values_then_loaded_lang[-1] or "en"
-        subsector_loaded = slider_values_then_loaded_lang[-2]
-        slider_values = slider_values_then_loaded_lang[:-2]
+        # Trailing positional args (in order): user-language State,
+        # user-market State, screener-subsector-chart-loaded Input,
+        # then everything before that is the sliders.
+        market = (slider_values_then_loaded_lang_market[-1] or "HK").upper()
+        lang = slider_values_then_loaded_lang_market[-2] or "en"
+        subsector_loaded = slider_values_then_loaded_lang_market[-3]
+        slider_values = slider_values_then_loaded_lang_market[:-3]
 
         rows = _query_latest(db_path)
-        total_universe = _count_universe(db_path)
+        # Market scoping: keep only rows belonging to the active market.
+        # Rows without a market column (legacy) default to 'HK'.
+        rows = [r for r in rows if (r.get("market") or "HK") == market]
+        total_universe = _count_universe(db_path, market=market)
         # "Latest snapshot" reflects the freshest *price* date in the
         # historical_prices store — that's what the daily EOD refresh job
         # actually moves. Fundamentals snapshots refresh on a separate
@@ -699,7 +716,8 @@ def _query_latest(db_path: str) -> list[dict]:
                    f.earnings_growth,
                    f.last_price, f.currency, f.data_completeness,
                    s.name, s.is_watchlist, s.watchlist_sector,
-                   s.yf_sector, s.yf_industry, s.sub_sector, s.effective_sector
+                   s.yf_sector, s.yf_industry, s.sub_sector, s.effective_sector,
+                   s.market
             FROM fundamentals_snapshots f
             INNER JOIN (
                 SELECT ticker, MAX(snapshot_date) AS max_date
@@ -716,10 +734,15 @@ def _query_latest(db_path: str) -> list[dict]:
         return out
 
 
-def _count_universe(db_path: str) -> int:
+def _count_universe(db_path: str, market: str | None = None) -> int:
     with sqlite3.connect(db_path) as conn:
+        if market is None:
+            return conn.execute(
+                "SELECT COUNT(*) FROM securities WHERE is_active = 1"
+            ).fetchone()[0]
         return conn.execute(
-            "SELECT COUNT(*) FROM securities WHERE is_active = 1"
+            "SELECT COUNT(*) FROM securities WHERE is_active = 1 AND market = ?",
+            (market,),
         ).fetchone()[0]
 
 

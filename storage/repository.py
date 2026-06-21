@@ -20,15 +20,16 @@ class ArticleRepository:
 
     def insert_article(self, source: str, title: str, body: str, url: str,
                        published_at: Optional[datetime], author: Optional[str],
-                       raw_score: Optional[float], tickers: list[str]) -> Optional[int]:
+                       raw_score: Optional[float], tickers: list[str],
+                       market: str = "HK") -> Optional[int]:
         try:
             with self.db.get_connection() as conn:
                 cur = conn.execute(
-                    """INSERT INTO articles (source, title, body, url, published_at, author, raw_score)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO articles (source, title, body, url, published_at, author, raw_score, market)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (source, title, body, url,
                      published_at.isoformat() if published_at else None,
-                     author, raw_score)
+                     author, raw_score, market)
                 )
                 article_id = cur.lastrowid
                 for ticker in tickers:
@@ -223,21 +224,24 @@ class SecuritiesRepository:
         self.db = db
 
     def upsert_security(self, ticker: str, hkex_code: str, name: str,
-                        listing_category: Optional[str], lot_size: Optional[int]):
+                        listing_category: Optional[str], lot_size: Optional[int],
+                        market: str = "HK"):
         """Insert a security or update its name/category/lot_size if it already exists.
-        Watchlist flags and yfinance fields are NOT touched here — they have their own setters."""
+        Watchlist flags and yfinance fields are NOT touched here — they have their own setters.
+        `market` defaults to 'HK' so existing callers keep working."""
         with self.db.get_connection() as conn:
             conn.execute("""
                 INSERT INTO securities (ticker, hkex_code, name, listing_category, lot_size,
-                                        is_active, last_refreshed)
-                VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+                                        market, is_active, last_refreshed)
+                VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
                 ON CONFLICT(ticker) DO UPDATE SET
                     name = excluded.name,
                     listing_category = excluded.listing_category,
                     lot_size = excluded.lot_size,
+                    market = excluded.market,
                     is_active = 1,
                     last_refreshed = CURRENT_TIMESTAMP
-            """, (ticker, hkex_code, name, listing_category, lot_size))
+            """, (ticker, hkex_code, name, listing_category, lot_size, market))
             conn.commit()
 
     def clear_watchlist_flags(self):
@@ -246,6 +250,18 @@ class SecuritiesRepository:
                 UPDATE securities
                 SET is_watchlist = 0, watchlist_sector = NULL, aliases_json = NULL
             """)
+            conn.commit()
+
+    def clear_watchlist_flags_for_market(self, market: str):
+        """Same as clear_watchlist_flags but scoped to one market. Used by the
+        per-market reconcilers so a US universe refresh doesn't wipe HK
+        watchlist flags."""
+        with self.db.get_connection() as conn:
+            conn.execute("""
+                UPDATE securities
+                SET is_watchlist = 0, watchlist_sector = NULL, aliases_json = NULL
+                WHERE market = ?
+            """, (market,))
             conn.commit()
 
     def set_watchlist(self, ticker: str, sector: str, aliases_json: str,
@@ -272,29 +288,52 @@ class SecuritiesRepository:
                 """, (ticker, hkex_code or "", name or ticker, sector, aliases_json))
             conn.commit()
 
-    def get_all_active(self) -> list[dict]:
+    def get_all_active(self, market: Optional[str] = None) -> list[dict]:
         with self.db.get_connection() as conn:
-            rows = conn.execute("""
-                SELECT * FROM securities WHERE is_active = 1 ORDER BY ticker
-            """).fetchall()
+            if market is None:
+                rows = conn.execute(
+                    "SELECT * FROM securities WHERE is_active = 1 ORDER BY ticker"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM securities WHERE is_active = 1 AND market = ? "
+                    "ORDER BY ticker",
+                    (market,),
+                ).fetchall()
             return [dict(r) for r in rows]
 
-    def get_watchlist(self) -> list[dict]:
+    def get_watchlist(self, market: Optional[str] = None) -> list[dict]:
         with self.db.get_connection() as conn:
-            rows = conn.execute("""
-                SELECT * FROM securities WHERE is_watchlist = 1 ORDER BY ticker
-            """).fetchall()
+            if market is None:
+                rows = conn.execute(
+                    "SELECT * FROM securities WHERE is_watchlist = 1 ORDER BY ticker"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM securities WHERE is_watchlist = 1 AND market = ? "
+                    "ORDER BY ticker",
+                    (market,),
+                ).fetchall()
             return [dict(r) for r in rows]
 
-    def get_universe(self) -> list[dict]:
-        """All active securities. The HKEX parser already filters to equities at ingest time,
-        so no further category filtering is needed here."""
+    def get_universe(self, market: Optional[str] = None) -> list[dict]:
+        """All active securities, optionally scoped to one market.
+        `market=None` (default) preserves legacy behaviour: returns both HK + US
+        rows. Callers in market-aware contexts should pass `market='HK'` or
+        `market='US'`."""
         with self.db.get_connection() as conn:
-            rows = conn.execute("""
-                SELECT * FROM securities
-                WHERE is_active = 1
-                ORDER BY ticker
-            """).fetchall()
+            if market is None:
+                rows = conn.execute("""
+                    SELECT * FROM securities
+                    WHERE is_active = 1
+                    ORDER BY ticker
+                """).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT * FROM securities
+                    WHERE is_active = 1 AND market = ?
+                    ORDER BY ticker
+                """, (market,)).fetchall()
             return [dict(r) for r in rows]
 
     def get_by_ticker(self, ticker: str) -> Optional[dict]:
@@ -310,22 +349,52 @@ class SecuritiesRepository:
         with self.db.get_connection() as conn:
             return conn.execute("SELECT COUNT(*) FROM securities WHERE is_watchlist = 1").fetchone()[0]
 
-    def deactivate_missing(self, current_tickers: set[str]) -> int:
+    def count_active_for_market(self, market: str) -> int:
+        with self.db.get_connection() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM securities WHERE is_active = 1 AND market = ?",
+                (market,),
+            ).fetchone()[0]
+
+    def set_market(self, ticker: str, market: str) -> None:
+        """Patch the market column on an existing row. Used by reconcile_us
+        when set_watchlist insert path leaves market at default 'HK' for a
+        watchlist-only US ticker."""
+        with self.db.get_connection() as conn:
+            conn.execute(
+                "UPDATE securities SET market = ? WHERE ticker = ?",
+                (market, ticker),
+            )
+            conn.commit()
+
+    def deactivate_missing(self, current_tickers: set[str],
+                            market: Optional[str] = None) -> int:
         """Mark active rows as inactive if their ticker is NOT in current_tickers.
 
-        Returns the number of rows deactivated. Caller MUST guarantee current_tickers
-        is the authoritative present-day universe — passing an incomplete set would
-        wrongly deactivate live tickers. The reconciler guards against empty input.
+        When `market` is set, the deactivation is scoped to that market only —
+        a US universe refresh won't deactivate HK rows (or vice versa).
+        Returns the number of rows deactivated. Caller MUST guarantee
+        current_tickers is the authoritative present-day universe for the
+        scoped market — passing an incomplete set would wrongly deactivate
+        live tickers. The reconciler guards against empty input.
         """
         if not current_tickers:
             return 0
         placeholders = ",".join("?" * len(current_tickers))
         with self.db.get_connection() as conn:
-            cur = conn.execute(
-                f"UPDATE securities SET is_active = 0 "
-                f"WHERE is_active = 1 AND ticker NOT IN ({placeholders})",
-                tuple(current_tickers),
-            )
+            if market is None:
+                cur = conn.execute(
+                    f"UPDATE securities SET is_active = 0 "
+                    f"WHERE is_active = 1 AND ticker NOT IN ({placeholders})",
+                    tuple(current_tickers),
+                )
+            else:
+                cur = conn.execute(
+                    f"UPDATE securities SET is_active = 0 "
+                    f"WHERE is_active = 1 AND market = ? "
+                    f"AND ticker NOT IN ({placeholders})",
+                    (market, *current_tickers),
+                )
             conn.commit()
             return cur.rowcount
 
@@ -381,15 +450,18 @@ class FundamentalsRepository:
                 # Backtest per-share metrics for as-of P/E and P/B computation
                 "eps_ttm", "bps", "shares_outstanding"]
         values = [fields.get(c) for c in cols]
+        from utils.market import market_of_ticker
+        market = market_of_ticker(ticker)
         with self.db.get_connection() as conn:
             conn.execute(f"""
                 INSERT INTO fundamentals_snapshots
-                    (ticker, snapshot_date, {", ".join(cols)})
-                VALUES (?, ?, {", ".join("?" * len(cols))})
+                    (ticker, market, snapshot_date, {", ".join(cols)})
+                VALUES (?, ?, ?, {", ".join("?" * len(cols))})
                 ON CONFLICT(ticker, snapshot_date) DO UPDATE SET
+                    market = excluded.market,
                     {", ".join(f"{c} = excluded.{c}" for c in cols)},
                     captured_at = CURRENT_TIMESTAMP
-            """, (ticker, snapshot_date, *values))
+            """, (ticker, market, snapshot_date, *values))
             conn.commit()
 
     def has_snapshot_for_date(self, ticker: str, snapshot_date: str) -> bool:
@@ -449,17 +521,22 @@ class HistoricalPricesRepository:
         self.db = db
 
     def upsert_rows(self, ticker: str, rows: list[dict]) -> int:
-        """rows: list of dicts with keys date, open, high, low, close, adj_close, volume."""
+        """rows: list of dicts with keys date, open, high, low, close, adj_close, volume.
+        The `market` column is derived from the ticker via market_of_ticker()
+        — callers don't pass it (one source of truth)."""
         if not rows:
             return 0
+        from utils.market import market_of_ticker
+        market = market_of_ticker(ticker)
         with self.db.get_connection() as conn:
             conn.executemany("""
-                INSERT INTO historical_prices (ticker, date, open, high, low, close, adj_close, volume)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO historical_prices (ticker, market, date, open, high, low, close, adj_close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(ticker, date) DO UPDATE SET
+                    market = excluded.market,
                     open = excluded.open, high = excluded.high, low = excluded.low,
                     close = excluded.close, adj_close = excluded.adj_close, volume = excluded.volume
-            """, [(ticker, r["date"], r.get("open"), r.get("high"), r.get("low"),
+            """, [(ticker, market, r["date"], r.get("open"), r.get("high"), r.get("low"),
                    r.get("close"), r.get("adj_close"), r.get("volume")) for r in rows])
             conn.commit()
             return len(rows)

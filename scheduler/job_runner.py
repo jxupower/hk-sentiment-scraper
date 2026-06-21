@@ -129,28 +129,53 @@ class JobRunner:
         self._scheduler.shutdown(wait=False)
         logger.info("Scheduler stopped.")
 
-    def run_once(self):
-        self._scrape_and_analyze()
+    def run_once(self, market: str = "HK"):
+        """Run a single scrape cycle. `market` defaults to HK to preserve
+        existing behaviour; pass 'US' to scrape US sentiment, or 'ALL' to
+        scrape both sequentially (HK first, then US)."""
+        market = (market or "HK").upper()
+        if market == "ALL":
+            self._scrape_and_analyze("HK")
+            self._scrape_and_analyze("US")
+        else:
+            self._scrape_and_analyze(market)
 
-    def _build_dynamic_terms(self):
-        """Pull fresh search terms from the securities table each cycle.
+    def _build_dynamic_terms(self, market: str = "HK"):
+        """Pull fresh search terms from the securities table for one market.
 
         Returns (full_terms, watchlist_terms, watchlist_tickers).
         Falls back to the static YAML-derived terms if no securities_repo is wired.
+        Filters securities rows by market so a US scrape doesn't pull HK names.
         """
+        market = (market or "HK").upper()
         if self._securities_repo is None:
             return self._search_terms, self._search_terms, set(self._search_terms.keys())
-        rows = self._securities_repo.get_all_active()
-        full_terms = self._config.build_search_terms_from_db(rows, watchlist_only=False)
-        watchlist_terms = self._config.build_search_terms_from_db(rows, watchlist_only=True)
+        rows = [r for r in self._securities_repo.get_all_active()
+                 if (r.get("market") or "HK") == market]
+        full_terms = self._config.build_search_terms_from_db(
+            rows, watchlist_only=False, market=market)
+        watchlist_terms = self._config.build_search_terms_from_db(
+            rows, watchlist_only=True, market=market)
         return full_terms, watchlist_terms, set(watchlist_terms.keys())
 
-    def _scrape_and_analyze(self):
+    def _scrape_and_analyze(self, market: str = "HK"):
         from scrapers.rss_scraper import RssScraper
 
-        logger.info("=== Scrape cycle started at %s ===", datetime.utcnow().isoformat())
-        full_terms, watchlist_terms, watchlist_tickers = self._build_dynamic_terms()
-        logger.info("Search terms: %d total, %d watchlist", len(full_terms), len(watchlist_terms))
+        market = (market or "HK").upper()
+        logger.info("=== Scrape cycle started at %s (market=%s) ===",
+                     datetime.utcnow().isoformat(), market)
+        full_terms, watchlist_terms, watchlist_tickers = self._build_dynamic_terms(market)
+        logger.info("Search terms: %d total, %d watchlist (market=%s)",
+                     len(full_terms), len(watchlist_terms), market)
+
+        # Swap in the right RSS feeds for this market. The existing RssScraper
+        # instance was built with HK feeds at startup — for US we rebuild
+        # in-place by overwriting `feed_configs`. Yahoo + Reddit scrapers are
+        # per-ticker so they don't need market-specific feed lists; the
+        # watchlist_terms filter already restricts them to the right universe.
+        for scraper in self._scrapers:
+            if isinstance(scraper, RssScraper):
+                scraper.feed_configs = self._config.load_rss_feeds(market=market)
 
         all_articles = []
         for scraper in self._scrapers:
@@ -182,6 +207,7 @@ class JobRunner:
                 author=article.author,
                 raw_score=article.raw_score,
                 tickers=article.ticker_hints,
+                market=market,
             )
             if article_id is None:
                 continue
@@ -204,22 +230,28 @@ class JobRunner:
 
         logger.info("Stored %d new articles.", new_count)
 
-        # Resolve sub_sector for every watchlist ticker once per cycle.
-        # The `sector` column on ticker_signals + sector_signals now carries
-        # the sub_sector label (post 2026-06 watchlist-UI removal — the
+        # Resolve sub_sector for every watchlist ticker (of the active market)
+        # once per cycle. The `sector` column on ticker_signals + sector_signals
+        # carries the sub_sector label (post 2026-06 watchlist-UI removal — the
         # editorial watchlist sector layer no longer drives the dashboard).
+        if market == "US":
+            market_watchlist = self._config.load_watchlist(market="US")
+            market_tickers = self._config.get_all_tickers(market_watchlist)
+        else:
+            market_watchlist = self._watchlist
+            market_tickers = self._all_tickers
         from collections import defaultdict
         ticker_subsector = {
             t: (self._config.get_subsector_for_ticker(
-                    t, self._watchlist, self._securities_repo) or "Unclassified")
-            for t in self._all_tickers
+                    t, market_watchlist, self._securities_repo) or "Unclassified")
+            for t in market_tickers
         }
         subsector_to_tickers: dict[str, list[str]] = defaultdict(list)
         for t, sub in ticker_subsector.items():
             subsector_to_tickers[sub].append(t)
 
         # Per-ticker signals (used for drill-down)
-        for ticker in self._all_tickers:
+        for ticker in market_tickers:
             try:
                 scores_24h = self._sentiment_repo.get_scores_for_ticker(ticker, hours=24)
                 scores_7d = self._sentiment_repo.get_scores_for_ticker(ticker, hours=168)
