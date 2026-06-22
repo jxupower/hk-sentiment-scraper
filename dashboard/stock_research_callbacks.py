@@ -334,9 +334,10 @@ def register_stock_research_callbacks(app, db_path: str):
         Input("cross-tab-nav", "data"),
         State("sr-ticker-select", "value"),
         State("sr-ticker-select", "options"),
+        State("user-language", "data"),
         prevent_initial_call=True,
     )
-    def render_report(_clicks, nav_data, state_ticker, state_options):
+    def render_report(_clicks, nav_data, state_ticker, state_options, lang):
         # Resolve ticker source: cross-tab nav wins when it triggered, else dropdown State
         triggered = dash.callback_context.triggered_id
         if triggered == "cross-tab-nav":
@@ -382,8 +383,14 @@ def register_stock_research_callbacks(app, db_path: str):
             return _render_composite(r, ticker, opts,
                                        composite_visible_template)
 
-        # Header
-        name = r.name
+        # Header — fetch localised display name from the local
+        # `securities_reference` mirror. When language=zh the Chinese name
+        # shows (e.g. "苹果" for AAPL); falls back to the orchestrator's
+        # English name when no translation is recorded for this ticker.
+        from storage.repository import SecuritiesReferenceRepository
+        from storage.database import Database
+        _names_repo = SecuritiesReferenceRepository(Database(db_path))
+        name = _names_repo.get_name(ticker, lang=(lang or "en"), fallback=r.name)
         sector = r.sector
         # Sub-sector label — falls back to em-dash so the slot doesn't
         # collapse when a ticker has no sub_sector tag.
@@ -499,11 +506,14 @@ def register_stock_research_callbacks(app, db_path: str):
         cashflow_chart = fst.build_statement_chart("cashflow", fs["cashflow"])
         earnings_chart = fst.build_earnings_chart(fs["income"])
         income_table = (fst.build_statement_table("income", fs["income"])
-                         if fs["income"] else fst.build_unavailable_state("income"))
+                         if fs["income"]
+                         else fst.build_unavailable_state("income", ticker=ticker))
         balance_table = (fst.build_statement_table("balance", fs["balance"])
-                          if fs["balance"] else fst.build_unavailable_state("balance"))
+                          if fs["balance"]
+                          else fst.build_unavailable_state("balance", ticker=ticker))
         cashflow_table = (fst.build_statement_table("cashflow", fs["cashflow"])
-                           if fs["cashflow"] else fst.build_unavailable_state("cashflow"))
+                           if fs["cashflow"]
+                           else fst.build_unavailable_state("cashflow", ticker=ticker))
         earnings_table = fst.build_earnings_table(fs["income"])
         return ({"display": "block"}, source_pill, coverage, "",
                 income_chart, balance_chart, cashflow_chart, earnings_chart,
@@ -1402,9 +1412,17 @@ def _build_business_summary(r) -> html.Div:
             for a in r.recent_articles[:20]
         )
         sector = r.sector
+        # Market-aware listing context — say "listed on a US exchange" for
+        # US tickers, "listed on HKEX" for HK. Otherwise the LLM will write
+        # factually-wrong copy ("Apple is a Technology company listed on
+        # HKEX" — embarrassing).
+        from utils.market import market_of_ticker
+        listing_blurb = ("listed on a US exchange"
+                          if market_of_ticker(r.ticker) == "US"
+                          else "listed on HKEX")
         prompt = (
             f"You are a sell-side equity analyst. Write a 2-paragraph business summary "
-            f"for {r.name} ({r.ticker}), a {sector} company listed on HKEX. "
+            f"for {r.name} ({r.ticker}), a {sector} company {listing_blurb}. "
             f"Use the recent news headlines below to identify the current business themes, "
             f"any recent catalysts or risks, and competitive positioning. "
             f"Avoid generic phrases; be specific. "

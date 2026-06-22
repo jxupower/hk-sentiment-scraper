@@ -211,14 +211,26 @@ def build_earnings_table(income_rows: list[dict]) -> html.Div:
     )
 
 
-def build_unavailable_state(statement_type: str) -> html.Div:
+def build_unavailable_state(statement_type: str,
+                              ticker: str | None = None) -> html.Div:
+    # Market-aware fallback hint — US users should see "SEC filings", HK
+    # users "HKEX disclosures". Falls back to a generic line when ticker
+    # is not provided.
+    if ticker:
+        from utils.market import market_of_ticker
+        if market_of_ticker(ticker) == "US":
+            fallback_blurb = "check the company's SEC filings directly."
+        else:
+            fallback_blurb = "check the company's HKEX disclosures directly."
+    else:
+        fallback_blurb = "check the official filings directly."
     return html.Div([
         html.P(f"{_STATEMENT_TITLES.get(statement_type, statement_type)} not available "
                 "for this ticker.",
                 style={"color": T.TEXT_MUTED, "fontSize": "0.9rem",
                        "marginBottom": "4px"}),
-        html.P("Both yfinance and akshare returned empty data. "
-                "Try a different ticker or check the company's HKEX disclosures directly.",
+        html.P(f"Both yfinance and akshare returned empty data. "
+                f"Try a different ticker or {fallback_blurb}",
                 className="small text-muted fst-italic"),
     ], style={"padding": "32px 16px", "textAlign": "center"})
 

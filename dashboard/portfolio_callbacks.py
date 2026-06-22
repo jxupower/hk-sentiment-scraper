@@ -20,44 +20,111 @@ def register_portfolio_callbacks(app, db_path: str):
     # ----- i18n: flip every translatable label on language change -----
     @app.callback(
         Output("portfolio-saved-title", "children"),
+        Output("portfolio-saved-hint", "children"),
         Output("portfolio-label-name", "children"),
         Output("portfolio-label-existing", "children"),
         Output("portfolio-load-btn", "children"),
         Output("portfolio-delete-btn", "children"),
+        Output("portfolio-name-input", "placeholder"),
+        Output("portfolio-saved-dropdown", "placeholder"),
         Output("portfolio-holdings-title", "children"),
+        Output("portfolio-holdings-hint", "children"),
         Output("portfolio-add-row-btn", "children"),
+        Output("portfolio-save-status-btn", "children"),
+        Output("portfolio-save-optimal-btn", "children"),
+        Output("portfolio-save-status-blurb", "children"),
+        Output("portfolio-save-optimal-blurb", "children"),
         Output("portfolio-params-title", "children"),
         Output("portfolio-label-lookback", "children"),
         Output("portfolio-label-rebal", "children"),
         Output("portfolio-label-weight-cap", "children"),
         Output("portfolio-label-rf", "children"),
         Output("portfolio-compute-btn", "children"),
+        Output("portfolio-placeholder-text", "children"),
+        Output("portfolio-sharpe-status-label", "children"),
+        Output("portfolio-sharpe-current-label", "children"),
+        Output("portfolio-sharpe-full-label", "children"),
+        Output("portfolio-weights-header", "children"),
+        Output("portfolio-frontier-header", "children"),
+        Output("portfolio-backtest-header", "children"),
+        Output("portfolio-candidate-header", "children"),
+        Output("portfolio-trade-header", "children"),
+        Output("portfolio-diagnostics-header", "children"),
+        Output("portfolio-alert-banner", "children"),
         Output("portfolio-holdings-table", "columns"),
         Input("user-language", "data"),
+        Input("user-market", "data"),
     )
-    def i18n_portfolio(lang):
+    def i18n_portfolio(lang, market):
         from dashboard.i18n import T as I
+        from dash import html
+        from dash.dash_table.Format import Format, Scheme
         lang = lang or "en"
+        market = (market or "HK").upper()
+        currency = "USD" if market == "US" else "HKD"
+        price_label_en = f"Price ({currency})"
+        price_label_zh = f"价格 ({currency})"
         cols = [
             {"name": I("backtest.col.ticker", lang), "id": "ticker",
              "type": "text", "editable": True},
             {"name": I("backtest.col.shares", lang), "id": "shares",
              "type": "numeric", "editable": True},
+            {"name": (price_label_zh if lang == "zh" else price_label_en),
+             "id": "current_price", "type": "numeric", "editable": False,
+             "format": Format(precision=2, scheme=Scheme.fixed)},
+        ]
+        # Holdings hint flips with BOTH market (example ticker) and
+        # language (sentence translation). The market-toggle callback
+        # also writes this same field on market change — we override here
+        # so language-flip alone re-renders the right ticker example.
+        if market == "US":
+            holdings_hint = (" — type ticker (e.g. AAPL or ^GSPC) + shares. "
+                              "Use shares=0 for candidates you're considering.")
+            holdings_hint_zh = " — 输入代码(如 AAPL 或 ^GSPC)+ 股数。候选标的填 0 股。"
+        else:
+            holdings_hint = (" — type ticker (e.g. 0700.HK or ^HSI) + shares. "
+                              "Use shares=0 for candidates you're considering.")
+            holdings_hint_zh = " — 输入代码(如 0700.HK 或 ^HSI)+ 股数。候选标的填 0 股。"
+        # Alert banner is a single block of body text + Em(gaps).
+        alert_children = [
+            html.Strong(I("portfolio.title", lang) + " — "),
+            I("portfolio.alert", lang),
+            html.Br(),
+            html.Em(I("portfolio.alert.gaps", lang)),
         ]
         return (
             I("portfolio.saved_portfolios", lang),
+            I("portfolio.saved_hint", lang),
             I("portfolio.label.name", lang),
-            I("portfolio.saved_portfolios", lang),
+            I("portfolio.label.existing", lang),
             I("common.load", lang),
             I("portfolio.btn.delete", lang),
+            I("portfolio.ph.name", lang),
+            I("portfolio.ph.saved", lang),
             I("portfolio.holdings_table", lang),
+            (holdings_hint_zh if lang == "zh" else holdings_hint),
             I("portfolio.btn.add_row", lang),
-            "Parameters" if lang == "en" else "参数",
+            [html.I(className="me-1"), I("portfolio.btn.save_status_full", lang)],
+            [html.I(className="me-1"), I("portfolio.btn.save_optimal_full", lang)],
+            I("portfolio.save_status_blurb", lang),
+            I("portfolio.save_optimal_blurb", lang),
+            I("portfolio.params_title", lang),
             I("portfolio.label.lookback", lang),
             I("portfolio.label.rebal", lang),
             I("portfolio.label.weight_cap", lang) + " ",
             I("portfolio.label.rf", lang),
             I("portfolio.btn.compute", lang),
+            I("portfolio.placeholder_text", lang),
+            I("portfolio.hero.status_quo", lang),
+            I("portfolio.hero.current_optimum", lang),
+            I("portfolio.hero.full_optimum", lang),
+            I("portfolio.header.weights", lang),
+            I("portfolio.header.frontier", lang),
+            I("portfolio.header.backtest", lang),
+            I("portfolio.header.candidate", lang),
+            I("portfolio.header.trade_list", lang),
+            I("portfolio.header.diagnostics", lang),
+            alert_children,
             cols,
         )
 
@@ -79,6 +146,45 @@ def register_portfolio_callbacks(app, db_path: str):
     )
     def add_holdings_row(_n, current):
         return (current or []) + [{"ticker": "", "shares": 0}]
+
+    # ----- Auto-populate the read-only `current_price` column whenever a
+    # row's ticker is typed in or changed. Re-uses the Screener tab's
+    # `_fetch_one_price` (and its 5-min TTL cache) so repeat visits + cross-
+    # tab lookups stay sub-second.
+    #
+    # Per-row `_priced_for` (hidden — not in the DataTable's `columns` list)
+    # tracks which ticker the current price was fetched for. This means:
+    #   - Editing `shares` (no ticker change) is a no-op — no Supabase round-trip
+    #   - Typing a typo'd ticker fetches once, sets `current_price=None`, and
+    #     stops retrying until the ticker is edited again
+    #   - Market toggle / Save+Load (which replace `data` wholesale) fetch
+    #     all rows fresh in one callback pass
+    @app.callback(
+        Output("portfolio-holdings-table", "data", allow_duplicate=True),
+        Input("portfolio-holdings-table", "data"),
+        prevent_initial_call=True,
+    )
+    def autofill_holdings_prices(rows):
+        from dashboard.screener_callbacks import _fetch_one_price
+        changed = False
+        out = []
+        for r in rows or []:
+            r = dict(r)
+            ticker = (r.get("ticker") or "").strip().upper()
+            if ticker and r.get("_priced_for") != ticker:
+                price = _fetch_one_price(db_path, ticker)
+                r["current_price"] = round(float(price), 2) if price is not None else None
+                r["_priced_for"] = ticker
+                changed = True
+            elif not ticker and r.get("_priced_for"):
+                # Row was cleared — drop the stale price marker.
+                r["current_price"] = None
+                r["_priced_for"] = None
+                changed = True
+            out.append(r)
+        if not changed:
+            raise PreventUpdate
+        return out
 
     # ----- Swap seed defaults + the hint text when the market toggle flips.
     # On market change the existing rows might mix HK + US (which the
@@ -126,7 +232,9 @@ def register_portfolio_callbacks(app, db_path: str):
                 markets_now = {market_of_ticker(r["ticker"]) for r in equity_rows}
                 if markets_now == {market}:
                     return current, hint
-        return defaults, hint
+        # Pre-fetch prices for the new defaults so the Price column is
+        # populated immediately on market flip (mirrors the load path).
+        return _prime_with_prices(defaults, db_path), hint
 
     # ----- Saved portfolios: dropdown options refresh -----
     # Triggered on initial tab load (n_intervals=0 fires once via the input
@@ -136,9 +244,13 @@ def register_portfolio_callbacks(app, db_path: str):
         Output("portfolio-saved-dropdown", "options"),
         Input("portfolio-save-status", "children"),
         Input("portfolio-compute-btn", "n_clicks"),
+        Input("user-market", "data"),
     )
-    def refresh_saved_dropdown(_status, _n):
-        return _build_saved_options()
+    def refresh_saved_dropdown(_status, _n, market):
+        # Filter saved portfolios to the active market — a HK user shouldn't
+        # see US portfolios in the dropdown (and vice versa) because loading
+        # one would trip the single-market validation on compute.
+        return _build_saved_options(market=market)
 
     # ----- Save STATUS-QUO portfolio (raw shares only) -----
     # Always available — doesn't require a Compute first. Persists the
@@ -304,10 +416,11 @@ def register_portfolio_callbacks(app, db_path: str):
             return no_update, no_update, _status_error(
                 f"No saved portfolio named {selected_name!r}."), no_update
 
-        new_table_data = [
-            {"ticker": h["ticker"], "shares": h.get("shares", 0)}
-            for h in (row.get("holdings") or [])
-        ]
+        new_table_data = _prime_with_prices(
+            [{"ticker": h["ticker"], "shares": h.get("shares", 0)}
+              for h in (row.get("holdings") or [])],
+            db_path,
+        )
         return (
             new_table_data,
             selected_name,
@@ -385,10 +498,11 @@ def register_portfolio_callbacks(app, db_path: str):
                      _status_error(f"No saved portfolio named "
                                     f"{portfolio_name!r}."), no_update)
 
-        new_table_data = [
-            {"ticker": h["ticker"], "shares": h.get("shares", 0)}
-            for h in (row.get("holdings") or [])
-        ]
+        new_table_data = _prime_with_prices(
+            [{"ticker": h["ticker"], "shares": h.get("shares", 0)}
+              for h in (row.get("holdings") or [])],
+            db_path,
+        )
         rf_pct = (row.get("rf") or 0) * 100   # stored as decimal; UI uses %
         return (
             _build_saved_options(),
@@ -757,9 +871,35 @@ def _clean_table_data(table_data) -> list[dict]:
     return out
 
 
-def _build_saved_options() -> list[dict]:
+def _prime_with_prices(rows: list[dict], db_path: str) -> list[dict]:
+    """Augment holdings rows with `current_price` + `_priced_for` so the
+    Price column is populated when the table first renders. Used by the
+    Load Portfolio paths because Dash's `allow_duplicate=True` chaining
+    doesn't reliably fire the autofill-on-data-change callback in the same
+    dispatch round — pre-fetching here guarantees the user sees prices
+    immediately on load."""
+    from dashboard.screener_callbacks import _fetch_one_price
+    primed: list[dict] = []
+    for r in rows or []:
+        r = dict(r)
+        ticker = (r.get("ticker") or "").strip().upper()
+        if ticker:
+            price = _fetch_one_price(db_path, ticker)
+            r["current_price"] = round(float(price), 2) if price is not None else None
+            r["_priced_for"]   = ticker
+        primed.append(r)
+    return primed
+
+
+def _build_saved_options(market: str | None = None) -> list[dict]:
     """Pull the saved-portfolios list from Supabase and format for dropdown.
-    Silent empty list on cloud-unavailable so the rest of the tab still works."""
+    Silent empty list on cloud-unavailable so the rest of the tab still works.
+
+    When `market` is set, filter out portfolios whose holdings are in the
+    other market — the portfolio schema has no `market` column so we infer
+    from the constituent tickers via `market_of_ticker`. A portfolio with
+    only `@`/`&`/`^` synthetic tickers (no equities) passes through
+    regardless."""
     try:
         from storage.cloud_db import available
         if not available():
@@ -769,10 +909,24 @@ def _build_saved_options() -> list[dict]:
     except Exception:
         return []
 
+    from utils.market import market_of_ticker
+    m = (market or "HK").upper() if market else None
+
     options: list[dict] = []
     for r in rows:
         name = r["name"]
-        n_holdings = len(r.get("holdings") or [])
+        holdings = r.get("holdings") or []
+        # Market filter: skip the portfolio when its equity holdings
+        # belong to a different market than the active toggle.
+        if m is not None:
+            equity_markets = {
+                market_of_ticker(h.get("ticker") or "")
+                for h in holdings
+                if h.get("ticker") and (h["ticker"] or "")[:1] not in ("@", "&", "^")
+            }
+            if equity_markets and equity_markets != {m}:
+                continue
+        n_holdings = len(holdings)
         has_opt = bool(r.get("optimal_weights"))
         suffix = " · @OPT available" if has_opt else ""
         options.append({

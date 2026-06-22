@@ -1,0 +1,516 @@
+# US ticker -> {parent_sector, sub_sector} overrides.
+# Source: Wikipedia S&P 500 + Nasdaq-100 GICS taxonomy, mapped to
+# our 11 parent sectors + 75 sub-sectors via the translation table
+# in scripts/build_us_sectors_yaml.py. Re-generate by running that
+# script. Tweak individual ticker promotions by hand if needed —
+# subsequent re-runs will preserve your edits only if you update
+# the script's GICS_SUB map; otherwise the run overwrites this file.
+#
+# Loaded by universe/reconciler.py:_load_us_sectors_yaml() and
+# applied during `python main.py universe-us seed`.
+# Generated: 2026-06-22 03:13 UTC - 503 tickers
+
+overrides:
+  A: { parent_sector: Healthcare, sub_sector: 'Diagnostics & Research' }  # S&P 500
+  AAPL: { parent_sector: Technology, sub_sector: 'Consumer Electronics & Devices' }  # S&P 500
+  ABBV: { parent_sector: Healthcare, sub_sector: Biotechnology }  # S&P 500
+  ABNB: { parent_sector: Consumer Cyclical, sub_sector: 'Travel & Hospitality' }  # S&P 500
+  ABT: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  ACGL: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  ACN: { parent_sector: Technology, sub_sector: 'IT Services & Consulting' }  # S&P 500
+  ADBE: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  ADI: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  ADM: { parent_sector: Basic Materials, sub_sector: Agricultural Inputs }  # S&P 500
+  ADP: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  ADSK: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  AEE: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  AEP: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  AES: { parent_sector: Utilities, sub_sector: Independent Power Producers }  # S&P 500
+  AFL: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  AIG: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  AIZ: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  AJG: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  AKAM: { parent_sector: Technology, sub_sector: 'Platforms & Cloud Infrastructure' }  # S&P 500
+  ALB: { parent_sector: Basic Materials, sub_sector: Chemicals }  # S&P 500
+  ALGN: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  ALL: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  ALLE: { parent_sector: Industrials, sub_sector: 'Building Products & Equipment' }  # S&P 500
+  AMAT: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  AMCR: { parent_sector: Consumer Cyclical, sub_sector: 'Packaging & Containers' }  # S&P 500
+  AMD: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  AME: { parent_sector: Industrials, sub_sector: Electrical Equipment }  # S&P 500
+  AMGN: { parent_sector: Healthcare, sub_sector: Biotechnology }  # S&P 500
+  AMP: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  AMT: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  AMZN: { parent_sector: Consumer Cyclical, sub_sector: 'Apparel & Specialty Retail' }  # S&P 500
+  ANET: { parent_sector: Technology, sub_sector: Telecom Equipment }  # S&P 500
+  AON: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  AOS: { parent_sector: Industrials, sub_sector: 'Building Products & Equipment' }  # S&P 500
+  APA: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  APD: { parent_sector: Basic Materials, sub_sector: Chemicals }  # S&P 500
+  APH: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  APO: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  APP: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  APTV: { parent_sector: Consumer Cyclical, sub_sector: 'Auto Parts & Suppliers' }  # S&P 500
+  ARE: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  ARES: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  ATO: { parent_sector: Utilities, sub_sector: Regulated Gas Utilities }  # S&P 500
+  AVB: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  AVGO: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  AVY: { parent_sector: Consumer Cyclical, sub_sector: 'Packaging & Containers' }  # S&P 500
+  AWK: { parent_sector: Utilities, sub_sector: Regulated Water Utilities }  # S&P 500
+  AXON: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  AXP: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  AZO: { parent_sector: Consumer Cyclical, sub_sector: Auto Dealerships }  # S&P 500
+  BA: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  BAC: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  BALL: { parent_sector: Consumer Cyclical, sub_sector: 'Packaging & Containers' }  # S&P 500
+  BAX: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  BBY: { parent_sector: Consumer Cyclical, sub_sector: 'Apparel & Specialty Retail' }  # S&P 500
+  BDX: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  BEN: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  BF-B: { parent_sector: Consumer Defensive, sub_sector: Beverages }  # S&P 500
+  BG: { parent_sector: Basic Materials, sub_sector: Agricultural Inputs }  # S&P 500
+  BIIB: { parent_sector: Healthcare, sub_sector: Biotechnology }  # S&P 500
+  BKNG: { parent_sector: Consumer Cyclical, sub_sector: 'Travel & Hospitality' }  # S&P 500
+  BKR: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  BLDR: { parent_sector: Industrials, sub_sector: 'Building Products & Equipment' }  # S&P 500
+  BLK: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  BMY: { parent_sector: Healthcare, sub_sector: Drug Manufacturing }  # S&P 500
+  BNY: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  BR: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  BRK-B: { parent_sector: Financial Services, sub_sector: Financial Conglomerates }  # S&P 500
+  BRO: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  BSX: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  BX: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  BXP: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  C: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  CAG: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  CAH: { parent_sector: Healthcare, sub_sector: 'Pharmacy Retail & Distribution' }  # S&P 500
+  CARR: { parent_sector: Industrials, sub_sector: 'Building Products & Equipment' }  # S&P 500
+  CASY: { parent_sector: Consumer Defensive, sub_sector: 'Food Production, Distribution & Retail' }  # S&P 500
+  CAT: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  CB: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  CBOE: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  CBRE: { parent_sector: Real Estate, sub_sector: 'Property Management & Services' }  # S&P 500
+  CCI: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  CCL: { parent_sector: Consumer Cyclical, sub_sector: 'Travel & Hospitality' }  # S&P 500
+  CDNS: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  CDW: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  CEG: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  CF: { parent_sector: Basic Materials, sub_sector: Agricultural Inputs }  # S&P 500
+  CFG: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  CHD: { parent_sector: Consumer Defensive, sub_sector: 'Household & Personal Products' }  # S&P 500
+  CHRW: { parent_sector: Industrials, sub_sector: 'Logistics & Freight' }  # S&P 500
+  CHTR: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  CI: { parent_sector: Healthcare, sub_sector: Medical Care Facilities }  # S&P 500
+  CIEN: { parent_sector: Technology, sub_sector: Telecom Equipment }  # S&P 500
+  CINF: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  CL: { parent_sector: Consumer Defensive, sub_sector: 'Household & Personal Products' }  # S&P 500
+  CLX: { parent_sector: Consumer Defensive, sub_sector: 'Household & Personal Products' }  # S&P 500
+  CMCSA: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  CME: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  CMG: { parent_sector: Consumer Cyclical, sub_sector: Restaurants }  # S&P 500
+  CMI: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  CMS: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  CNC: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  CNP: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  COF: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  COHR: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  COIN: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  COO: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  COP: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  COR: { parent_sector: Healthcare, sub_sector: 'Pharmacy Retail & Distribution' }  # S&P 500
+  COST: { parent_sector: Consumer Defensive, sub_sector: 'Food Production, Distribution & Retail' }  # S&P 500
+  CPAY: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  CPRT: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  CPT: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  CRH: { parent_sector: Basic Materials, sub_sector: 'Building Materials & Cement' }  # S&P 500
+  CRL: { parent_sector: Healthcare, sub_sector: 'Diagnostics & Research' }  # S&P 500
+  CRM: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  CRWD: { parent_sector: Technology, sub_sector: 'Platforms & Cloud Infrastructure' }  # S&P 500
+  CSCO: { parent_sector: Technology, sub_sector: Telecom Equipment }  # S&P 500
+  CSGP: { parent_sector: Real Estate, sub_sector: 'Property Management & Services' }  # S&P 500
+  CSX: { parent_sector: Industrials, sub_sector: 'Passenger & Air Transport' }  # S&P 500
+  CTAS: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  CTSH: { parent_sector: Technology, sub_sector: 'IT Services & Consulting' }  # S&P 500
+  CTVA: { parent_sector: Basic Materials, sub_sector: Agricultural Inputs }  # S&P 500
+  CVNA: { parent_sector: Consumer Cyclical, sub_sector: Auto Dealerships }  # S&P 500
+  CVS: { parent_sector: Healthcare, sub_sector: Medical Care Facilities }  # S&P 500
+  CVX: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  D: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  DAL: { parent_sector: Industrials, sub_sector: 'Passenger & Air Transport' }  # S&P 500
+  DASH: { parent_sector: Consumer Cyclical, sub_sector: Personal Services }  # S&P 500
+  DD: { parent_sector: Basic Materials, sub_sector: Chemicals }  # S&P 500
+  DDOG: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  DE: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  DECK: { parent_sector: Consumer Cyclical, sub_sector: 'Textiles & Footwear' }  # S&P 500
+  DELL: { parent_sector: Technology, sub_sector: 'Consumer Electronics & Devices' }  # S&P 500
+  DG: { parent_sector: Consumer Defensive, sub_sector: 'Food Production, Distribution & Retail' }  # S&P 500
+  DGX: { parent_sector: Healthcare, sub_sector: Medical Care Facilities }  # S&P 500
+  DHI: { parent_sector: Industrials, sub_sector: 'Engineering & Construction' }  # S&P 500
+  DHR: { parent_sector: Healthcare, sub_sector: 'Diagnostics & Research' }  # S&P 500
+  DIS: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  DLR: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  DLTR: { parent_sector: Consumer Defensive, sub_sector: 'Food Production, Distribution & Retail' }  # S&P 500
+  DOC: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  DOV: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  DOW: { parent_sector: Basic Materials, sub_sector: Chemicals }  # S&P 500
+  DPZ: { parent_sector: Consumer Cyclical, sub_sector: Restaurants }  # S&P 500
+  DRI: { parent_sector: Consumer Cyclical, sub_sector: Restaurants }  # S&P 500
+  DTE: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  DUK: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  DVA: { parent_sector: Healthcare, sub_sector: Medical Care Facilities }  # S&P 500
+  DVN: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  DXCM: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  EA: { parent_sector: Communication Services, sub_sector: 'Internet Content & Gaming' }  # S&P 500
+  EBAY: { parent_sector: Consumer Cyclical, sub_sector: 'Apparel & Specialty Retail' }  # S&P 500
+  ECL: { parent_sector: Basic Materials, sub_sector: Chemicals }  # S&P 500
+  ED: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  EFX: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  EG: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  EIX: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  EL: { parent_sector: Consumer Defensive, sub_sector: 'Household & Personal Products' }  # S&P 500
+  ELV: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  EME: { parent_sector: Industrials, sub_sector: 'Engineering & Construction' }  # S&P 500
+  EMR: { parent_sector: Industrials, sub_sector: Electrical Equipment }  # S&P 500
+  EOG: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  EQIX: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  EQR: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  EQT: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  ERIE: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  ES: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  ESS: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  ETN: { parent_sector: Industrials, sub_sector: Electrical Equipment }  # S&P 500
+  ETR: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  EVRG: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  EW: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  EXC: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  EXE: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  EXPD: { parent_sector: Industrials, sub_sector: 'Logistics & Freight' }  # S&P 500
+  EXPE: { parent_sector: Consumer Cyclical, sub_sector: 'Travel & Hospitality' }  # S&P 500
+  EXR: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  F: { parent_sector: Consumer Cyclical, sub_sector: Auto Manufacturers }  # S&P 500
+  FANG: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  FAST: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  FCX: { parent_sector: Basic Materials, sub_sector: 'Base Metals & Mining' }  # S&P 500
+  FDS: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  FDX: { parent_sector: Industrials, sub_sector: 'Logistics & Freight' }  # S&P 500
+  FDXF: { parent_sector: Industrials, sub_sector: 'Logistics & Freight' }  # S&P 500
+  FE: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  FFIV: { parent_sector: Technology, sub_sector: Telecom Equipment }  # S&P 500
+  FICO: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  FIS: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  FISV: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  FITB: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  FIX: { parent_sector: Industrials, sub_sector: 'Engineering & Construction' }  # S&P 500
+  FLEX: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  FOX: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  FOXA: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  FRT: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  FSLR: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  FTNT: { parent_sector: Technology, sub_sector: 'Platforms & Cloud Infrastructure' }  # S&P 500
+  FTV: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  GD: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  GDDY: { parent_sector: Technology, sub_sector: 'Platforms & Cloud Infrastructure' }  # S&P 500
+  GE: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  GEHC: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  GEN: { parent_sector: Technology, sub_sector: 'Platforms & Cloud Infrastructure' }  # S&P 500
+  GEV: { parent_sector: Industrials, sub_sector: Electrical Equipment }  # S&P 500
+  GILD: { parent_sector: Healthcare, sub_sector: Biotechnology }  # S&P 500
+  GIS: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  GL: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  GLW: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  GM: { parent_sector: Consumer Cyclical, sub_sector: Auto Manufacturers }  # S&P 500
+  GNRC: { parent_sector: Industrials, sub_sector: Electrical Equipment }  # S&P 500
+  GOOG: { parent_sector: Communication Services, sub_sector: 'Internet Content & Gaming' }  # S&P 500
+  GOOGL: { parent_sector: Communication Services, sub_sector: 'Internet Content & Gaming' }  # S&P 500
+  GPC: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  GPN: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  GRMN: { parent_sector: Technology, sub_sector: 'Consumer Electronics & Devices' }  # S&P 500
+  GS: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  GWW: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  HAL: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  HAS: { parent_sector: Consumer Cyclical, sub_sector: 'Travel & Hospitality' }  # S&P 500
+  HBAN: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  HCA: { parent_sector: Healthcare, sub_sector: Medical Care Facilities }  # S&P 500
+  HD: { parent_sector: Consumer Cyclical, sub_sector: 'Home Furnishings & Appliances' }  # S&P 500
+  HIG: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  HII: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  HLT: { parent_sector: Consumer Cyclical, sub_sector: 'Travel & Hospitality' }  # S&P 500
+  HON: { parent_sector: Industrials, sub_sector: Conglomerates }  # S&P 500
+  HOOD: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  HPE: { parent_sector: Technology, sub_sector: 'Consumer Electronics & Devices' }  # S&P 500
+  HPQ: { parent_sector: Technology, sub_sector: 'Consumer Electronics & Devices' }  # S&P 500
+  HRL: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  HSIC: { parent_sector: Healthcare, sub_sector: 'Pharmacy Retail & Distribution' }  # S&P 500
+  HST: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  HSY: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  HUBB: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  HUM: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  HWM: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  IBKR: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  IBM: { parent_sector: Technology, sub_sector: 'IT Services & Consulting' }  # S&P 500
+  ICE: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  IDXX: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  IEX: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  IFF: { parent_sector: Basic Materials, sub_sector: Chemicals }  # S&P 500
+  INCY: { parent_sector: Healthcare, sub_sector: Biotechnology }  # S&P 500
+  INTC: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  INTU: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  INVH: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  IP: { parent_sector: Consumer Cyclical, sub_sector: 'Packaging & Containers' }  # S&P 500
+  IQV: { parent_sector: Healthcare, sub_sector: 'Diagnostics & Research' }  # S&P 500
+  IR: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  IRM: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  ISRG: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  IT: { parent_sector: Technology, sub_sector: 'IT Services & Consulting' }  # S&P 500
+  ITW: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  IVZ: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  J: { parent_sector: Industrials, sub_sector: 'Engineering & Construction' }  # S&P 500
+  JBHT: { parent_sector: Industrials, sub_sector: 'Logistics & Freight' }  # S&P 500
+  JBL: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  JCI: { parent_sector: Industrials, sub_sector: 'Building Products & Equipment' }  # S&P 500
+  JKHY: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  JNJ: { parent_sector: Healthcare, sub_sector: Drug Manufacturing }  # S&P 500
+  JPM: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  KDP: { parent_sector: Consumer Defensive, sub_sector: Beverages }  # S&P 500
+  KEY: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  KEYS: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  KHC: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  KIM: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  KKR: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  KLAC: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  KMB: { parent_sector: Consumer Defensive, sub_sector: 'Household & Personal Products' }  # S&P 500
+  KMI: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  KO: { parent_sector: Consumer Defensive, sub_sector: Beverages }  # S&P 500
+  KR: { parent_sector: Consumer Defensive, sub_sector: 'Food Production, Distribution & Retail' }  # S&P 500
+  KVUE: { parent_sector: Consumer Defensive, sub_sector: 'Household & Personal Products' }  # S&P 500
+  L: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  LDOS: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  LEN: { parent_sector: Industrials, sub_sector: 'Engineering & Construction' }  # S&P 500
+  LH: { parent_sector: Healthcare, sub_sector: Medical Care Facilities }  # S&P 500
+  LHX: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  LII: { parent_sector: Industrials, sub_sector: 'Building Products & Equipment' }  # S&P 500
+  LIN: { parent_sector: Basic Materials, sub_sector: Chemicals }  # S&P 500
+  LITE: { parent_sector: Technology, sub_sector: Telecom Equipment }  # S&P 500
+  LLY: { parent_sector: Healthcare, sub_sector: Drug Manufacturing }  # S&P 500
+  LMT: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  LNT: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  LOW: { parent_sector: Consumer Cyclical, sub_sector: 'Home Furnishings & Appliances' }  # S&P 500
+  LRCX: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  LULU: { parent_sector: Consumer Cyclical, sub_sector: Luxury Goods }  # S&P 500
+  LUV: { parent_sector: Industrials, sub_sector: 'Passenger & Air Transport' }  # S&P 500
+  LVS: { parent_sector: Consumer Cyclical, sub_sector: 'Gambling & Casinos' }  # S&P 500
+  LYB: { parent_sector: Basic Materials, sub_sector: Chemicals }  # S&P 500
+  LYV: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  MA: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  MAA: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  MAR: { parent_sector: Consumer Cyclical, sub_sector: 'Travel & Hospitality' }  # S&P 500
+  MAS: { parent_sector: Industrials, sub_sector: 'Building Products & Equipment' }  # S&P 500
+  MCD: { parent_sector: Consumer Cyclical, sub_sector: Restaurants }  # S&P 500
+  MCHP: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  MCK: { parent_sector: Healthcare, sub_sector: 'Pharmacy Retail & Distribution' }  # S&P 500
+  MCO: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  MDLZ: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  MDT: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  MET: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  META: { parent_sector: Communication Services, sub_sector: 'Internet Content & Gaming' }  # S&P 500
+  MGM: { parent_sector: Consumer Cyclical, sub_sector: 'Gambling & Casinos' }  # S&P 500
+  MKC: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  MLM: { parent_sector: Basic Materials, sub_sector: 'Building Materials & Cement' }  # S&P 500
+  MMM: { parent_sector: Industrials, sub_sector: Conglomerates }  # S&P 500
+  MNST: { parent_sector: Consumer Defensive, sub_sector: Beverages }  # S&P 500
+  MO: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  MOS: { parent_sector: Basic Materials, sub_sector: Agricultural Inputs }  # S&P 500
+  MPC: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  MPWR: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  MRK: { parent_sector: Healthcare, sub_sector: Drug Manufacturing }  # S&P 500
+  MRNA: { parent_sector: Healthcare, sub_sector: Biotechnology }  # S&P 500
+  MRSH: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  MRVL: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  MS: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  MSCI: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  MSFT: { parent_sector: Technology, sub_sector: 'Platforms & Cloud Infrastructure' }  # S&P 500
+  MSI: { parent_sector: Technology, sub_sector: Telecom Equipment }  # S&P 500
+  MTB: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  MTD: { parent_sector: Healthcare, sub_sector: 'Diagnostics & Research' }  # S&P 500
+  MU: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  NCLH: { parent_sector: Consumer Cyclical, sub_sector: 'Travel & Hospitality' }  # S&P 500
+  NDAQ: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  NDSN: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  NEE: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  NEM: { parent_sector: Basic Materials, sub_sector: 'Precious Metals & Mining' }  # S&P 500
+  NFLX: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  NI: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  NKE: { parent_sector: Consumer Cyclical, sub_sector: Luxury Goods }  # S&P 500
+  NOC: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  NOW: { parent_sector: Technology, sub_sector: 'Platforms & Cloud Infrastructure' }  # S&P 500
+  NRG: { parent_sector: Utilities, sub_sector: Independent Power Producers }  # S&P 500
+  NSC: { parent_sector: Industrials, sub_sector: 'Passenger & Air Transport' }  # S&P 500
+  NTAP: { parent_sector: Technology, sub_sector: 'Consumer Electronics & Devices' }  # S&P 500
+  NTRS: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  NUE: { parent_sector: Basic Materials, sub_sector: Steel }  # S&P 500
+  NVDA: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  NVR: { parent_sector: Industrials, sub_sector: 'Engineering & Construction' }  # S&P 500
+  NWS: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  NWSA: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  NXPI: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  O: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  ODFL: { parent_sector: Industrials, sub_sector: 'Logistics & Freight' }  # S&P 500
+  OKE: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  OMC: { parent_sector: Communication Services, sub_sector: Advertising Agencies }  # S&P 500
+  ON: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  ORCL: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  ORLY: { parent_sector: Consumer Cyclical, sub_sector: Auto Dealerships }  # S&P 500
+  OTIS: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  OXY: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  PANW: { parent_sector: Technology, sub_sector: 'Platforms & Cloud Infrastructure' }  # S&P 500
+  PAYX: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  PCAR: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  PCG: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  PEG: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  PEP: { parent_sector: Consumer Defensive, sub_sector: Beverages }  # S&P 500
+  PFE: { parent_sector: Healthcare, sub_sector: Drug Manufacturing }  # S&P 500
+  PFG: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  PG: { parent_sector: Consumer Defensive, sub_sector: 'Household & Personal Products' }  # S&P 500
+  PGR: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  PH: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  PHM: { parent_sector: Industrials, sub_sector: 'Engineering & Construction' }  # S&P 500
+  PKG: { parent_sector: Consumer Cyclical, sub_sector: 'Packaging & Containers' }  # S&P 500
+  PLD: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  PLTR: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  PM: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  PNC: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  PNR: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  PNW: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  PODD: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  PPG: { parent_sector: Basic Materials, sub_sector: Chemicals }  # S&P 500
+  PPL: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  PRU: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  PSA: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  PSKY: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  PSX: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  PTC: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  PWR: { parent_sector: Industrials, sub_sector: 'Engineering & Construction' }  # S&P 500
+  PYPL: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  Q: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  QCOM: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  RCL: { parent_sector: Consumer Cyclical, sub_sector: 'Travel & Hospitality' }  # S&P 500
+  REG: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  REGN: { parent_sector: Healthcare, sub_sector: Biotechnology }  # S&P 500
+  RF: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  RJF: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  RL: { parent_sector: Consumer Cyclical, sub_sector: Luxury Goods }  # S&P 500
+  RMD: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  ROK: { parent_sector: Industrials, sub_sector: Electrical Equipment }  # S&P 500
+  ROL: { parent_sector: Industrials, sub_sector: Environmental Services }  # S&P 500
+  ROP: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  ROST: { parent_sector: Consumer Cyclical, sub_sector: 'Apparel & Specialty Retail' }  # S&P 500
+  RSG: { parent_sector: Industrials, sub_sector: Environmental Services }  # S&P 500
+  RTX: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  RVTY: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  SATS: { parent_sector: Communication Services, sub_sector: Telecom Services }  # S&P 500
+  SBAC: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  SBUX: { parent_sector: Consumer Cyclical, sub_sector: Restaurants }  # S&P 500
+  SCHW: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  SHW: { parent_sector: Basic Materials, sub_sector: Chemicals }  # S&P 500
+  SJM: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  SLB: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  SMCI: { parent_sector: Technology, sub_sector: 'Consumer Electronics & Devices' }  # S&P 500
+  SNA: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  SNDK: { parent_sector: Technology, sub_sector: 'Consumer Electronics & Devices' }  # S&P 500
+  SNPS: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  SO: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  SOLV: { parent_sector: Healthcare, sub_sector: Health Information Services }  # S&P 500
+  SPG: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  SPGI: { parent_sector: Financial Services, sub_sector: Capital Markets }  # S&P 500
+  SRE: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  STE: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  STLD: { parent_sector: Basic Materials, sub_sector: Steel }  # S&P 500
+  STT: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  STX: { parent_sector: Technology, sub_sector: 'Consumer Electronics & Devices' }  # S&P 500
+  STZ: { parent_sector: Consumer Defensive, sub_sector: Beverages }  # S&P 500
+  SW: { parent_sector: Consumer Cyclical, sub_sector: 'Packaging & Containers' }  # S&P 500
+  SWK: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  SWKS: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  SYF: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  SYK: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  SYY: { parent_sector: Consumer Defensive, sub_sector: 'Food Production, Distribution & Retail' }  # S&P 500
+  T: { parent_sector: Communication Services, sub_sector: Telecom Services }  # S&P 500
+  TAP: { parent_sector: Consumer Defensive, sub_sector: Beverages }  # S&P 500
+  TDG: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  TDY: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  TECH: { parent_sector: Healthcare, sub_sector: 'Diagnostics & Research' }  # S&P 500
+  TEL: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  TER: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  TFC: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  TGT: { parent_sector: Consumer Defensive, sub_sector: 'Food Production, Distribution & Retail' }  # S&P 500
+  TJX: { parent_sector: Consumer Cyclical, sub_sector: 'Apparel & Specialty Retail' }  # S&P 500
+  TKO: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  TMO: { parent_sector: Healthcare, sub_sector: 'Diagnostics & Research' }  # S&P 500
+  TMUS: { parent_sector: Communication Services, sub_sector: Telecom Services }  # S&P 500
+  TPL: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  TPR: { parent_sector: Consumer Cyclical, sub_sector: Luxury Goods }  # S&P 500
+  TRGP: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  TRMB: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  TROW: { parent_sector: Financial Services, sub_sector: Asset Management }  # S&P 500
+  TRV: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  TSCO: { parent_sector: Consumer Cyclical, sub_sector: 'Apparel & Specialty Retail' }  # S&P 500
+  TSLA: { parent_sector: Consumer Cyclical, sub_sector: Auto Manufacturers }  # S&P 500
+  TSN: { parent_sector: Consumer Defensive, sub_sector: Packaged Foods }  # S&P 500
+  TT: { parent_sector: Industrials, sub_sector: 'Building Products & Equipment' }  # S&P 500
+  TTD: { parent_sector: Communication Services, sub_sector: Advertising Agencies }  # S&P 500
+  TTWO: { parent_sector: Communication Services, sub_sector: 'Internet Content & Gaming' }  # S&P 500
+  TXN: { parent_sector: Technology, sub_sector: 'Semiconductors & Equipment' }  # S&P 500
+  TXT: { parent_sector: Industrials, sub_sector: 'Aerospace & Defense' }  # S&P 500
+  TYL: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  UAL: { parent_sector: Industrials, sub_sector: 'Passenger & Air Transport' }  # S&P 500
+  UBER: { parent_sector: Industrials, sub_sector: 'Passenger & Air Transport' }  # S&P 500
+  UDR: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  UHS: { parent_sector: Healthcare, sub_sector: Medical Care Facilities }  # S&P 500
+  ULTA: { parent_sector: Consumer Cyclical, sub_sector: 'Apparel & Specialty Retail' }  # S&P 500
+  UNH: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  UNP: { parent_sector: Industrials, sub_sector: 'Passenger & Air Transport' }  # S&P 500
+  UPS: { parent_sector: Industrials, sub_sector: 'Logistics & Freight' }  # S&P 500
+  URI: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  USB: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  V: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  VEEV: { parent_sector: Healthcare, sub_sector: Health Information Services }  # S&P 500
+  VICI: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  VLO: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  VLTO: { parent_sector: Industrials, sub_sector: Environmental Services }  # S&P 500
+  VMC: { parent_sector: Basic Materials, sub_sector: 'Building Materials & Cement' }  # S&P 500
+  VRSK: { parent_sector: Industrials, sub_sector: 'Business & Professional Services' }  # S&P 500
+  VRSN: { parent_sector: Technology, sub_sector: 'Platforms & Cloud Infrastructure' }  # S&P 500
+  VRT: { parent_sector: Industrials, sub_sector: Electrical Equipment }  # S&P 500
+  VRTX: { parent_sector: Healthcare, sub_sector: Biotechnology }  # S&P 500
+  VST: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  VTR: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  VTRS: { parent_sector: Healthcare, sub_sector: Drug Manufacturing }  # S&P 500
+  VZ: { parent_sector: Communication Services, sub_sector: Telecom Services }  # S&P 500
+  WAB: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  WAT: { parent_sector: Healthcare, sub_sector: 'Diagnostics & Research' }  # S&P 500
+  WBD: { parent_sector: Communication Services, sub_sector: 'Media & Entertainment' }  # S&P 500
+  WDAY: { parent_sector: Technology, sub_sector: Application Software }  # S&P 500
+  WDC: { parent_sector: Technology, sub_sector: 'Consumer Electronics & Devices' }  # S&P 500
+  WEC: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  WELL: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  WFC: { parent_sector: Financial Services, sub_sector: Banks }  # S&P 500
+  WM: { parent_sector: Industrials, sub_sector: Environmental Services }  # S&P 500
+  WMB: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  WMT: { parent_sector: Consumer Defensive, sub_sector: 'Food Production, Distribution & Retail' }  # S&P 500
+  WRB: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  WSM: { parent_sector: Consumer Cyclical, sub_sector: 'Home Furnishings & Appliances' }  # S&P 500
+  WST: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  WTW: { parent_sector: Financial Services, sub_sector: Insurance }  # S&P 500
+  WY: { parent_sector: Real Estate, sub_sector: Diversified Real Estate }  # S&P 500
+  WYNN: { parent_sector: Consumer Cyclical, sub_sector: 'Gambling & Casinos' }  # S&P 500
+  XEL: { parent_sector: Utilities, sub_sector: Regulated Electric Utilities }  # S&P 500
+  XOM: { parent_sector: Energy, sub_sector: 'Oil & Gas' }  # S&P 500
+  XYL: { parent_sector: Industrials, sub_sector: Industrial Machinery }  # S&P 500
+  XYZ: { parent_sector: Financial Services, sub_sector: Credit Services }  # S&P 500
+  YUM: { parent_sector: Consumer Cyclical, sub_sector: Restaurants }  # S&P 500
+  ZBH: { parent_sector: Healthcare, sub_sector: 'Medical Devices & Instruments' }  # S&P 500
+  ZBRA: { parent_sector: Technology, sub_sector: 'Tech Components & Distribution' }  # S&P 500
+  ZTS: { parent_sector: Healthcare, sub_sector: Drug Manufacturing }  # S&P 500

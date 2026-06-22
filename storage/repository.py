@@ -356,6 +356,23 @@ class SecuritiesRepository:
                 (market,),
             ).fetchone()[0]
 
+    def set_yf_classification(self, ticker: str, sector: Optional[str],
+                                industry: Optional[str]) -> None:
+        """Write yfinance's sector + industry to an existing securities row.
+        COALESCE preserves any existing value when the caller passes None
+        (e.g. a re-run where only the sector came back populated). Used by
+        the US sector backfill scraper to feed the reconciler's global
+        `industry_to_subsector` map."""
+        with self.db.get_connection() as conn:
+            conn.execute("""
+                UPDATE securities
+                   SET yf_sector   = COALESCE(?, yf_sector),
+                       yf_industry = COALESCE(?, yf_industry),
+                       last_refreshed = CURRENT_TIMESTAMP
+                 WHERE ticker = ?
+            """, (sector, industry, ticker))
+            conn.commit()
+
     def set_market(self, ticker: str, market: str) -> None:
         """Patch the market column on an existing row. Used by reconcile_us
         when set_watchlist insert path leaves market at default 'HK' for a
@@ -426,6 +443,332 @@ class SecuritiesRepository:
                   for (ticker, sub_sector, effective_sector) in rows])
             conn.commit()
         return len(rows)
+
+
+class StockNamesRepository:
+    """Bilingual display-name lookup table.
+
+    Backs the language-toggle UX — when the user flips EN/中文, the
+    dashboard reads the right name from this table instead of the
+    canonical English `securities.name`. Falls back to English when a
+    Chinese name is missing for the ticker (legacy rows / never-seeded
+    sub-universe).
+
+    Schema lives in storage/database.py:`securities_meta`. The same table
+    will grow additional peripheral-metadata columns over time (logo
+    URL, headquarters, founded year, etc.) — keep the read API narrow
+    so callers don't take a hard dependency on the row shape."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def upsert(self, ticker: str, english_name: Optional[str] = None,
+                 chinese_name: Optional[str] = None) -> None:
+        """Insert or update one row. Either name can be None — the COALESCE
+        in the ON CONFLICT clause preserves the existing value rather than
+        overwriting with NULL when the caller doesn't have it."""
+        with self.db.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO securities_meta (ticker, english_name, chinese_name)
+                VALUES (?, ?, ?)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    english_name = COALESCE(excluded.english_name, securities_meta.english_name),
+                    chinese_name = COALESCE(excluded.chinese_name, securities_meta.chinese_name),
+                    updated_at   = CURRENT_TIMESTAMP
+            """, (ticker, english_name, chinese_name))
+            conn.commit()
+
+    def bulk_upsert(self, rows: list[dict]) -> int:
+        """Batch insert/update — each dict must have `ticker`; `english_name`
+        and `chinese_name` are optional. Returns the row count for logging."""
+        if not rows:
+            return 0
+        with self.db.get_connection() as conn:
+            conn.executemany("""
+                INSERT INTO securities_meta (ticker, english_name, chinese_name)
+                VALUES (?, ?, ?)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    english_name = COALESCE(excluded.english_name, securities_meta.english_name),
+                    chinese_name = COALESCE(excluded.chinese_name, securities_meta.chinese_name),
+                    updated_at   = CURRENT_TIMESTAMP
+            """, [(r["ticker"], r.get("english_name"), r.get("chinese_name"))
+                   for r in rows])
+            conn.commit()
+        return len(rows)
+
+    def get_name(self, ticker: str, lang: str = "en",
+                 fallback: Optional[str] = None) -> Optional[str]:
+        """Return the localised name for one ticker. Falls back to:
+          1. The other-language name (so a missing Chinese name shows English)
+          2. The `fallback` arg (typically the caller's `securities.name`)
+          3. The ticker itself"""
+        lang = (lang or "en").lower()
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT english_name, chinese_name FROM securities_meta WHERE ticker = ?",
+                (ticker,),
+            ).fetchone()
+        en = (row["english_name"] if row else None)
+        zh = (row["chinese_name"] if row else None)
+        if lang == "zh":
+            return zh or en or fallback or ticker
+        return en or zh or fallback or ticker
+
+    def get_many(self, tickers: list[str], lang: str = "en") -> dict[str, Optional[str]]:
+        """Batch lookup → `{ticker: localised_name_or_None}`. Used by table
+        builders that render many rows. Same fallback chain as `get_name`
+        but the caller decides how to handle missing rows (e.g. by passing
+        a default per ticker via dict.get)."""
+        if not tickers:
+            return {}
+        lang = (lang or "en").lower()
+        placeholders = ",".join("?" * len(tickers))
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT ticker, english_name, chinese_name "
+                f"FROM securities_meta WHERE ticker IN ({placeholders})",
+                tuple(tickers),
+            ).fetchall()
+        out: dict[str, Optional[str]] = {t: None for t in tickers}
+        for r in rows:
+            en = r["english_name"]
+            zh = r["chinese_name"]
+            out[r["ticker"]] = (zh or en) if lang == "zh" else (en or zh)
+        return out
+
+    def count(self) -> int:
+        with self.db.get_connection() as conn:
+            return conn.execute("SELECT COUNT(*) FROM securities_meta").fetchone()[0]
+
+    def count_with_chinese(self) -> int:
+        with self.db.get_connection() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM securities_meta WHERE chinese_name IS NOT NULL"
+            ).fetchone()[0]
+
+
+class SecuritiesReferenceRepository:
+    """Local-SQLite mirror of `securities_reference`. Same method shape as
+    `CloudSecuritiesReferenceRepository` so factory routing swaps cleanly.
+
+    Used as a read-through cache: the dashboard reads from local SQLite for
+    sub-millisecond name + sector lookups; the cloud row is the source of
+    truth and gets sync'd both ways via `analysis.data_loader.
+    refresh_securities_reference_cache` (cloud → local) and
+    `analysis.data_loader.push_securities_reference` (reconciler → cloud)."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def upsert_many(self, rows: list[dict]) -> int:
+        if not rows:
+            return 0
+        params = [
+            (r.get("ticker"), r.get("english_name"), r.get("chinese_name"),
+              r.get("parent_sector"), r.get("sub_sector"))
+            for r in rows if r.get("ticker")
+        ]
+        with self.db.get_connection() as conn:
+            conn.executemany("""
+                INSERT INTO securities_reference
+                    (ticker, english_name, chinese_name, parent_sector, sub_sector)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    english_name  = excluded.english_name,
+                    chinese_name  = excluded.chinese_name,
+                    parent_sector = excluded.parent_sector,
+                    sub_sector    = excluded.sub_sector,
+                    updated_at    = CURRENT_TIMESTAMP
+            """, params)
+            conn.commit()
+        return len(params)
+
+    def get_one(self, ticker: str) -> Optional[dict]:
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT ticker, english_name, chinese_name, "
+                "parent_sector, sub_sector, updated_at "
+                "FROM securities_reference WHERE ticker = ?",
+                (ticker,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_many(self, tickers: list[str]) -> dict[str, dict]:
+        if not tickers:
+            return {}
+        placeholders = ",".join("?" * len(tickers))
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT ticker, english_name, chinese_name, "
+                f"parent_sector, sub_sector, updated_at "
+                f"FROM securities_reference WHERE ticker IN ({placeholders})",
+                tuple(tickers),
+            ).fetchall()
+            return {r["ticker"]: dict(r) for r in rows}
+
+    def get_all(self) -> list[dict]:
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT ticker, english_name, chinese_name, "
+                "parent_sector, sub_sector, updated_at "
+                "FROM securities_reference ORDER BY ticker"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def count(self) -> int:
+        with self.db.get_connection() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM securities_reference"
+            ).fetchone()[0]
+
+    # ------------------------------------------------------------------
+    # Drop-in helpers — same shape as the legacy StockNamesRepository so
+    # dashboard call sites swap class names without further changes.
+    # ------------------------------------------------------------------
+
+    def get_name(self, ticker: str, lang: str = "en",
+                  fallback: Optional[str] = None) -> Optional[str]:
+        """Single-ticker localised name with EN/ZH fallback chain."""
+        lang = (lang or "en").lower()
+        row = self.get_one(ticker)
+        if row is None:
+            return fallback or ticker
+        en = row.get("english_name")
+        zh = row.get("chinese_name")
+        if lang == "zh":
+            return zh or en or fallback or ticker
+        return en or zh or fallback or ticker
+
+    def get_names(self, tickers: list[str],
+                   lang: str = "en") -> dict[str, Optional[str]]:
+        """Batch localised-name lookup, used by table builders.
+        Returns `{ticker: localised_name_or_None}` — same shape as the
+        legacy `StockNamesRepository.get_many(tickers, lang)`."""
+        if not tickers:
+            return {}
+        lang = (lang or "en").lower()
+        rows = self.get_many(tickers)
+        out: dict[str, Optional[str]] = {t: None for t in tickers}
+        for t, r in rows.items():
+            en = r.get("english_name")
+            zh = r.get("chinese_name")
+            out[t] = (zh or en) if lang == "zh" else (en or zh)
+        return out
+
+    # ------------------------------------------------------------------
+    # Sentiment-tab universe helpers — used by the scrape cycle and the
+    # `update_sector_detail` callback to enumerate sub-sector constituents
+    # without going through the legacy watchlist YAML.
+    # ------------------------------------------------------------------
+
+    def get_market_universe(self, market: str) -> list[dict]:
+        """All active tickers in `market` that have a sub_sector tag.
+        Returns `[{ticker, sub_sector, parent_sector, english_name,
+        chinese_name}, ...]`. Joined against `securities.is_active` so
+        delisted rows are excluded.
+
+        Used by the scrape cycle to enumerate the "universe to roll up
+        sentiment over" — replaces the previous watchlist iteration that
+        capped coverage at ~50 mega-caps per market."""
+        with self.db.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT r.ticker, r.english_name, r.chinese_name,
+                       r.parent_sector, r.sub_sector
+                  FROM securities_reference r
+                  JOIN securities s ON s.ticker = r.ticker
+                 WHERE s.is_active = 1 AND s.market = ?
+                   AND r.sub_sector IS NOT NULL
+                   AND r.sub_sector <> ''
+                 ORDER BY r.ticker
+            """, (market,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_tickers_in_sub_sector(self, sub_sector: str,
+                                     market: Optional[str] = None
+                                     ) -> list[str]:
+        """All active tickers belonging to one sub-sector. When `market`
+        is set, restricts to that market — needed so US 'Banks' and HK
+        'Banks' don't collide when the dashboard renders a sector card."""
+        with self.db.get_connection() as conn:
+            if market is None:
+                rows = conn.execute("""
+                    SELECT r.ticker FROM securities_reference r
+                      JOIN securities s ON s.ticker = r.ticker
+                     WHERE s.is_active = 1 AND r.sub_sector = ?
+                     ORDER BY r.ticker
+                """, (sub_sector,)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT r.ticker FROM securities_reference r
+                      JOIN securities s ON s.ticker = r.ticker
+                     WHERE s.is_active = 1 AND s.market = ?
+                       AND r.sub_sector = ?
+                     ORDER BY r.ticker
+                """, (market, sub_sector)).fetchall()
+            return [r[0] for r in rows]
+
+
+class LatestPricesRepository:
+    """Tiny local-SQLite cache of one latest-price row per ticker.
+
+    Backs the Screener / Discovery cold-load enrichment that previously
+    issued a DISTINCT-ON query over ~16M `historical_prices` rows on the
+    Supabase pooler (~40s wall-clock). This cache makes that lookup
+    sub-millisecond — a single LEFT JOIN against ~7k local rows.
+
+    Refresh policy: nightly via the EOD price cron + on demand via the
+    `python main.py historical refresh-latest-prices` CLI. Reads are
+    safe even when the cache is partially stale because the dashboard
+    only uses these values for filter/sort UX, not for any
+    backtest / valuation computation (those still read the canonical
+    Supabase rows)."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def bulk_upsert(self, rows: list[dict]) -> int:
+        """`rows`: [{ticker, adj_close, asof_date}, ...].
+        ON CONFLICT updates the price + asof_date + refreshed_at stamp."""
+        if not rows:
+            return 0
+        with self.db.get_connection() as conn:
+            conn.executemany("""
+                INSERT INTO latest_prices (ticker, adj_close, asof_date)
+                VALUES (?, ?, ?)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    adj_close    = excluded.adj_close,
+                    asof_date    = excluded.asof_date,
+                    refreshed_at = CURRENT_TIMESTAMP
+            """, [(r["ticker"], r.get("adj_close"), r.get("asof_date"))
+                   for r in rows])
+            conn.commit()
+        return len(rows)
+
+    def get_many(self, tickers: list[str]) -> dict[str, float]:
+        """{ticker: adj_close} for the requested tickers. Missing rows omitted.
+        Used by `_query_latest` to enrich fundamentals rows with last price."""
+        if not tickers:
+            return {}
+        placeholders = ",".join("?" * len(tickers))
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT ticker, adj_close FROM latest_prices "
+                f"WHERE ticker IN ({placeholders}) AND adj_close IS NOT NULL",
+                tuple(tickers),
+            ).fetchall()
+        return {r[0]: float(r[1]) for r in rows}
+
+    def count(self) -> int:
+        with self.db.get_connection() as conn:
+            return conn.execute("SELECT COUNT(*) FROM latest_prices").fetchone()[0]
+
+    def stalest_asof(self) -> Optional[str]:
+        """Oldest asof_date in the cache — surfaces freshness in the UI."""
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT MIN(asof_date) FROM latest_prices"
+            ).fetchone()
+            return row[0] if row else None
 
 
 class FundamentalsRepository:

@@ -293,6 +293,114 @@ ticker_overrides:
 
 
 # ============================================================================
+# sub_sector_to_parent — parent-sector lookup for each sub-sector
+# ============================================================================
+# Derived from the industry_to_subsector grouping above. Lets the reconciler
+# resolve `effective_sector` from a known sub_sector (e.g. when the US
+# watchlist YAML's section heading promotes to sub_sector, or when a
+# config/us_sectors.yaml override specifies only sub_sector). Maintain in
+# lockstep — any new sub_sector added above MUST have its parent listed here.
+
+sub_sector_to_parent:
+  # Technology (8)
+  Application Software:               Technology
+  Platforms & Cloud Infrastructure:   Technology
+  IT Services & Consulting:           Technology
+  Semiconductors & Equipment:         Technology
+  Consumer Electronics & Devices:     Technology
+  Tech Components & Distribution:     Technology
+  Telecom Equipment:                  Technology
+  Auto Tech:                          Technology
+
+  # Industrials (12)
+  Aerospace & Defense:                Industrials
+  Building Products & Equipment:      Industrials
+  Business & Professional Services:   Industrials
+  Conglomerates:                      Industrials
+  Electrical Equipment:               Industrials
+  Engineering & Construction:         Industrials
+  Environmental Services:             Industrials
+  Industrial Machinery:               Industrials
+  Infrastructure Operations:          Industrials
+  Logistics & Freight:                Industrials
+  Metal Fabrication:                  Industrials
+  Passenger & Air Transport:          Industrials
+
+  # Consumer Cyclical (14)
+  Apparel & Specialty Retail:         Consumer Cyclical
+  Apparel Manufacturing:              Consumer Cyclical
+  Auto Dealerships:                   Consumer Cyclical
+  Auto Manufacturers:                 Consumer Cyclical
+  Auto Parts & Suppliers:             Consumer Cyclical
+  Gambling & Casinos:                 Consumer Cyclical
+  Home Furnishings & Appliances:      Consumer Cyclical
+  Internet Retail:                    Consumer Cyclical
+  Luxury Goods:                       Consumer Cyclical
+  Packaging & Containers:             Consumer Cyclical
+  Personal Services:                  Consumer Cyclical
+  Restaurants:                        Consumer Cyclical
+  Textiles & Footwear:                Consumer Cyclical
+  Travel & Hospitality:               Consumer Cyclical
+
+  # Healthcare (7)
+  Biotechnology:                      Healthcare
+  Diagnostics & Research:             Healthcare
+  Drug Manufacturing:                 Healthcare
+  Health Information Services:        Healthcare
+  Medical Care Facilities:            Healthcare
+  Medical Devices & Instruments:      Healthcare
+  Pharmacy Retail & Distribution:     Healthcare
+
+  # Financial Services (6)
+  Asset Management:                   Financial Services
+  Banks:                              Financial Services
+  Capital Markets:                    Financial Services
+  Credit Services:                    Financial Services
+  Financial Conglomerates:            Financial Services
+  Insurance:                          Financial Services
+
+  # Consumer Defensive (5)
+  Beverages:                          Consumer Defensive
+  Education & Training Services:      Consumer Defensive
+  Food Production, Distribution & Retail: Consumer Defensive
+  Household & Personal Products:      Consumer Defensive
+  Packaged Foods:                     Consumer Defensive
+
+  # Communication Services (4)
+  Advertising Agencies:               Communication Services
+  Internet Content & Gaming:          Communication Services
+  Media & Entertainment:              Communication Services
+  Telecom Services:                   Communication Services
+
+  # Basic Materials (8)
+  Agricultural Inputs:                Basic Materials
+  Base Metals & Mining:               Basic Materials
+  Building Materials & Cement:        Basic Materials
+  Chemicals:                          Basic Materials
+  Coking Coal:                        Basic Materials
+  Forest Products & Paper:            Basic Materials
+  Precious Metals & Mining:           Basic Materials
+  Steel:                              Basic Materials
+
+  # Energy (3)
+  Clean Energy & Nuclear:             Energy
+  Oil & Gas:                          Energy
+  Thermal Coal:                       Energy
+
+  # Utilities (5)
+  Independent Power Producers:        Utilities
+  Regulated Electric Utilities:       Utilities
+  Regulated Gas Utilities:            Utilities
+  Regulated Water Utilities:          Utilities
+  Renewable Utilities:                Utilities
+
+  # Real Estate (3)
+  Diversified Real Estate:            Real Estate
+  Property Management & Services:     Real Estate
+  Real Estate Developers:             Real Estate
+
+
+# ============================================================================
 # 中文 display labels — purely display, NOT used as resolver keys
 # ============================================================================
 # `securities.sub_sector` + `securities.effective_sector` continue to store the

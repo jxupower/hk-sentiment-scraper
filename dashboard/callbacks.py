@@ -39,6 +39,22 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         prevent_initial_call=True,
     )
 
+    # Sync language button outlines to the localStorage-persisted Store on
+    # page load — mirrors the market-toggle init-sync below so returning
+    # users see the right button highlighted.
+    app.clientside_callback(
+        """
+        function(lang) {
+            const l = (lang || "en").toLowerCase();
+            return [l !== "en", l !== "zh"];
+        }
+        """,
+        Output("lang-en-btn", "outline", allow_duplicate=True),
+        Output("lang-zh-btn", "outline", allow_duplicate=True),
+        Input("user-language", "data"),
+        prevent_initial_call="initial_duplicate",
+    )
+
     # ----- Market toggle (global) -----
     # Clientside: flips user-market Store + button outline states instantly
     # on click. Mirrors the language-toggle pattern.
@@ -62,22 +78,47 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         prevent_initial_call=True,
     )
 
-    # Server-side: rebuild the tab strip when either language OR market
-    # changes. dbc.Tab.label is static at render time so we hand back a
-    # fresh children list. Re-mounting the tabs also forces every per-tab
-    # callback (Screener row builder, Discovery rank, Stock Research, etc.)
-    # to refire from a clean slate so they pick up the new market filter.
+    # On page load, sync the button outline state to whatever the
+    # localStorage-persisted Store holds — otherwise users returning to
+    # the dashboard see the visual HK button highlighted while the Store
+    # still says "US" from their last session, producing a confusing
+    # mismatch (Screener shows US universe size under an HK-highlighted
+    # toggle). Fires once at startup; subsequent flips go through the
+    # click handler above.
+    app.clientside_callback(
+        """
+        function(market) {
+            const m = (market || "HK").toUpperCase();
+            return [m !== "HK", m !== "US"];
+        }
+        """,
+        Output("market-hk-btn", "outline", allow_duplicate=True),
+        Output("market-us-btn", "outline", allow_duplicate=True),
+        Input("user-market", "data"),
+        prevent_initial_call="initial_duplicate",
+    )
+
+    # Server-side: rebuild the tab strip ONLY when market changes.
+    # dbc.Tab.label is static at render time so a full children rebuild is
+    # the only way to update tab labels — but it also wipes every editable
+    # input inside the tabs (Portfolio holdings, Stock Research notes,
+    # Screener filters, etc.). For market changes that's intentional (we
+    # want a clean slate per market). For language changes it's destructive
+    # — the per-tab i18n callbacks already update every in-tab label, so
+    # we deliberately do NOT rebuild on language change. Trade-off: the
+    # tab strip labels (e.g. "Screener" / "筛选器") stay in the language
+    # they were rendered at until the user refreshes the page. Acceptable
+    # because tab strip labels are static + short; everything else inside
+    # the tabs translates in-place.
     @app.callback(
         Output("main-tabs", "children"),
-        Input("user-language", "data"),
         Input("user-market", "data"),
+        State("user-language", "data"),
         State("sentiment-sectors-store", "data"),
         prevent_initial_call=True,
     )
-    def rebuild_tabs_on_language(lang, market, sectors):
+    def rebuild_tabs_on_market(market, lang, sectors):
         from dashboard.layout import build_tabs
-        # `market` is read by per-tab callbacks via State("user-market"); the
-        # tab factory itself only needs the language for the labels.
         return build_tabs(lang or "en", sectors or [])
 
     # Server-side: update the global chrome (header tagline + last-updated
@@ -230,18 +271,14 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
             )
 
         market = (market or "HK").upper()
-        # Load the right watchlist for the active market — _get_sub_sector_map
-        # only walks the watchlist's sector entries, so passing the HK YAML
-        # while market=US would return zero tickers for any US sub-sector.
-        active_watchlist = (settings.load_watchlist(market="US")
-                              if market == "US" else watchlist)
-        # `sector` is now a sub_sector (post 2026-06 sentiment retag).
-        # get_tickers_for_subsector resolves through watchlist YAML's
-        # per-entry sub_sector + securities.sub_sector, and the extra
-        # `market` filter rejects any HK ticker that snuck in via the
-        # shared sub-sector taxonomy.
+        # `sector` is a sub_sector (post 2026-06 sentiment redesign).
+        # The lookup goes straight to `securities_reference` and returns
+        # every active universe ticker in the sub-sector for this market —
+        # no longer bounded by the watchlist YAML. The `watchlist` arg is
+        # ignored by the rewritten settings helper but kept for callsite
+        # backwards-compat.
         tickers = settings.get_tickers_for_subsector(
-            sector, active_watchlist, securities_repo, market=market,
+            sector, watchlist, securities_repo, market=market,
         )
         scores_24h = sentiment_repo.get_scores_for_sector(tickers, hours=24)
         sentiment_ts = sentiment_repo.get_sector_timeseries(tickers, hours=168)
@@ -262,7 +299,8 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         ts_chart = sector_sentiment_timeseries(sentiment_ts, sector)
         breakdown = ticker_breakdown_bar(sector_ticker_sigs)
         ticker_rows = _build_ticker_rows(sector_ticker_sigs)
-        ai_analysis = _generate_sector_analysis(sector, scores_24h, sig)
+        ai_analysis = _generate_sector_analysis(sector, scores_24h, sig,
+                                                  market=market)
         feed = _build_article_feed(scores_24h)
         badge_color = DIRECTION_BADGE_COLOR.get(direction, "secondary")
         confidence_text = f"Confidence: {confidence:.0%} | Momentum: {momentum:+.2f}%"
@@ -309,7 +347,8 @@ def _get_representative_price(tickers, yahoo_scraper):
     return pd.DataFrame()
 
 
-def _generate_sector_analysis(sector: str, scores: list, sig) -> html.Div:
+def _generate_sector_analysis(sector: str, scores: list, sig,
+                                market: str = "HK") -> html.Div:
     from config.settings import CLAUDE_API_KEY
 
     if not scores:
@@ -335,8 +374,11 @@ def _generate_sector_analysis(sector: str, scores: list, sig) -> html.Div:
     article_count = sig["article_count_24h"] if sig else len(scores)
 
     articles_text = chr(10).join(article_lines)
+    market_blurb = ("Hong Kong and China equity markets"
+                     if (market or "HK").upper() == "HK"
+                     else "US equity markets")
     prompt = (
-        f"You are a financial analyst specializing in Hong Kong and China equity markets. "
+        f"You are a financial analyst specializing in {market_blurb}. "
         f"Provide a concise but comprehensive analysis of the {sector} sector based on the "
         f"following recent news sentiment data." + chr(10) + chr(10) +
         f"Sector signal: {direction} (avg sentiment 24h: {avg_sent:+.3f}, "

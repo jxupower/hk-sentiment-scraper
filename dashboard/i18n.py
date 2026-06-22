@@ -37,7 +37,7 @@ from __future__ import annotations
 
 EN: dict[str, str] = {
     # ---- Global chrome + brand ----
-    "app.title":              "HK Research",
+    "app.title":              "Croissant Stock Analyser",
     "app.tagline":            " · Sentiment + Fundamentals + Backtest",
     "app.last_updated":       "Last updated: ",
     "lang.en":                "EN",
@@ -407,6 +407,36 @@ EN: dict[str, str] = {
     "portfolio.backtest_section":     "Backtest walk-forward",
     "portfolio.metric.sharpe":        "Sharpe ratio",
     "portfolio.metric.min_max":       "Min/Max weights",
+    # — Extended coverage —
+    "portfolio.alert":                ("Portfolio Rebalancer — Max-Sharpe via Modern Portfolio Theory. "
+                                        "Enter your holdings (ticker + shares), add candidate tickers with 0 shares, "
+                                        "pick a lookback + rebalance frequency, click Compute. The full universe (current + candidates) "
+                                        "is fed through Ledoit-Wolf shrunk Σ and SLSQP to find the long-only, capped, max-Sharpe portfolio."),
+    "portfolio.alert.gaps":           ("Honest gaps: sample means are very noisy, so 'optimal weights' are a directional guide; "
+                                        "in-sample Sharpe is biased up by construction (the walk-forward backtest shows out-of-sample reality); "
+                                        "no transaction costs / taxes modelled."),
+    "portfolio.saved_hint":           (" — name + Save to persist the current holdings to "
+                                        "Supabase. Once saved, they show up as synthetic "
+                                        "tickers (e.g. @CORE, @CORE$OPT) in the Risk Forecast tab."),
+    "portfolio.label.existing":       "Existing portfolios",
+    "portfolio.ph.name":              "UPPERCASE / digits / _ — e.g. CORE",
+    "portfolio.ph.saved":             "Load a saved portfolio…",
+    "portfolio.btn.save_status_full": "Save status-quo portfolio  →  @NAME",
+    "portfolio.btn.save_optimal_full":"Save optimised portfolio  →  @NAME$OPT",
+    "portfolio.save_status_blurb":    "Materialises the constant-share buy-and-hold index from the holdings table above.",
+    "portfolio.save_optimal_blurb":   ("Materialises the latest max-Sharpe optimal weight series. "
+                                        "Requires Compute first (same tickers as the table)."),
+    "portfolio.placeholder_text":     "Enter holdings, pick parameters, then click Compute.",
+    "portfolio.params_title":         "Parameters",
+    "portfolio.hero.status_quo":      "Status quo",
+    "portfolio.hero.current_optimum": "Current-only optimum",
+    "portfolio.hero.full_optimum":    "Full-universe optimum",
+    "portfolio.header.weights":       "Weights — current vs. optimal",
+    "portfolio.header.frontier":      "Efficient frontier",
+    "portfolio.header.backtest":      "Walk-forward backtest",
+    "portfolio.header.candidate":     "Candidate marginal value",
+    "portfolio.header.trade_list":    "Rebalance trade list (to reach full-optimal)",
+    "portfolio.header.diagnostics":   "Estimation diagnostics",
 
     # ============================================================
     # Risk Forecast tab
@@ -441,7 +471,7 @@ EN: dict[str, str] = {
 
 ZH: dict[str, str] = {
     # ---- Global chrome + brand ----
-    "app.title":              "港股研究",
+    "app.title":              "可颂股票分析",
     "app.tagline":            " · 情绪 + 基本面 + 回测",
     "app.last_updated":       "最后更新: ",
     "lang.en":                "EN",
@@ -786,6 +816,32 @@ ZH: dict[str, str] = {
     "portfolio.backtest_section":     "滚动回测",
     "portfolio.metric.sharpe":        "夏普比率",
     "portfolio.metric.min_max":       "权重最小/最大",
+    # — Extended coverage —
+    "portfolio.alert":                ("投资组合再平衡 — 基于现代投资组合理论的最大夏普求解。"
+                                        "输入您的持仓(代码 + 股数),候选标的填 0 股,选择回看期 + 再平衡频率,点击计算。"
+                                        "完整宇宙(当前 + 候选)经过 Ledoit-Wolf 协方差收缩 + SLSQP,求解长仓且单仓位有上限的最大夏普组合。"),
+    "portfolio.alert.gaps":           ("透明的缺陷:样本均值噪声大,因此“最优权重”是方向性参考;"
+                                        "样本内夏普会因构造被高估(滚动回测才反映样本外真实表现);"
+                                        "未建模交易成本 / 税。"),
+    "portfolio.saved_hint":           " — 输入名称并保存,将当前持仓持久化到 Supabase。保存后会在风险预测页以合成代码(如 @CORE、@CORE$OPT)出现。",
+    "portfolio.label.existing":       "已存在的组合",
+    "portfolio.ph.name":              "大写字母 / 数字 / _ — 如 CORE",
+    "portfolio.ph.saved":             "加载已保存的组合…",
+    "portfolio.btn.save_status_full": "保存现状组合  →  @NAME",
+    "portfolio.btn.save_optimal_full":"保存最优组合  →  @NAME$OPT",
+    "portfolio.save_status_blurb":    "根据上方持仓表生成等股数的买入并持有指数。",
+    "portfolio.save_optimal_blurb":   "生成最近一次计算的最大夏普权重序列。需先点击计算(代码必须与表格一致)。",
+    "portfolio.placeholder_text":     "输入持仓、选择参数,然后点击计算。",
+    "portfolio.params_title":         "参数",
+    "portfolio.hero.status_quo":      "现状",
+    "portfolio.hero.current_optimum": "当前持仓最优",
+    "portfolio.hero.full_optimum":    "全宇宙最优",
+    "portfolio.header.weights":       "权重 — 当前 vs. 最优",
+    "portfolio.header.frontier":      "有效前沿",
+    "portfolio.header.backtest":      "滚动回测",
+    "portfolio.header.candidate":     "候选标的边际价值",
+    "portfolio.header.trade_list":    "再平衡交易清单(达到全宇宙最优)",
+    "portfolio.header.diagnostics":   "估计诊断",
 
     # ============================================================
     # Risk Forecast tab

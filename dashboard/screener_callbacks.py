@@ -593,7 +593,16 @@ def register_screener_callbacks(app, db_path: str):
                         if _in_range(_xform_value(xform_key, r.get(key)),
                                       lo, hi)]
 
-        table_data = [_format_row(r, lang) for r in filtered]
+        # Pre-fetch bilingual names for the filtered set in one DB round-trip
+        # via the local `securities_reference` mirror (sub-ms vs the legacy
+        # `securities_meta` table). Same return shape as the old call.
+        from storage.repository import SecuritiesReferenceRepository
+        from storage.database import Database
+        _filtered_tickers = [r.get("ticker") for r in filtered if r.get("ticker")]
+        _names = SecuritiesReferenceRepository(Database(db_path)).get_names(
+            _filtered_tickers, lang=lang,
+        )
+        table_data = [_format_row(r, lang, names_by_ticker=_names) for r in filtered]
 
         # Dropdown options come from the full snapshot population, not filtered
         # view. The displayed label translates via the sub_sectors_zh / parent_
@@ -701,37 +710,108 @@ def _register_range_sync(app, slug: str, lo: float, hi: float):
 
 def _query_latest(db_path: str) -> list[dict]:
     """Latest snapshot per ticker, joined with securities for name + watchlist flag.
+
+    Routes through `analysis.data_loader.get_universe_fundamentals` so US
+    fundamentals (stored in Supabase under `USE_CLOUD_DB=true`) come through
+    alongside HK rows from local SQLite.
+
+    **Price-derived enrichment.** The akshare scrapers intentionally write
+    NULL for `last_price`, `market_cap`, `trailing_pe`, `price_to_book`,
+    `ev_to_ebitda` (price changes daily; storing per-snapshot would bloat
+    the DB and stale immediately). We compute these on-read from the
+    canonical inputs (per-share `eps_ttm` / `bps` / `shares_outstanding`
+    in the snapshot × today's `adj_close` from `historical_prices`). One
+    bulk price query covers every ticker, then a Python loop fills the
+    fields wherever the inputs are present. The Screener's range
+    filters + stat cards then see the same coverage as if the daily
+    yfinance `.info` cron had been running.
+
     60s TTL cached: every filter slider + auto-refresh tick used to re-run
-    this 500-800ms query; now it hits warm cache for the next minute."""
+    this; now it hits warm cache for the next minute."""
     now = time.time()
     if (_QUERY_LATEST_CACHE["rows"] is not None
             and _QUERY_LATEST_CACHE["expires"] > now):
         return _QUERY_LATEST_CACHE["rows"]
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-            SELECT f.ticker, f.snapshot_date, f.trailing_pe, f.forward_pe,
-                   f.price_to_book, f.ev_to_ebitda, f.dividend_yield,
-                   f.market_cap, f.beta, f.return_on_equity, f.debt_to_equity,
-                   f.earnings_growth,
-                   f.last_price, f.currency, f.data_completeness,
-                   s.name, s.is_watchlist, s.watchlist_sector,
-                   s.yf_sector, s.yf_industry, s.sub_sector, s.effective_sector,
-                   s.market
-            FROM fundamentals_snapshots f
-            INNER JOIN (
-                SELECT ticker, MAX(snapshot_date) AS max_date
-                FROM fundamentals_snapshots
-                GROUP BY ticker
-            ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
-            INNER JOIN securities s ON f.ticker = s.ticker
-            WHERE s.is_active = 1
-            ORDER BY f.market_cap DESC NULLS LAST
-        """).fetchall()
-        out = [dict(r) for r in rows]
-        _QUERY_LATEST_CACHE["rows"] = out
-        _QUERY_LATEST_CACHE["expires"] = now + _QUERY_LATEST_TTL
-        return out
+    from analysis.data_loader import get_universe_fundamentals
+    from storage.database import Database
+    from storage.repository import LatestPricesRepository
+    db = Database(db_path)
+    rows = get_universe_fundamentals(db)
+
+    # Enrich every row missing `last_price` from the local `latest_prices`
+    # cache table. This used to be a single DISTINCT-ON over ~16M Supabase
+    # `historical_prices` rows (~40s wall-clock); the local cache makes
+    # the same lookup sub-millisecond against ~7k indexed rows. The cache
+    # is refreshed nightly by the EOD price cron + on demand via
+    # `python main.py historical refresh-latest-prices`.
+    tickers_needing_price = [r["ticker"] for r in rows
+                              if r.get("last_price") is None and r.get("ticker")]
+    if tickers_needing_price:
+        prices_by_ticker = LatestPricesRepository(db).get_many(
+            tickers_needing_price,
+        )
+        for r in rows:
+            if r.get("last_price") is None:
+                p = prices_by_ticker.get(r.get("ticker"))
+                if p is not None:
+                    r["last_price"] = p
+
+    # Sanity caps — guard against akshare's derived per-share fields
+    # going crazy for tickers where net_income / EPS produces an absurd
+    # shares_outstanding (currency-unit mismatch, micro-cap reverse splits,
+    # etc.). The cap thresholds are set well above any real-world value:
+    #   - $10T market cap (largest real co is ~$5T)
+    #   - 1,000× trailing P/E (any business with P/E > 1000 is effectively
+    #     "no earnings"; clamping prevents one outlier from skewing the
+    #     sector P/E aggregates on the Screener chart)
+    #   - 100× price-to-book (above this is meaningless for ranking)
+    MAX_MCAP = 1e13          # $10 trillion
+    MAX_PE   = 1_000.0
+    MAX_PB   = 100.0
+
+    # Derive price-dependent ratios from canonical per-share inputs.
+    # `bps` falls out of `eps_ttm / ROE` for tickers where the akshare
+    # response gives EPS + ROE but no direct BPS — this fills the gap
+    # for ~80% of US akshare-tier rows that otherwise show NULL P/B.
+    for r in rows:
+        last_px = r.get("last_price")
+        if last_px is None or last_px <= 0:
+            continue
+        eps = r.get("eps_ttm")
+        bps = r.get("bps")
+        shares = r.get("shares_outstanding")
+        roe = r.get("return_on_equity")
+
+        # Backfill BPS from EPS / ROE when missing.
+        # ROE = NetIncome / Equity; EPS = NetIncome / shares ⇒
+        # Equity / shares = EPS / ROE = BPS.
+        if (bps is None or bps <= 0) and eps and roe and roe > 0:
+            try:
+                bps = float(eps) / float(roe)
+                r["bps"] = bps
+            except (TypeError, ZeroDivisionError):
+                pass
+
+        if r.get("market_cap") is None and shares and shares > 0:
+            mc = float(last_px) * float(shares)
+            if 0 < mc < MAX_MCAP:
+                r["market_cap"] = mc
+        if r.get("trailing_pe") is None and eps and eps > 0:
+            pe = float(last_px) / float(eps)
+            if 0 < pe < MAX_PE:
+                r["trailing_pe"] = pe
+        if r.get("price_to_book") is None and bps and bps > 0:
+            pb = float(last_px) / float(bps)
+            if 0 < pb < MAX_PB:
+                r["price_to_book"] = pb
+
+    # Sort by market_cap DESC NULLS LAST (preserves the original query
+    # ordering so default screener rows are big-name-first).
+    rows.sort(key=lambda r: (r.get("market_cap") is None,
+                              -(r.get("market_cap") or 0)))
+    _QUERY_LATEST_CACHE["rows"] = rows
+    _QUERY_LATEST_CACHE["expires"] = now + _QUERY_LATEST_TTL
+    return rows
 
 
 def _count_universe(db_path: str, market: str | None = None) -> int:
@@ -782,10 +862,14 @@ def _fetch_one_price(db_path: str, ticker: str) -> float | None:
     return price
 
 
-def _format_row(r: dict, lang: str = "en") -> dict:
+def _format_row(r: dict, lang: str = "en",
+                 names_by_ticker: dict | None = None) -> dict:
     """Apply display formatting (rounding, ROE→%, market cap→billions, watchlist star).
     `lang` translates the sector / sub-sector labels (display only) and the
-    'Get price' placeholder."""
+    'Get price' placeholder. `names_by_ticker` is the caller's pre-fetched
+    bilingual name dict (`StockNamesRepository.get_many(tickers, lang)`) —
+    when present, overrides `r["name"]` so the row shows the localised
+    name for the active language."""
     import math
     from dashboard.i18n import T as I
     from config.settings import get_sector_label, get_subsector_label
@@ -805,10 +889,15 @@ def _format_row(r: dict, lang: str = "en") -> dict:
     completeness = r.get("data_completeness")
     sector_raw = r.get("yf_sector") or r.get("watchlist_sector") or "—"
     sub_raw = r.get("sub_sector") or "—"
+    # Localised name: prefer the bilingual lookup; fall back to the DB's
+    # canonical `r["name"]` when no translation is recorded yet.
+    ticker_key = r.get("ticker") or ""
+    localised = (names_by_ticker or {}).get(ticker_key)
+    display_name = localised or r.get("name") or ""
 
     return {
         "ticker": r.get("ticker"),
-        "name": (r.get("name") or "")[:30],
+        "name": display_name[:30],
         "yf_sector": get_sector_label(sector_raw, lang) if sector_raw != "—" else "—",
         "sub_sector": get_subsector_label(sub_raw, lang) if sub_raw != "—" else "—",
         # Lazy-fetched: click the cell to populate. Avoids the ~20s Supabase

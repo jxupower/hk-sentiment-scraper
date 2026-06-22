@@ -171,7 +171,15 @@ def register_recommendations_callbacks(app, db_path: str):
                 continue
             filtered.append(r)
 
-        table_data = [_format_row(r, lang=lang) for r in filtered]
+        # Pre-fetch bilingual names from the local `securities_reference`
+        # mirror in one indexed lookup.
+        from storage.repository import SecuritiesReferenceRepository
+        from storage.database import Database
+        _names = SecuritiesReferenceRepository(Database(db_path)).get_names(
+            [r.ticker for r in filtered if r.ticker], lang=lang,
+        )
+        table_data = [_format_row(r, lang=lang, names_by_ticker=_names)
+                       for r in filtered]
         chart = _build_distribution_chart(results, show_filter)
 
         # Normalized weight display
@@ -230,7 +238,8 @@ def register_recommendations_callbacks(app, db_path: str):
         return table_rows
 
 
-def _format_row(r, lang: str = "en") -> dict:
+def _format_row(r, lang: str = "en",
+                 names_by_ticker: dict | None = None) -> dict:
     from dashboard.i18n import T as I
     from config.settings import get_sector_label
     def rnd(v, n=1):
@@ -256,9 +265,11 @@ def _format_row(r, lang: str = "en") -> dict:
         status = "OK"
 
     sector_raw = (r.sector or "—")[:25]
+    localised = (names_by_ticker or {}).get(r.ticker)
+    display_name = (localised or r.name or "")[:30]
     return {
         "ticker": r.ticker,
-        "name": (r.name or "")[:30],
+        "name": display_name,
         "sector": get_sector_label(sector_raw, lang) if sector_raw != "—" else "—",
         # Lazy-fetched: click the cell to populate. See the screener's
         # fetch_price_on_click handler for the matching pattern.

@@ -109,7 +109,7 @@ def _header_bar():
             dbc.Row([
                 dbc.Col([
                     html.Span(id="header-app-title",
-                                children="HK Research",
+                                children="Croissant Stock Analyser",
                                 style={
                         "color": T.PRIMARY, "fontWeight": "800", "fontSize": "1.5rem",
                         "letterSpacing": "-0.02em",

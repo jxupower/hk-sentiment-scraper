@@ -145,19 +145,19 @@ def get_subsectors_for_sentiment(watchlist: dict, securities_repo) -> list[str]:
 def get_tickers_for_subsector(sub_sector: str, watchlist: dict,
                                 securities_repo,
                                 market: str | None = None) -> list[str]:
-    """Watchlist tickers whose resolved sub_sector matches. Used by the
-    Sentiment tab's per-bucket score queries + by job_runner when computing
-    sub_sector-level sector_signals. When `market` is set, the result is
-    additionally filtered to tickers belonging to that market — needed so
-    the Sentiment tab doesn't blend HK + US scores under one sub-sector
-    name like 'Banks'."""
-    from utils.market import market_of_ticker
-    smap = _get_sub_sector_map(watchlist, securities_repo)
-    tickers = [t for t, s in smap.items() if s == sub_sector]
-    if market is not None:
-        m = market.upper()
-        tickers = [t for t in tickers if market_of_ticker(t) == m]
-    return tickers
+    """All active universe tickers in `sub_sector` (post-2026-06 redesign —
+    no longer watchlist-bounded). Returns the full set of constituents in
+    the active market so the Sentiment tab + scrape cycle roll up signals
+    over the entire sub-sector, not just the curated mega-caps.
+
+    `watchlist` is accepted for backwards compatibility with older callers
+    but ignored — the lookup goes straight to `securities_reference`.
+    `market` (HK / US) keeps the result one-market-only so `Banks` doesn't
+    collide across markets."""
+    from storage.repository import SecuritiesReferenceRepository
+    # `securities_repo.db` is the local SQLite Database handle.
+    ref = SecuritiesReferenceRepository(securities_repo.db)
+    return ref.get_tickers_in_sub_sector(sub_sector, market=market)
 
 
 def get_subsector_for_ticker(ticker: str, watchlist: dict,

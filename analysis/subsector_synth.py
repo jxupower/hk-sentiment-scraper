@@ -76,25 +76,53 @@ def is_valid_normalised_name(name: str) -> bool:
     return bool(NAME_PATTERN.match(name or ""))
 
 
-def to_subsector_ticker(label_or_name: str) -> str:
+def to_subsector_ticker(label_or_name: str, market: Optional[str] = None) -> str:
     """Accept either the human label or the already-normalised slug.
-    Returns the `&NAME` ticker string."""
+    Returns the composite ticker string.
+
+    When `market` is set, the ticker is namespaced — `&HK:BANKS` /
+    `&US:BANKS` — so HK and US sub-sectors of the same name compute and
+    cache independently in `historical_prices`. When `market` is None,
+    returns the legacy un-namespaced form `&BANKS` (which the codebase
+    treats as HK for backwards compatibility).
+    """
     n = (label_or_name or "").strip()
     if n.startswith(SUBSECTOR_PREFIX):
         n = n[1:]
+        # Strip an already-present namespace so we re-apply consistently.
+        if ":" in n:
+            n = n.split(":", 1)[1]
     if not is_valid_normalised_name(n):
         n = normalise_subsector_name(label_or_name)
+    if market:
+        return f"{SUBSECTOR_PREFIX}{market.upper()}:{n}"
     return f"{SUBSECTOR_PREFIX}{n}"
 
 
 def parse_subsector_ticker(ticker: str) -> Optional[str]:
-    """Return the normalised slug (without `&`) or None if not a composite."""
+    """Return the normalised slug (without `&` and without market namespace)
+    or None if not a composite. Accepts both forms — `&BANKS` and
+    `&US:BANKS` map to slug `BANKS`."""
     if not ticker or not ticker.startswith(SUBSECTOR_PREFIX):
         return None
     name = ticker[1:]
+    if ":" in name:
+        name = name.split(":", 1)[1]
     if not is_valid_normalised_name(name):
         return None
     return name
+
+
+def parse_subsector_market(ticker: str) -> str:
+    """Extract the market from a namespaced composite ticker. Returns 'HK'
+    for the legacy un-namespaced form so existing `&NAME` rows continue to
+    resolve correctly."""
+    if not ticker or not ticker.startswith(SUBSECTOR_PREFIX):
+        return "HK"
+    body = ticker[1:]
+    if ":" in body:
+        return body.split(":", 1)[0].upper()
+    return "HK"
 
 
 def is_subsector_stale(latest_date_str: Optional[str]) -> bool:
@@ -109,16 +137,27 @@ def is_subsector_stale(latest_date_str: Optional[str]) -> bool:
 
 # ============== Constituent + share lookups ==============
 
-def _active_constituents(db: Database, sub_sector_label: str) -> list[str]:
+def _active_constituents(db: Database, sub_sector_label: str,
+                          market: Optional[str] = None) -> list[str]:
     """All active `securities` rows with the supplied sub_sector. Matches
-    on the original human label stored in `securities.sub_sector`."""
+    on the original human label stored in `securities.sub_sector`. When
+    `market` is set, restricts to that market — required so a US `Banks`
+    composite doesn't include HK banks (and vice versa)."""
     with db.get_connection() as conn:
-        rows = conn.execute(
-            "SELECT ticker FROM securities "
-            "WHERE is_active = 1 AND sub_sector = ? "
-            "ORDER BY ticker",
-            (sub_sector_label,),
-        ).fetchall()
+        if market is None:
+            rows = conn.execute(
+                "SELECT ticker FROM securities "
+                "WHERE is_active = 1 AND sub_sector = ? "
+                "ORDER BY ticker",
+                (sub_sector_label,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT ticker FROM securities "
+                "WHERE is_active = 1 AND sub_sector = ? AND market = ? "
+                "ORDER BY ticker",
+                (sub_sector_label, market.upper()),
+            ).fetchall()
     return [r[0] for r in rows]
 
 
@@ -192,8 +231,10 @@ def list_subsector_composites(db: Database, market: str | None = None) -> list[d
     for label, n, parent in rows:
         if n < 2:
             continue
+        # Market-namespace the ticker so HK and US composites of the same
+        # name (e.g. 'Banks') cache independently in historical_prices.
         out.append({
-            "ticker": to_subsector_ticker(label),
+            "ticker": to_subsector_ticker(label, market=market),
             "sub_sector": label,
             "n_constituents": int(n),
             "parent_sector": parent or "—",
@@ -205,10 +246,12 @@ def list_subsector_composites(db: Database, market: str | None = None) -> list[d
 
 def compute_subsector_index(sub_sector_label: str,
                               db: Database,
-                              base_value: float = 100.0) -> list[dict]:
+                              base_value: float = 100.0,
+                              market: Optional[str] = None) -> list[dict]:
     """Chain-linked Laspeyres index for the supplied sub-sector. Returns
-    rows ready for `historical_prices.upsert_rows`."""
-    tickers = _active_constituents(db, sub_sector_label)
+    rows ready for `historical_prices.upsert_rows`. When `market` is set,
+    only that market's constituents contribute to the index."""
+    tickers = _active_constituents(db, sub_sector_label, market=market)
     if len(tickers) < 2:
         raise ValueError(
             f"sub-sector '{sub_sector_label}' has <2 active constituents")
@@ -292,15 +335,18 @@ def compute_subsector_index(sub_sector_label: str,
 # ============== Materialise into historical_prices ==============
 
 def rebuild_and_upsert_subsector(sub_sector_label: str,
-                                    db: Database) -> dict:
-    """Recompute one composite index and upsert it. Returns
-    `{ticker, rows, errors}`. Errors are caught + surfaced so the
-    `rebuild_all_subsectors` loop survives a single bad composite."""
-    ticker = to_subsector_ticker(sub_sector_label)
+                                    db: Database,
+                                    market: Optional[str] = None) -> dict:
+    """Recompute one composite index and upsert it. When `market` is set,
+    builds the market-namespaced composite (`&HK:BANKS` / `&US:BANKS`)
+    from only that market's constituents. Returns `{ticker, rows, errors}`.
+    Errors are caught + surfaced so the `rebuild_all_subsectors` loop
+    survives a single bad composite."""
+    ticker = to_subsector_ticker(sub_sector_label, market=market)
     out = {"ticker": ticker, "sub_sector": sub_sector_label,
             "rows": 0, "errors": []}
     try:
-        rows = compute_subsector_index(sub_sector_label, db)
+        rows = compute_subsector_index(sub_sector_label, db, market=market)
         if not rows:
             out["errors"].append("compute produced empty series")
             return out
@@ -315,10 +361,11 @@ def rebuild_and_upsert_subsector(sub_sector_label: str,
     return out
 
 
-def rebuild_all_subsectors(db: Database) -> dict:
+def rebuild_all_subsectors(db: Database, market: Optional[str] = None) -> dict:
     """Iterate every active distinct sub_sector and rebuild each composite.
-    Used by the daily cron and the `composites rebuild` CLI."""
-    composites = list_subsector_composites(db)
+    Used by the daily cron and the `composites rebuild` CLI. When `market`
+    is set, only that market's composites get rebuilt — `&HK:` or `&US:`."""
+    composites = list_subsector_composites(db, market=market)
     summary = {
         "n_attempted": len(composites),
         "n_succeeded": 0,
@@ -329,7 +376,7 @@ def rebuild_all_subsectors(db: Database) -> dict:
     }
     t0 = time.time()
     for c in composites:
-        r = rebuild_and_upsert_subsector(c["sub_sector"], db)
+        r = rebuild_and_upsert_subsector(c["sub_sector"], db, market=market)
         summary["per_composite"].append(r)
         if r["rows"] > 0 and not r["errors"]:
             summary["n_succeeded"] += 1

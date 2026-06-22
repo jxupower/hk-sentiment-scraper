@@ -221,6 +221,12 @@ def build_research_report(ticker: str, db_path: str,
     `skip_financial_statements=True` skips the (potentially 3-8s) raw filings
     fetch in Section 3b. The dashboard uses this for the initial render and
     fetches statements lazily when the user clicks "Load Financial Statements".
+
+    Market scoping: the ticker's market (derived via market_of_ticker) is
+    threaded into the universe pull + factor/screen cache so percentile
+    ranks and peer comparisons are computed against same-market peers
+    only — a HK universe ranking AAPL or a US universe ranking 0700.HK
+    would produce meaningless percentiles.
     """
     if ticker and ticker.startswith("&"):
         return build_composite_research_report(ticker, db_path)
@@ -230,12 +236,15 @@ def build_research_report(ticker: str, db_path: str,
         get_or_fetch_fundamentals_history, get_or_fetch_prices, get_universe_fundamentals
     )
     from storage.database import Database
+    from utils.market import market_of_ticker
     db = Database(db_path)
+    market = market_of_ticker(ticker)
 
     # Latest fundamentals + securities row for this ticker (via universe pull;
     # cheaper than a single-ticker JOIN against cloud since we need this same
-    # data for the factor engine below anyway).
-    universe = get_universe_fundamentals(db)
+    # data for the factor engine below anyway). Scoped to the ticker's market
+    # so peer ranks are same-market only.
+    universe = get_universe_fundamentals(db, market=market)
     latest = next((r for r in universe if r["ticker"] == ticker), None)
     if not latest:
         return None
@@ -285,7 +294,8 @@ def build_research_report(ticker: str, db_path: str,
     # ticker load. See analysis/_research_cache.py — 15-min TTL.
     # Pass our pre-loaded universe so a cache rebuild doesn't re-query it.
     cache = get_universe_cache(db_path, sector_risk_path,
-                                 pre_loaded_universe=universe)
+                                 pre_loaded_universe=universe,
+                                 market=market)
     factor_result = cache.factor_results.get(ticker)
     risk_flags = factor_result.flags if factor_result else []
 

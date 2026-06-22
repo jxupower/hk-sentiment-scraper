@@ -194,16 +194,21 @@ def get_or_fetch_subsector_prices(subsector_ticker: str, db: Database, *,
 
     from analysis.subsector_synth import (
         label_for_ticker, rebuild_and_upsert_subsector,
+        parse_subsector_market,
     )
     label = label_for_ticker(subsector_ticker, db)
     if not label:
         log.warning("no sub_sector resolves to ticker %s", subsector_ticker)
         return _get_full_series(repo, subsector_ticker)
 
-    log.info("Cache-aside rebuild for sub-sector composite %s",
-              subsector_ticker)
+    # Market is embedded in namespaced tickers (`&US:BANKS` → 'US'); the
+    # legacy un-namespaced `&BANKS` defaults to 'HK' for backwards compat.
+    composite_market = parse_subsector_market(subsector_ticker)
+    log.info("Cache-aside rebuild for sub-sector composite %s (market=%s)",
+              subsector_ticker, composite_market)
     try:
-        summary = rebuild_and_upsert_subsector(label, db)
+        summary = rebuild_and_upsert_subsector(label, db,
+                                                  market=composite_market)
         if summary.get("errors"):
             log.warning("rebuild for %s reported errors: %s",
                          subsector_ticker, summary["errors"])
@@ -421,15 +426,153 @@ def _statements_cache_fresh(cached: dict, repo, ticker: str) -> bool:
 
 # ============== Cross-table helpers used by analysis modules ==============
 
+def push_securities_reference(db: Database) -> dict:
+    """Push the reconciler-resolved sector taxonomy + bilingual names from
+    LOCAL SQLite (`securities.{effective_sector, sub_sector}` + `securities_meta`)
+    UP to the Supabase `securities_reference` table. Call after every
+    `universe-us seed` / `universe refresh` so the cloud source-of-truth
+    stays in lockstep with what the reconciler just computed.
+    """
+    import time
+    from storage.repository import SecuritiesRepository
+    from storage.factory import get_securities_reference_repo
+
+    t0 = time.perf_counter()
+    securities_repo = SecuritiesRepository(db)
+    cloud_ref = get_securities_reference_repo(db)
+
+    rows = securities_repo.get_all_active()
+    # One pass over securities_meta — gives us both EN + ZH names per ticker.
+    with db.get_connection() as conn:
+        name_rows = conn.execute(
+            "SELECT ticker, english_name, chinese_name FROM securities_meta"
+        ).fetchall()
+    en_lookup = {r["ticker"]: r["english_name"] for r in name_rows}
+    zh_lookup = {r["ticker"]: r["chinese_name"] for r in name_rows}
+
+    payload = []
+    for r in rows:
+        ticker = r["ticker"]
+        payload.append({
+            "ticker":        ticker,
+            "english_name":  en_lookup.get(ticker) or r.get("name"),
+            "chinese_name":  zh_lookup.get(ticker),
+            "parent_sector": r.get("effective_sector"),
+            "sub_sector":    r.get("sub_sector"),
+        })
+    n = cloud_ref.upsert_many(payload)
+    t1 = time.perf_counter()
+    log.info("push_securities_reference: %d rows in %.1fs", n, t1 - t0)
+    return {"pushed": n, "elapsed_s": round(t1 - t0, 1)}
+
+
+def refresh_securities_reference_cache(db: Database) -> dict:
+    """Pull the Supabase `securities_reference` table down into the LOCAL
+    SQLite mirror so the dashboard's read path is sub-millisecond. Called
+    on dashboard startup + after any explicit cloud refresh."""
+    import time
+    from storage.repository import SecuritiesReferenceRepository
+    from storage.factory import get_securities_reference_repo
+
+    t0 = time.perf_counter()
+    cloud_ref = get_securities_reference_repo(db)
+    local_ref = SecuritiesReferenceRepository(db)
+    if isinstance(cloud_ref, SecuritiesReferenceRepository):
+        # USE_CLOUD_DB=false → cloud == local; nothing to copy
+        return {"fetched": 0, "written": 0, "elapsed_s": 0.0, "skipped": True}
+    rows = cloud_ref.get_all()
+    n = local_ref.upsert_many(rows)
+    t1 = time.perf_counter()
+    log.info("refresh_securities_reference_cache: %d rows in %.1fs",
+              n, t1 - t0)
+    return {"fetched": len(rows), "written": n,
+             "elapsed_s": round(t1 - t0, 1)}
+
+
+def refresh_latest_prices_cache(db: Database, *,
+                                   tickers: Optional[list[str]] = None) -> dict:
+    """Refresh the local `latest_prices` SQLite cache from Supabase
+    `historical_prices`. One Supabase round-trip + one local SQLite bulk
+    upsert — invoked nightly by the EOD price cron and on-demand via
+    `python main.py historical refresh-latest-prices`.
+
+    `tickers=None` (default) refreshes every active ticker in `securities`
+    that has any price history. Pass a specific list to refresh a subset
+    (e.g. for a just-seeded batch).
+
+    Returns summary dict for the CLI to print.
+    """
+    import time
+    from storage.repository import LatestPricesRepository, SecuritiesRepository
+    from datetime import date as date_cls
+
+    securities_repo = SecuritiesRepository(db)
+    latest_repo = LatestPricesRepository(db)
+    prices_repo = get_prices_repo(db)
+
+    if tickers is None:
+        rows = securities_repo.get_all_active()
+        tickers = [r["ticker"] for r in rows]
+    n_in = len(tickers)
+    if not n_in:
+        return {"requested": 0, "fetched": 0, "written": 0, "elapsed_s": 0.0}
+
+    t0 = time.perf_counter()
+    if hasattr(prices_repo, "bulk_prices_on_or_before_with_date"):
+        # Future-proof: if the cloud repo grows a date-aware bulk fetch
+        # that also returns the asof_date, prefer it.
+        price_map = prices_repo.bulk_prices_on_or_before_with_date(
+            tickers, date_cls.today().isoformat())
+        upsert_rows = [{"ticker": t, "adj_close": p, "asof_date": d}
+                        for t, (p, d) in price_map.items()]
+    elif hasattr(prices_repo, "bulk_prices_on_or_before"):
+        price_map = prices_repo.bulk_prices_on_or_before(
+            tickers, date_cls.today().isoformat())
+        # No per-ticker asof_date available from the simple helper —
+        # use today as a best-effort marker (we know the value is the
+        # latest as-of-today snapshot).
+        today_iso = date_cls.today().isoformat()
+        upsert_rows = [{"ticker": t, "adj_close": p, "asof_date": today_iso}
+                        for t, p in price_map.items() if p is not None]
+    else:
+        # SQLite fallback — slow but correct
+        log.warning("prices_repo has no bulk helper; doing sequential lookups")
+        upsert_rows = []
+        for t in tickers:
+            p = prices_repo.latest_price(t)
+            if p is not None:
+                upsert_rows.append({"ticker": t, "adj_close": p,
+                                       "asof_date": date_cls.today().isoformat()})
+
+    t1 = time.perf_counter()
+    n_fetched = len(upsert_rows)
+    n_written = latest_repo.bulk_upsert(upsert_rows)
+    t2 = time.perf_counter()
+
+    log.info("refresh_latest_prices_cache: requested=%d, fetched=%d, "
+              "written=%d, fetch=%.1fs, write=%.2fs",
+              n_in, n_fetched, n_written, t1 - t0, t2 - t1)
+    return {
+        "requested": n_in,
+        "fetched": n_fetched,
+        "written": n_written,
+        "elapsed_s": round(t2 - t0, 1),
+    }
+
+
 def get_universe_fundamentals(db: Database, *,
                                 as_of_date: Optional[str] = None,
+                                market: Optional[str] = None,
                                 ) -> list[dict]:
     """Return latest fundamentals snapshot per active ticker, joined with
     securities (name, is_watchlist, yf_sector, watchlist_sector, yf_industry,
-    listing_category) for downstream factor/screen/peer use.
+    listing_category, market) for downstream factor/screen/peer use.
 
     `as_of_date` (ISO date string) clips to the latest snapshot *at or before*
     that date — used by the backtest engine. Default None = absolute latest.
+    `market` (optional) restricts to one market — required for any per-market
+    analysis (research cache, peer scorecard, factor engine) so HK and US
+    don't pollute each other's percentile ranks.
 
     Replaces the raw `sqlite3.connect(...).execute("SELECT f.*, s.name ...
     INNER JOIN securities ...")` pattern duplicated across 5 modules.
@@ -441,6 +584,8 @@ def get_universe_fundamentals(db: Database, *,
     """
     repo = get_fundamentals_repo(db)
     is_cloud = type(repo).__name__.startswith("Cloud")
+    market_clause = "" if market is None else " AND s.market = ?"
+    market_params = () if market is None else (market.upper(),)
 
     if not is_cloud:
         # SQLite path — preserve the original single-query JOIN for speed.
@@ -449,23 +594,23 @@ def get_universe_fundamentals(db: Database, *,
         # factor_scores / peer_comparison percentile peer-grouping.
         with db.get_connection() as conn:
             if as_of_date is None:
-                rows = conn.execute("""
+                rows = conn.execute(f"""
                     SELECT f.*, s.name, s.is_watchlist, s.yf_sector,
                            s.watchlist_sector, s.yf_industry, s.listing_category,
-                           s.sub_sector, s.effective_sector
+                           s.sub_sector, s.effective_sector, s.market
                     FROM fundamentals_snapshots f
                     INNER JOIN (
                         SELECT ticker, MAX(snapshot_date) AS max_date
                         FROM fundamentals_snapshots GROUP BY ticker
                     ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
                     INNER JOIN securities s ON f.ticker = s.ticker
-                    WHERE s.is_active = 1
-                """).fetchall()
+                    WHERE s.is_active = 1{market_clause}
+                """, market_params).fetchall()
             else:
-                rows = conn.execute("""
+                rows = conn.execute(f"""
                     SELECT f.*, s.name, s.is_watchlist, s.yf_sector,
                            s.watchlist_sector, s.yf_industry, s.listing_category,
-                           s.sub_sector, s.effective_sector
+                           s.sub_sector, s.effective_sector, s.market
                     FROM fundamentals_snapshots f
                     INNER JOIN (
                         SELECT ticker, MAX(snapshot_date) AS max_date
@@ -474,11 +619,15 @@ def get_universe_fundamentals(db: Database, *,
                         GROUP BY ticker
                     ) latest ON f.ticker = latest.ticker AND f.snapshot_date = latest.max_date
                     INNER JOIN securities s ON f.ticker = s.ticker
-                    WHERE s.is_active = 1
-                """, (as_of_date,)).fetchall()
+                    WHERE s.is_active = 1{market_clause}
+                """, (as_of_date, *market_params)).fetchall()
             return [dict(r) for r in rows]
 
     # Cloud path — fundamentals from Postgres, securities from local SQLite.
+    # The market filter is applied on the securities side (the smaller join)
+    # — fund_rows comes through unfiltered, then the in-Python join naturally
+    # drops US tickers when market='HK' (and vice versa) because they won't
+    # be in the sec_by_ticker dict.
     from storage.cloud_db import cursor as cloud_cursor
     if as_of_date is None:
         sql = """
@@ -499,19 +648,21 @@ def get_universe_fundamentals(db: Database, *,
         cur.execute(sql, params)
         fund_rows = [dict(r) for r in cur.fetchall()]
 
+    sec_market_clause = "" if market is None else " AND market = ?"
     with db.get_connection() as conn:
-        sec_rows = conn.execute("""
+        sec_rows = conn.execute(f"""
             SELECT ticker, name, is_watchlist, yf_sector, watchlist_sector,
-                   yf_industry, listing_category, sub_sector, effective_sector
-            FROM securities WHERE is_active = 1
-        """).fetchall()
+                   yf_industry, listing_category, sub_sector, effective_sector,
+                   market
+            FROM securities WHERE is_active = 1{sec_market_clause}
+        """, market_params).fetchall()
         sec_by_ticker = {r["ticker"]: dict(r) for r in sec_rows}
 
     out = []
     for f in fund_rows:
         sec = sec_by_ticker.get(f["ticker"])
         if not sec:
-            continue  # not in local active universe
+            continue  # not in local active universe (or wrong market)
         merged = {**f, **sec}  # securities columns win on name/is_watchlist
         out.append(_coerce_decimals(merged))
     return out

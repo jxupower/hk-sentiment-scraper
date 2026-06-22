@@ -111,7 +111,7 @@ def _reconcile_universe_at_startup(securities_repo, watchlist, settings):
 
 @click.group()
 def cli():
-    """Stock Sentiment Analysis Tool — scrapes news & social media to predict stock trends."""
+    """Croissant Stock Analyser — sentiment + fundamentals + backtest over HK + US markets."""
     # Windows defaults stdout to cp1252; reconfigure so non-ASCII log lines
     # (e.g. Chinese sub-sector labels) don't crash the CLI with UnicodeEncodeError.
     try:
@@ -126,7 +126,7 @@ def cli():
 def setup():
     """Print setup instructions for optional API keys."""
     console.print("""
-[bold cyan]Stock Sentiment Analysis Tool — Setup Guide[/bold cyan]
+[bold cyan]Croissant Stock Analyser — Setup Guide[/bold cyan]
 
 [bold]The tool works out of the box![/bold] RSS feeds and Yahoo Finance require no keys.
 To unlock Reddit data and Claude AI-enhanced scoring, follow these steps:
@@ -241,6 +241,23 @@ def universe_refresh():
         console.print(f"[yellow]Missing from HKEX (kept as overrides): "
                       f"{summary['missing_from_hkex']}[/yellow]")
 
+    # Sync the reconciler-resolved bilingual names + sector taxonomy up to
+    # Supabase and back into the local mirror — same hook as universe-us seed.
+    try:
+        from analysis.data_loader import (
+            push_securities_reference, refresh_securities_reference_cache,
+        )
+        from storage.database import Database
+        db_local = Database(settings.DB_PATH)
+        push = push_securities_reference(db_local)
+        pull = refresh_securities_reference_cache(db_local)
+        console.print(f"[dim]securities_reference: pushed "
+                       f"{push['pushed']:,} → Supabase, "
+                       f"mirrored {pull['written']:,} → local "
+                       f"(total {push['elapsed_s']+pull['elapsed_s']:.1f}s)[/dim]")
+    except Exception as e:
+        console.print(f"[yellow]securities_reference sync skipped: {e}[/yellow]")
+
 
 @cli.group("universe-us")
 def universe_us():
@@ -295,6 +312,25 @@ def universe_us_seed(source: str):
         console.print(f"[yellow]Missing from universe (kept as overrides): "
                         f"{summary['missing_from_universe']}[/yellow]")
 
+    # Sync the reconciler-resolved bilingual names + sector taxonomy up to
+    # Supabase so the cloud `securities_reference` table stays the source
+    # of truth. Then pull back into the local SQLite mirror so the dashboard
+    # reads sub-millisecond. Non-fatal if cloud is unavailable.
+    try:
+        from analysis.data_loader import (
+            push_securities_reference, refresh_securities_reference_cache,
+        )
+        from storage.database import Database
+        db = Database(settings.DB_PATH)
+        push = push_securities_reference(db)
+        pull = refresh_securities_reference_cache(db)
+        console.print(f"[dim]securities_reference: pushed "
+                       f"{push['pushed']:,} → Supabase, "
+                       f"mirrored {pull['written']:,} → local "
+                       f"(total {push['elapsed_s']+pull['elapsed_s']:.1f}s)[/dim]")
+    except Exception as e:
+        console.print(f"[yellow]securities_reference sync skipped: {e}[/yellow]")
+
 
 @universe_us.command("refresh")
 @click.option("--source", type=click.Choice(["ishares", "wikipedia"]),
@@ -303,6 +339,48 @@ def universe_us_refresh(source: str):
     """Alias for `seed` — same idempotent flow, intended for scheduled runs."""
     ctx = click.get_current_context()
     ctx.invoke(universe_us_seed, source=source)
+
+
+@universe_us.command("refresh-sectors")
+@click.option("--throttle", default=0.5, show_default=True, type=float,
+              help="Seconds between yfinance .info calls.")
+@click.option("--force-all", is_flag=True, default=False,
+              help="Re-fetch every active US ticker. Default skips rows "
+                   "that already have yf_sector set (incremental backfill).")
+def universe_us_refresh_sectors(throttle: float, force_all: bool):
+    """Tier 4: Backfill `yf_sector` + `yf_industry` for US tickers via
+    yfinance `.info`. Sector + industry only (no financial ratios). After
+    completion, re-run `python main.py universe-us seed` so the reconciler's
+    industry-to-subsector map derives `sub_sector` for the newly-tagged rows.
+    """
+    import config.settings as settings
+    from storage.database import Database
+    from storage.repository import SecuritiesRepository
+    from scrapers.us_sector_scraper import fetch_many
+
+    db = Database(settings.DB_PATH)
+    db.initialize()
+    securities_repo = SecuritiesRepository(db)
+
+    rows = securities_repo.get_all_active(market="US")
+    if force_all:
+        targets = [r["ticker"] for r in rows]
+    else:
+        targets = [r["ticker"] for r in rows if not r.get("yf_sector")]
+    console.print(f"[bold cyan]Sector backfill: {len(targets):,} of "
+                  f"{len(rows):,} US tickers "
+                  f"({'force-all' if force_all else 'skip already-tagged'})[/bold cyan]")
+    if not targets:
+        console.print("[green]All US tickers already tagged. Nothing to do.[/green]")
+        return
+
+    summary = fetch_many(targets, securities_repo, throttle_seconds=throttle)
+    console.print(f"\n[bold green]Complete:[/bold green] attempted={summary['attempted']:,} "
+                  f"tagged={summary['tagged']:,} "
+                  f"both_null={summary['both_null']:,} "
+                  f"errors={summary['errors']:,}")
+    console.print("\n[dim]Now re-run `python main.py universe-us seed` to derive "
+                  "sub_sector for the newly-tagged rows.[/dim]")
 
 
 @cli.group()
@@ -357,8 +435,80 @@ def fundamentals_refresh(tickers: str, throttle: float):
 
 
 @cli.group()
+def names():
+    """Bilingual display-name lookup table (`securities_meta`) — populates
+    Chinese names per ticker so the dashboard can flip EN/中文 names instantly."""
+
+
+@names.command("refresh")
+@click.option("--market", default="ALL", show_default=True,
+              type=click.Choice(["HK", "US", "ALL"]),
+              help="Which market's tickers to seed Chinese names for.")
+@click.option("--throttle", default=0.3, show_default=True, type=float,
+              help="Seconds between akshare calls.")
+@click.option("--force/--skip-seeded", default=False,
+              help="--force re-fetches every ticker; default skips rows that "
+                   "already have both names.")
+def names_refresh(market: str, throttle: float, force: bool):
+    """Populate `securities_meta.chinese_name` for the given market(s) by
+    extracting `SECURITY_NAME_ABBR` from akshare's per-ticker fundamentals
+    response (the same endpoint used by `historical seed`). English names
+    come from `securities.name`.
+    """
+    import config.settings as settings
+    from storage.database import Database
+    from storage.repository import SecuritiesRepository, StockNamesRepository
+    from scrapers.stock_names_scraper import seed_names_for_market
+
+    db = Database(settings.DB_PATH)
+    db.initialize()
+    securities_repo = SecuritiesRepository(db)
+    names_repo = StockNamesRepository(db)
+
+    markets = ["HK", "US"] if market == "ALL" else [market]
+    for m in markets:
+        console.print(f"\n[bold cyan]Seeding stock names for {m} "
+                      f"({'force' if force else 'skip-seeded'})...[/bold cyan]")
+        summary = seed_names_for_market(
+            securities_repo, names_repo, m,
+            throttle_seconds=throttle,
+            skip_already_seeded=not force,
+        )
+        console.print(f"  attempted: {summary['attempted']}, "
+                      f"with_chinese: {summary['with_chinese']}, "
+                      f"without_chinese: {summary['without_chinese']}, "
+                      f"failed: {summary['failed']}, "
+                      f"skipped_already_seeded: {summary['skipped_already_seeded']}")
+
+    total = names_repo.count()
+    with_zh = names_repo.count_with_chinese()
+    console.print(f"\n[bold green]securities_meta total: {total:,} rows · "
+                  f"with Chinese: {with_zh:,} ({100*with_zh/total if total else 0:.1f}%)[/bold green]")
+
+
+@cli.group()
 def historical():
     """Historical fundamentals (akshare) + multi-year price data (yfinance) for backtesting."""
+
+
+@historical.command("refresh-latest-prices")
+def historical_refresh_latest_prices():
+    """Refresh the local `latest_prices` SQLite cache from Supabase
+    `historical_prices`. Powers the Screener's mcap/P/E enrichment without
+    paying the ~40s DISTINCT-ON cost per render. Safe to run at any time;
+    also invoked nightly by the EOD price cron."""
+    import config.settings as settings
+    from storage.database import Database
+    from analysis.data_loader import refresh_latest_prices_cache
+
+    db = Database(settings.DB_PATH)
+    db.initialize()
+    console.print("[bold cyan]Refreshing latest_prices cache...[/bold cyan]")
+    summary = refresh_latest_prices_cache(db)
+    console.print(f"  requested: {summary['requested']:,}")
+    console.print(f"  fetched:   {summary['fetched']:,}")
+    console.print(f"  written:   {summary['written']:,}")
+    console.print(f"  elapsed:   {summary['elapsed_s']:.1f}s")
 
 
 @historical.command("seed")
@@ -383,17 +533,19 @@ def historical_seed(tickers, market, throttle, skip_prices, skip_fundamentals,
     targets, Stage A is automatically skipped."""
     import config.settings as settings
     from storage.database import Database
-    from storage.repository import (SecuritiesRepository, FundamentalsRepository,
-                                     HistoricalPricesRepository)
+    from storage.repository import SecuritiesRepository
     from scrapers.akshare_historical_scraper import fetch_many as ak_fetch_many
     from scrapers.historical_price_scraper import fetch_many as price_fetch_many
-    from storage.factory import get_prices_repo
+    from storage.factory import get_prices_repo, get_fundamentals_repo
 
     db = Database(settings.DB_PATH)
     db.initialize()
     securities_repo = SecuritiesRepository(db)
-    fundamentals_repo = FundamentalsRepository(db)
-    prices_repo = get_prices_repo(db)  # honours USE_CLOUD_DB
+    # Both repos route through the factory so writes go to Supabase under
+    # USE_CLOUD_DB=true (matches the cache-aside layer used by the
+    # dashboard's Research / Discovery callbacks).
+    fundamentals_repo = get_fundamentals_repo(db)
+    prices_repo = get_prices_repo(db)
 
     selector = tickers.strip().upper()
 
@@ -419,20 +571,40 @@ def historical_seed(tickers, market, throttle, skip_prices, skip_fundamentals,
         console.print("[red]No tickers. Did you run the right `universe-*` seed first?[/red]")
         return
 
-    # akshare is HK-only. If the explicit market filter says US, skip Stage A
-    # without even calling. For 'ALL' or 'HK', let it run; the scraper itself
-    # gates each per-ticker call.
-    skip_ak_for_market = (market == "US")
-    if not skip_fundamentals and not skip_ak_for_market:
-        console.print(f"\n[bold]Stage A: akshare historical fundamentals (annual, ~9 years)[/bold]")
-        ak_summary = ak_fetch_many(target, fundamentals_repo, securities_repo,
-                                    throttle_seconds=throttle)
-        console.print(f"  attempted: {ak_summary['attempted']}, "
-                      f"snapshots_written: {ak_summary['snapshots_written']}, "
-                      f"no_data: {ak_summary['no_data_tickers']}, "
-                      f"failed: {ak_summary['failed_tickers']}")
-    elif skip_ak_for_market:
-        console.print(f"\n[dim]Stage A skipped — akshare is HK-only and market={market}.[/dim]")
+    # Stage A: historical annual fundamentals. The HK path goes through
+    # akshare directly (~9 years per ticker). The US path goes through a
+    # hybrid akshare-primary + yfinance-fallback scraper because akshare's
+    # US endpoint misses the entire Financials sector. For market='ALL'
+    # we run both paths in sequence.
+    if not skip_fundamentals:
+        hk_targets = [t for t in target
+                       if (t.endswith(".HK") or t.startswith("^HSI")
+                            or t.startswith("^HSCEI") or t.startswith("^HSTECH"))]
+        us_targets = [t for t in target if t not in set(hk_targets)
+                       and not t.startswith(("&", "@", "^"))]
+
+        if market in ("HK", "ALL") and hk_targets:
+            console.print(f"\n[bold]Stage A1: akshare historical fundamentals "
+                            f"(HK, annual, ~9 years) — {len(hk_targets)} tickers[/bold]")
+            ak_summary = ak_fetch_many(hk_targets, fundamentals_repo,
+                                        securities_repo, throttle_seconds=throttle)
+            console.print(f"  attempted: {ak_summary['attempted']}, "
+                          f"snapshots_written: {ak_summary['snapshots_written']}, "
+                          f"no_data: {ak_summary['no_data_tickers']}, "
+                          f"failed: {ak_summary['failed_tickers']}")
+
+        if market in ("US", "ALL") and us_targets:
+            from scrapers.us_fundamentals_scraper import fetch_many as us_fetch_many
+            console.print(f"\n[bold]Stage A2: US historical fundamentals "
+                            f"(akshare → yfinance fallback) — {len(us_targets)} tickers[/bold]")
+            us_summary = us_fetch_many(us_targets, fundamentals_repo,
+                                         throttle_seconds=throttle)
+            console.print(f"  attempted: {us_summary['attempted']}, "
+                          f"snapshots_written: {us_summary['snapshots_written']}, "
+                          f"akshare_hit: {us_summary['akshare_hit']}, "
+                          f"yfinance_fallback: {us_summary['yfinance_fallback']}, "
+                          f"no_data: {us_summary['no_data_tickers']}, "
+                          f"failed: {us_summary['failed_tickers']}")
 
     if not skip_prices:
         console.print(f"\n[bold]Stage B: yfinance multi-year price history (period={price_period})[/bold]")
@@ -592,7 +764,7 @@ def _print_sector_signals(sector_signal_repo):
         console.print("[yellow]No sector signals yet. Try running after scraping.[/yellow]")
         return
 
-    table = Table(title="HK & China Market — Sector Signals", show_lines=True)
+    table = Table(title="Croissant Stock Analyser — Sector Signals", show_lines=True)
     table.add_column("Sector", style="bold")
     table.add_column("Direction")
     table.add_column("Sentiment 24h", justify="right")

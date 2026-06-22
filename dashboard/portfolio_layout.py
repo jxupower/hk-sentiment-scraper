@@ -5,6 +5,7 @@ UI shape: holdings table (editable) + parameter controls + output cards
 walk-forward backtest, candidate marginal-value table).
 """
 from dash import dcc, html, dash_table
+from dash.dash_table.Format import Format, Scheme
 import dash_bootstrap_components as dbc
 
 from dashboard import theme as T
@@ -68,6 +69,7 @@ def build_portfolio_tab() -> html.Div:
                           "Supabase. Once saved, they show up as synthetic "
                           "tickers (e.g. @CORE, @CORE$OPT) in the Risk "
                           "Forecast tab.",
+                          id="portfolio-saved-hint",
                           style={"color": T.TEXT_MUTED, "fontSize": "0.8rem",
                                  "marginLeft": "8px"}),
             ]),
@@ -120,6 +122,7 @@ def build_portfolio_tab() -> html.Div:
                         ),
                         html.Div("Materialises the constant-share buy-and-hold "
                                   "index from the holdings table above.",
+                                  id="portfolio-save-status-blurb",
                                   style={"color": T.TEXT_MUTED,
                                          "fontSize": "0.72rem",
                                          "marginTop": "4px"}),
@@ -134,6 +137,7 @@ def build_portfolio_tab() -> html.Div:
                         html.Div("Materialises the latest max-Sharpe optimal "
                                   "weight series. Requires Compute first "
                                   "(same tickers as the table).",
+                                  id="portfolio-save-optimal-blurb",
                                   style={"color": T.TEXT_MUTED,
                                          "fontSize": "0.72rem",
                                          "marginTop": "4px"}),
@@ -165,6 +169,13 @@ def build_portfolio_tab() -> html.Div:
                          "editable": True},
                         {"name": "Shares", "id": "shares", "type": "numeric",
                          "editable": True},
+                        # Auto-populated read-only column — see
+                        # `autofill_holdings_prices` in portfolio_callbacks.py.
+                        # Currency in the header flips per market via the
+                        # i18n callback.
+                        {"name": "Price (HKD)", "id": "current_price",
+                         "type": "numeric", "editable": False,
+                         "format": Format(precision=2, scheme=Scheme.fixed)},
                     ],
                     data=[
                         {"ticker": "0700.HK", "shares": 100},
@@ -180,9 +191,11 @@ def build_portfolio_tab() -> html.Div:
                     style_cell_conditional=[
                         {"if": {"column_id": "ticker"}, "textAlign": "left",
                          "fontWeight": "600", "color": T.PRIMARY,
-                         "width": "60%"},
+                         "width": "45%"},
                         {"if": {"column_id": "shares"}, "textAlign": "right",
-                         "width": "40%"},
+                         "width": "30%"},
+                        {"if": {"column_id": "current_price"}, "textAlign": "right",
+                         "width": "25%", "color": T.TEXT_MUTED},
                     ],
                 ),
                 html.Div([
@@ -276,6 +289,7 @@ def build_portfolio_tab() -> html.Div:
         # ============== Placeholder + content ==============
         html.Div(id="portfolio-placeholder",
                   children=html.P("Enter holdings, pick parameters, then click Compute.",
+                                  id="portfolio-placeholder-text",
                                   className="text-muted text-center py-5"),
                   style={"display": "block"}),
 
@@ -287,13 +301,19 @@ def build_portfolio_tab() -> html.Div:
                     dbc.Row([
                         dbc.Col(_sharpe_hero("Status quo",
                                               "portfolio-sharpe-status",
-                                              T.TEXT_MUTED), width=4),
+                                              T.TEXT_MUTED,
+                                              label_id="portfolio-sharpe-status-label"),
+                                  width=4),
                         dbc.Col(_sharpe_hero("Current-only optimum",
                                               "portfolio-sharpe-current",
-                                              T.INFO), width=4),
+                                              T.INFO,
+                                              label_id="portfolio-sharpe-current-label"),
+                                  width=4),
                         dbc.Col(_sharpe_hero("Full-universe optimum",
                                               "portfolio-sharpe-full",
-                                              T.SUCCESS), width=4),
+                                              T.SUCCESS,
+                                              label_id="portfolio-sharpe-full-label"),
+                                  width=4),
                     ]),
                     dbc.Row([
                         dbc.Col(html.Div(id="portfolio-sharpe-delta-rebal",
@@ -317,6 +337,7 @@ def build_portfolio_tab() -> html.Div:
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader("Weights — current vs. optimal",
+                                        id="portfolio-weights-header",
                                         className="fw-bold small"),
                         dbc.CardBody(dcc.Graph(id="portfolio-weights-chart",
                                                 config={"displayModeBar": False},
@@ -326,6 +347,7 @@ def build_portfolio_tab() -> html.Div:
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader("Efficient frontier",
+                                        id="portfolio-frontier-header",
                                         className="fw-bold small"),
                         dbc.CardBody(dcc.Graph(id="portfolio-frontier-chart",
                                                 config={"displayModeBar": False},
@@ -337,6 +359,7 @@ def build_portfolio_tab() -> html.Div:
             # Walk-forward backtest
             dbc.Card([
                 dbc.CardHeader("Walk-forward backtest",
+                                id="portfolio-backtest-header",
                                 className="fw-bold small"),
                 dbc.CardBody([
                     dcc.Graph(id="portfolio-backtest-chart",
@@ -350,6 +373,7 @@ def build_portfolio_tab() -> html.Div:
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader("Candidate marginal value",
+                                        id="portfolio-candidate-header",
                                         className="fw-bold small"),
                         dbc.CardBody(html.Div(id="portfolio-candidate-table")),
                     ], style=T.CARD_STYLE),
@@ -357,6 +381,7 @@ def build_portfolio_tab() -> html.Div:
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader("Rebalance trade list (to reach full-optimal)",
+                                        id="portfolio-trade-header",
                                         className="fw-bold small"),
                         dbc.CardBody(html.Div(id="portfolio-trade-list")),
                     ], style=T.CARD_STYLE),
@@ -366,6 +391,7 @@ def build_portfolio_tab() -> html.Div:
             # Diagnostics
             dbc.Card([
                 dbc.CardHeader("Estimation diagnostics",
+                                id="portfolio-diagnostics-header",
                                 className="fw-bold small"),
                 dbc.CardBody(html.Div(id="portfolio-diagnostics")),
             ], style=T.CARD_STYLE),
@@ -373,12 +399,14 @@ def build_portfolio_tab() -> html.Div:
     ])
 
 
-def _sharpe_hero(label: str, value_id: str, color: str):
+def _sharpe_hero(label: str, value_id: str, color: str,
+                  label_id: str | None = None):
     return html.Div([
-        html.Div(label, style={"color": T.TEXT_MUTED, "fontSize": "0.72rem",
-                                "fontWeight": "600", "letterSpacing": "0.05em",
-                                "textTransform": "uppercase",
-                                "textAlign": "center"}),
+        html.Div(label, id=label_id,
+                  style={"color": T.TEXT_MUTED, "fontSize": "0.72rem",
+                          "fontWeight": "600", "letterSpacing": "0.05em",
+                          "textTransform": "uppercase",
+                          "textAlign": "center"}),
         html.Div(id=value_id, style={**T.HERO_NUMBER_STYLE,
                                        "color": color,
                                        "textAlign": "center"}),

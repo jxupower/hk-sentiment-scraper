@@ -64,3 +64,24 @@ def get_fundamentals_repo(db: Database):
         from storage.cloud_repository import CloudFundamentalsRepository
         return CloudFundamentalsRepository()
     return FundamentalsRepository(db)
+
+
+def get_securities_reference_repo(db: Database):
+    """Returns CloudSecuritiesReferenceRepository or SecuritiesReferenceRepository.
+    Used by `analysis/data_loader.refresh_securities_reference_cache` (to pull
+    cloud rows into local SQLite) and `push_securities_reference` (to write
+    the reconciler's resolved sectors + names back up). Dashboard read sites
+    always go through the LOCAL repo for sub-millisecond response — the
+    cloud version is only touched by the sync helpers."""
+    if _cloud_ok():
+        from storage.cloud_repository import CloudSecuritiesReferenceRepository
+        return CloudSecuritiesReferenceRepository()
+    from storage.repository import SecuritiesReferenceRepository
+    return SecuritiesReferenceRepository(db)
+
+
+def get_local_securities_reference_repo(db: Database):
+    """Always returns the SQLite mirror — bypasses the cloud router.
+    Dashboard reads go through here for sub-ms latency."""
+    from storage.repository import SecuritiesReferenceRepository
+    return SecuritiesReferenceRepository(db)

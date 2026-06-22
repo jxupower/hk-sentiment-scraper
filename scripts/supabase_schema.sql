@@ -165,6 +165,35 @@ CREATE TABLE IF NOT EXISTS portfolios (
 CREATE INDEX IF NOT EXISTS idx_portfolios_updated
     ON portfolios (updated_at DESC);
 
+-- ============== securities_reference ==============
+-- Per-ticker reference rows: bilingual display names + the resolved sector
+-- taxonomy (parent_sector, sub_sector). Cloud-first since the dashboard
+-- reads these on every Screener / Discovery / Stock Research render, and
+-- the local SQLite mirror works as a read-through cache via the factory
+-- routing in storage/factory.py.
+--
+-- Single source of truth for name + sector display data. Other code paths
+-- (resolver in universe/reconciler.py, watchlist YAML, us_sectors.yaml)
+-- write INTO this table during `universe-us seed` / `universe refresh`,
+-- never read from it.
+--
+-- Estimated size: ~7k rows × ~230 B (incl. 2 secondary indexes) ≈ 1.6 MB.
+-- See plan in C:\Users\User\.claude\plans\wobbly-bouncing-spindle.md.
+
+CREATE TABLE IF NOT EXISTS securities_reference (
+    ticker         TEXT        PRIMARY KEY,
+    english_name   TEXT,
+    chinese_name   TEXT,
+    parent_sector  TEXT,
+    sub_sector     TEXT,
+    updated_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_securities_reference_parent
+    ON securities_reference (parent_sector);
+CREATE INDEX IF NOT EXISTS idx_securities_reference_sub
+    ON securities_reference (sub_sector);
+
 -- ============== Smoke-test seed (delete after verifying) ==============
 -- INSERT INTO historical_prices (ticker, date, adj_close)
 --   VALUES ('TEST.HK', CURRENT_DATE, 100.00)

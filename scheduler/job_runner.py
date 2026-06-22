@@ -230,74 +230,155 @@ class JobRunner:
 
         logger.info("Stored %d new articles.", new_count)
 
-        # Resolve sub_sector for every watchlist ticker (of the active market)
-        # once per cycle. The `sector` column on ticker_signals + sector_signals
-        # carries the sub_sector label (post 2026-06 watchlist-UI removal — the
-        # editorial watchlist sector layer no longer drives the dashboard).
-        if market == "US":
-            market_watchlist = self._config.load_watchlist(market="US")
-            market_tickers = self._config.get_all_tickers(market_watchlist)
-        else:
-            market_watchlist = self._watchlist
-            market_tickers = self._all_tickers
+        # ==============================================================
+        # Universe-wide sub-sector roll-up (post 2026-06 redesign).
+        #
+        # Replaces the previous watchlist-bounded iteration (~50 tickers
+        # per market) with a roll-up over every active sub-sector-tagged
+        # ticker in the market (~2.7k HK + ~3.9k US). Coverage near 100%
+        # for any sub-sector that exists in the universe.
+        #
+        # Compute cost stays bounded by switching the price-momentum
+        # source from per-ticker `yahoo.fetch_price_history(period='1mo')`
+        # (~50s for 50 tickers, would be ~115 min for 6.7k) to one
+        # `bulk_get_price_series(...)` Supabase call per market (~30-60s
+        # for the whole batch).
+        # ==============================================================
         from collections import defaultdict
-        ticker_subsector = {
-            t: (self._config.get_subsector_for_ticker(
-                    t, market_watchlist, self._securities_repo) or "Unclassified")
-            for t in market_tickers
-        }
+        from storage.repository import SecuritiesReferenceRepository
+        from storage.factory import get_prices_repo
+        from analysis.sentiment_aggregation import (
+            compute_ticker_momentum, aggregate_subsector_signals,
+        )
+
+        ref_repo = SecuritiesReferenceRepository(self._securities_repo.db)
+        prices_repo = get_prices_repo(self._securities_repo.db)
+        universe_rows = ref_repo.get_market_universe(market)
+        market_tickers = [r["ticker"] for r in universe_rows]
+        ticker_subsector = {r["ticker"]: r["sub_sector"] for r in universe_rows}
+
         subsector_to_tickers: dict[str, list[str]] = defaultdict(list)
         for t, sub in ticker_subsector.items():
             subsector_to_tickers[sub].append(t)
+        logger.info(
+            "Universe roll-up [%s]: %d tickers across %d sub-sectors",
+            market, len(market_tickers), len(subsector_to_tickers),
+        )
 
-        # Per-ticker signals (used for drill-down)
+        # -- One bulk price pull covers every ticker's 5-day momentum. --
+        momentum_by_ticker = compute_ticker_momentum(
+            prices_repo, market_tickers, lookback_days=5, window_days=35)
+
+        # -- Bulk read sentiment + article counts from the local DB. --
+        sentiment_by_ticker: dict[str, float | None] = {}
+        article_count_by_ticker: dict[str, int] = {}
+        for ticker in market_tickers:
+            scores_24h = self._sentiment_repo.get_scores_for_ticker(ticker, hours=24)
+            if scores_24h:
+                vals = [s.get("final_score") for s in scores_24h
+                          if s.get("final_score") is not None]
+                sentiment_by_ticker[ticker] = (
+                    sum(vals) / len(vals) if vals else None)
+                article_count_by_ticker[ticker] = len(scores_24h)
+            else:
+                sentiment_by_ticker[ticker] = None
+                article_count_by_ticker[ticker] = 0
+
+        # -- Mcap lookup (used for weighting sub-sector aggregates). --
+        # Pulled from the latest_prices cache + shares_outstanding from
+        # fundamentals_snapshots when available; degrades to equal-weight
+        # on missing values.
+        mcap_by_ticker: dict[str, float | None] = {}
+        try:
+            from analysis.data_loader import get_universe_fundamentals
+            from storage.database import Database
+            fund_rows = get_universe_fundamentals(
+                Database(self._securities_repo.db.db_path), market=market)
+            for f in fund_rows:
+                mcap = f.get("market_cap")
+                if mcap is None:
+                    last_px = f.get("last_price")
+                    shares = f.get("shares_outstanding")
+                    if last_px and shares:
+                        try:
+                            mcap = float(last_px) * float(shares)
+                        except (TypeError, ValueError):
+                            mcap = None
+                mcap_by_ticker[f["ticker"]] = mcap
+        except Exception as e:
+            logger.warning("mcap lookup failed for %s — using equal weights: %s",
+                            market, e)
+
+        # -- Per-ticker signal upserts (drill-down). --
+        # Replaces the per-ticker price-history yfinance fetch with the
+        # already-computed bulk momentum. Cheap loop now.
         for ticker in market_tickers:
             try:
-                scores_24h = self._sentiment_repo.get_scores_for_ticker(ticker, hours=24)
-                scores_7d = self._sentiment_repo.get_scores_for_ticker(ticker, hours=168)
-                price_df = self._yahoo.fetch_price_history(ticker, period="1mo")
-                sub = ticker_subsector.get(ticker)
-                sig = self._signal_gen.compute_ticker_signal(
-                    ticker=ticker, sector=sub,
-                    scores_24h=scores_24h, scores_7d=scores_7d, price_df=price_df,
-                )
+                sent_24h = sentiment_by_ticker.get(ticker)
+                mom_5d = momentum_by_ticker.get(ticker)
+                n_articles = article_count_by_ticker.get(ticker, 0)
+
+                # BUY/SELL/HOLD/WATCH decision via the existing thresholds
+                # (analysis/signals.py:compute_ticker_signal). We avoid
+                # calling the helper because it expects a pandas price_df;
+                # the rules below mirror the same logic.
+                signal = "HOLD"
+                if sent_24h is not None and mom_5d is not None:
+                    if sent_24h > 0.2 and mom_5d > 0:
+                        signal = "BUY"
+                    elif sent_24h < -0.2 and mom_5d < 0:
+                        signal = "SELL"
+                    elif (sent_24h > 0.2 and mom_5d < 0) or (
+                          sent_24h < -0.2 and mom_5d > 0):
+                        signal = "WATCH"
+
+                confidence = 0.0
+                if sent_24h is not None:
+                    mag = min(abs(sent_24h) / 0.3, 1.0)
+                    vol = min(n_articles / 20.0, 1.0)
+                    confidence = round((mag + vol) / 2.0, 2)
+
                 self._signal_repo.upsert_signal(
-                    ticker=sig.ticker, sector=sig.sector,
-                    avg_sentiment_24h=sig.avg_sentiment_24h,
-                    avg_sentiment_7d=sig.avg_sentiment_7d,
-                    article_count_24h=sig.article_count_24h,
-                    price_momentum_5d=sig.price_momentum_5d,
-                    signal=sig.signal, confidence=sig.confidence,
+                    ticker=ticker,
+                    sector=ticker_subsector.get(ticker) or "Unclassified",
+                    avg_sentiment_24h=round(sent_24h, 4) if sent_24h is not None else None,
+                    avg_sentiment_7d=None,
+                    article_count_24h=n_articles,
+                    price_momentum_5d=round(mom_5d, 4) if mom_5d is not None else None,
+                    signal=signal, confidence=confidence,
                 )
             except Exception as e:
                 logger.error("Ticker signal failed [%s]: %s", ticker, e)
 
-        # Sector-level signals — one row per sub_sector across the watchlist roster.
-        for sub_sector, tickers in subsector_to_tickers.items():
+        # -- Sub-sector roll-up (mcap-weighted). --
+        sector_rows = aggregate_subsector_signals(
+            subsector_to_tickers=subsector_to_tickers,
+            sentiment_by_ticker=sentiment_by_ticker,
+            article_count_by_ticker=article_count_by_ticker,
+            momentum_by_ticker=momentum_by_ticker,
+            mcap_by_ticker=mcap_by_ticker,
+        )
+        for row in sector_rows:
             try:
-                scores_24h = self._sentiment_repo.get_scores_for_sector(tickers, hours=24)
-                scores_7d = self._sentiment_repo.get_scores_for_sector(tickers, hours=168)
-                price_dfs = {t: self._yahoo.fetch_price_history(t, period="1mo") for t in tickers}
-                sector_sig = self._sector_signal_gen.compute_sector_signal(
-                    sector=sub_sector,
-                    scores_24h=scores_24h,
-                    scores_7d=scores_7d,
-                    price_dfs=price_dfs,
-                )
                 self._sector_signal_repo.insert_signal(
-                    sector=sector_sig.sector,
-                    avg_sentiment_24h=sector_sig.avg_sentiment_24h,
-                    avg_sentiment_7d=sector_sig.avg_sentiment_7d,
-                    article_count_24h=sector_sig.article_count_24h,
-                    avg_price_momentum=sector_sig.avg_price_momentum,
-                    direction=sector_sig.direction,
-                    confidence=sector_sig.confidence,
+                    sector=row["sector"],
+                    avg_sentiment_24h=row["avg_sentiment_24h"],
+                    avg_sentiment_7d=row["avg_sentiment_7d"],
+                    article_count_24h=row["article_count_24h"],
+                    avg_price_momentum=row["avg_price_momentum"],
+                    direction=row["direction"],
+                    confidence=row["confidence"],
                 )
-                logger.info("Sub-sector [%s]: %s (sentiment=%.3f, momentum=%.2f%%)",
-                            sub_sector, sector_sig.direction,
-                            sector_sig.avg_sentiment_24h, sector_sig.avg_price_momentum)
+                logger.info(
+                    "Sub-sector [%s]: %s (sentiment=%s, momentum=%s, articles=%d, confidence=%.2f)",
+                    row["sector"], row["direction"],
+                    f"{row['avg_sentiment_24h']:.3f}" if row['avg_sentiment_24h'] is not None else "—",
+                    f"{row['avg_price_momentum']:.2f}%" if row['avg_price_momentum'] is not None else "—",
+                    row["article_count_24h"], row["confidence"],
+                )
             except Exception as e:
-                logger.error("Sub-sector signal failed [%s]: %s", sub_sector, e)
+                logger.error("Sub-sector insert failed [%s]: %s",
+                              row["sector"], e)
 
         logger.info("=== Scrape cycle complete ===")
 
@@ -330,9 +411,16 @@ class JobRunner:
         """Daily EOD yfinance price refresh — weekdays at 22:00 HKT (14:00 UTC).
         Short 5-day window keeps the run to ~5-10 min on ~2,778 tickers; UPSERT
         no-ops on dates already present. Same fetch_many path as the weekly
-        Sunday job, just a tighter window for everyday top-up."""
+        Sunday job, just a tighter window for everyday top-up.
+
+        After the bulk fetch completes, also refreshes the local
+        `latest_prices` SQLite cache so the Screener's mcap/P/E enrichment
+        stays sub-second on the next page render — without this the cold
+        load would re-incur the ~40s DISTINCT-ON-by-ticker over Supabase
+        `historical_prices`."""
         from storage.factory import get_prices_repo
         from scrapers.historical_price_scraper import fetch_many as price_fetch_many
+        from analysis.data_loader import refresh_latest_prices_cache
         try:
             tickers = [s["ticker"] for s in self._securities_repo.get_universe()]
             prices_repo = get_prices_repo(self._securities_repo.db)
@@ -340,6 +428,15 @@ class JobRunner:
             logger.info("Daily price refresh: %s", summary)
         except Exception as e:
             logger.error("Daily historical price refresh failed: %s", e)
+        # Refresh the latest_prices SQLite cache regardless of whether the
+        # bulk fetch above succeeded — even a stale cache is faster than
+        # no cache, and the cache will catch up next time the EOD fetch lands.
+        try:
+            cache_summary = refresh_latest_prices_cache(
+                self._securities_repo.db)
+            logger.info("latest_prices cache refresh: %s", cache_summary)
+        except Exception as e:
+            logger.error("latest_prices cache refresh failed: %s", e)
 
     def _refresh_subsector_composites_daily(self):
         """Daily rebuild of all `&NAME` sub-sector composite indices.

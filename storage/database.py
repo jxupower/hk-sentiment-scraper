@@ -85,6 +85,58 @@ class Database:
                     last_refreshed    DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
 
+                -- Localised display names + peripheral metadata per ticker.
+                -- Kept separate from `securities` so name churn (e.g. an
+                -- akshare-sourced Chinese name update) doesn't touch the
+                -- core listing record. Will grow additional columns over
+                -- time (logo URL, website, headquarters, founded year,
+                -- etc.) as more peripheral metadata sources land — that's
+                -- why it's named `securities_meta` rather than just
+                -- `stock_names`.
+                CREATE TABLE IF NOT EXISTS securities_meta (
+                    ticker        TEXT PRIMARY KEY,
+                    english_name  TEXT,
+                    chinese_name  TEXT,
+                    updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                -- Cloud-first reference table: bilingual display names +
+                -- resolved sector taxonomy per ticker. Source of truth
+                -- lives in Supabase (`securities_reference`); this local
+                -- mirror serves the dashboard's frequent read path via
+                -- the factory router. Same shape as the cloud table.
+                -- See storage/cloud_repository.py:CloudSecuritiesReferenceRepository
+                -- for the canonical write path; the SQLite copy here is
+                -- populated by `python main.py reference refresh`.
+                CREATE TABLE IF NOT EXISTS securities_reference (
+                    ticker         TEXT PRIMARY KEY,
+                    english_name   TEXT,
+                    chinese_name   TEXT,
+                    parent_sector  TEXT,
+                    sub_sector     TEXT,
+                    updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_securities_reference_parent
+                    ON securities_reference (parent_sector);
+                CREATE INDEX IF NOT EXISTS idx_securities_reference_sub
+                    ON securities_reference (sub_sector);
+
+                -- Tiny denormalised "latest price per ticker" cache.
+                -- The canonical source is Supabase `historical_prices` (16M+
+                -- rows), but DISTINCT-ON-by-ticker over the cloud pool was
+                -- the Screener's main cold-load cost (~40s for ~7k tickers).
+                -- This table holds one row per ticker (~7k rows, <200 KB) —
+                -- read by every dashboard surface that needs a current
+                -- price for filtering/sorting (Screener, Discovery, etc.).
+                -- Refreshed nightly by the daily EOD price cron via
+                -- `analysis/data_loader.refresh_latest_prices_cache`.
+                CREATE TABLE IF NOT EXISTS latest_prices (
+                    ticker      TEXT PRIMARY KEY,
+                    adj_close   REAL,
+                    asof_date   DATE,
+                    refreshed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE TABLE IF NOT EXISTS fundamentals_snapshots (
                     id                INTEGER PRIMARY KEY AUTOINCREMENT,
                     ticker            TEXT NOT NULL,

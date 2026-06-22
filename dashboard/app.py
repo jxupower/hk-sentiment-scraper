@@ -48,7 +48,7 @@ def create_app(db_path: str, settings) -> dash.Dash:
             "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap",
         ],
         suppress_callback_exceptions=True,
-        title="HK & China Market Research",
+        title="Croissant Stock Analyser",
     )
 
     # Custom CSS overrides: Inter typography, purple accent, light surfaces,

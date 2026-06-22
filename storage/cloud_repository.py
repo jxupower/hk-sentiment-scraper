@@ -480,3 +480,79 @@ def _serialise_portfolio_row(row: dict) -> dict:
         else:
             out[k] = v
     return out
+
+
+class CloudSecuritiesReferenceRepository:
+    """Per-ticker reference rows: bilingual names + resolved sector taxonomy.
+    Schema in scripts/supabase_schema.sql:`securities_reference`.
+
+    Read API mirrors the local-SQLite shape so the factory router can swap
+    implementations transparently. Writes are bulk-only (one round-trip per
+    sync run) to keep latency predictable on the Supabase free-tier pooler.
+    """
+
+    def upsert_many(self, rows: list[dict]) -> int:
+        """rows: [{ticker, english_name, chinese_name, parent_sector, sub_sector}, ...].
+        ON CONFLICT updates every column + the `updated_at` stamp."""
+        if not rows:
+            return 0
+        sql = """
+            INSERT INTO securities_reference
+                (ticker, english_name, chinese_name, parent_sector, sub_sector)
+            VALUES %s
+            ON CONFLICT (ticker) DO UPDATE SET
+                english_name  = EXCLUDED.english_name,
+                chinese_name  = EXCLUDED.chinese_name,
+                parent_sector = EXCLUDED.parent_sector,
+                sub_sector    = EXCLUDED.sub_sector,
+                updated_at    = NOW()
+        """
+        params = [
+            (r.get("ticker"), r.get("english_name"), r.get("chinese_name"),
+              r.get("parent_sector"), r.get("sub_sector"))
+            for r in rows if r.get("ticker")
+        ]
+        with cursor() as cur:
+            execute_values(cur, sql, params, page_size=1000)
+        return len(params)
+
+    def get_one(self, ticker: str) -> Optional[dict]:
+        with cursor(dict_rows=True) as cur:
+            cur.execute(
+                "SELECT ticker, english_name, chinese_name, "
+                "parent_sector, sub_sector, updated_at "
+                "FROM securities_reference WHERE ticker = %s",
+                (ticker,),
+            )
+            row = cur.fetchone()
+            return _serialise_portfolio_row(row) if row else None
+
+    def get_many(self, tickers: list[str]) -> dict[str, dict]:
+        """{ticker: full_row_dict} for the requested tickers (missing rows omitted).
+        One Supabase round-trip via `ticker = ANY(%s)`."""
+        if not tickers:
+            return {}
+        with cursor(dict_rows=True) as cur:
+            cur.execute(
+                "SELECT ticker, english_name, chinese_name, "
+                "parent_sector, sub_sector, updated_at "
+                "FROM securities_reference WHERE ticker = ANY(%s)",
+                (list(tickers),),
+            )
+            return {row["ticker"]: _serialise_portfolio_row(row) for row in cur.fetchall()}
+
+    def get_all(self) -> list[dict]:
+        """Every row — used by the cache-aside refresh that mirrors cloud
+        into local SQLite for the dashboard's read path."""
+        with cursor(dict_rows=True) as cur:
+            cur.execute(
+                "SELECT ticker, english_name, chinese_name, "
+                "parent_sector, sub_sector, updated_at "
+                "FROM securities_reference ORDER BY ticker"
+            )
+            return [_serialise_portfolio_row(r) for r in cur.fetchall()]
+
+    def count(self) -> int:
+        with cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM securities_reference")
+            return int(cur.fetchone()[0])

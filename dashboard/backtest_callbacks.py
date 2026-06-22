@@ -309,8 +309,24 @@ def register_backtest_callbacks(app, db_path: str):
         initial_by_ticker = {h.ticker: h
                               for h in result.rebalance_log[0].holdings}
 
+        # Pre-fetch bilingual names for every ticker that appears across
+        # initial, final, AND trade log — one DB hit covers all three tables.
+        from storage.repository import SecuritiesReferenceRepository
+        from storage.database import Database
+        _all_tickers = (
+            {h.ticker for h in result.rebalance_log[0].holdings}
+            | {h.ticker for h in result.rebalance_log[-1].holdings}
+            | {tr.ticker for tr in result.trade_log}
+        )
+        _names = SecuritiesReferenceRepository(Database(db_path)).get_names(
+            list(_all_tickers), lang=lang,
+        )
+
+        def _name_of(ticker, fallback):
+            return _names.get(ticker) or fallback
+
         def _row(h):
-            return {"ticker": h.ticker, "name": h.name,
+            return {"ticker": h.ticker, "name": _name_of(h.ticker, h.name),
                     "price": round(h.price, 2) if h.price else None,
                     "weight": round(h.weight * 100, 2),
                     "shares": round(h.shares, 2)}
@@ -319,7 +335,7 @@ def register_backtest_callbacks(app, db_path: str):
             init = initial_by_ticker.get(h.ticker)
             init_w = init.weight if init else 0.0
             init_sh = init.shares if init else 0.0
-            return {"ticker": h.ticker, "name": h.name,
+            return {"ticker": h.ticker, "name": _name_of(h.ticker, h.name),
                     "price": round(h.price, 2) if h.price else None,
                     "weight": round(h.weight * 100, 2),
                     "weight_delta": round((h.weight - init_w) * 100, 2),
@@ -340,7 +356,8 @@ def register_backtest_callbacks(app, db_path: str):
                       f"{m.n_rebalances} rebalances in {elapsed:.1f}s "
                       f"· Δ vs initial in colour")
 
-        trade_rows = [{"date": tr.date, "ticker": tr.ticker, "name": tr.name,
+        trade_rows = [{"date": tr.date, "ticker": tr.ticker,
+                       "name": _name_of(tr.ticker, tr.name),
                        "action": tr.action, "units": tr.units,
                        "price": round(tr.price, 2) if tr.price else None}
                       for tr in result.trade_log]
