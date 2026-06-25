@@ -28,6 +28,28 @@ def _stat_block(label: str, value_id: str, color: str = None,
 
 
 def build_backtest_tab() -> html.Div:
+    """Backtest tab root — wraps the existing preset strategy backtest +
+    the new V/Q/G factor-verification long/short test in a two-pill
+    sub-tab. The strategy sub-tab is the original behaviour, untouched.
+    The verification sub-tab is signal-only — no preset, no weight cap,
+    no benchmark comparison — and answers the question 'does V/Q/G
+    actually predict returns?'."""
+    return html.Div([
+        dbc.Tabs(id="bt-subtab", active_tab="bt-subtab-strategy",
+                  className="mb-3", children=[
+            dbc.Tab(_build_strategy_subtab(),
+                     tab_id="bt-subtab-strategy",
+                     label="Preset strategy",
+                     id="bt-subtab-strategy-label"),
+            dbc.Tab(_build_verification_subtab(),
+                     tab_id="bt-subtab-verify",
+                     label="Factor verification",
+                     id="bt-subtab-verify-label"),
+        ]),
+    ])
+
+
+def _build_strategy_subtab() -> html.Div:
     preset_options = [{"label": p["label"], "value": p["id"]}
                       for p in INVESTOR_PRESETS]
 
@@ -382,4 +404,237 @@ def build_backtest_tab() -> html.Div:
                 ]),
             ]),
         ], style=T.CARD_STYLE),
+    ])
+
+
+def _build_verification_subtab() -> html.Div:
+    """V/Q/G factor-verification long/short backtest body.
+
+    Signal-only test (no preset filter, no weight cap). At each
+    rebalance, within every sub-sector with at least 10 ranked names,
+    take the top decile (LONG) and bottom decile (SHORT) by composite
+    V/Q/G percentile. Pool across sub-sectors, equal-weight within each
+    leg, hold until next rebalance. Tracks long curve, short curve, and
+    spread curve. Plots per-decile mean forward return (monotonicity
+    test) + per-rebalance Information Coefficient (signal-vs-noise).
+    """
+    return html.Div([
+        dbc.Alert(color="warning", className="mb-3", children=[
+            html.Strong("Paper signal test. "),
+            "Assumes zero transaction costs, no borrow fees, no shorting "
+            "constraints. Real-world HK shorting is restricted by uptick "
+            "rules and stock-specific borrow availability. This is testing "
+            "whether the V/Q/G score predicts returns — not whether it's "
+            "executable.",
+        ]),
+
+        # ----- Controls -----
+        dbc.Card([
+            dbc.CardHeader(html.Span("Verification setup",
+                                        className="fw-bold")),
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Time horizon",
+                                      className="stat-label mb-2"),
+                        dbc.RadioItems(
+                            id="bv-horizon-select",
+                            options=[{"label": "1 year",  "value": 1},
+                                     {"label": "3 years", "value": 3},
+                                     {"label": "5 years", "value": 5}],
+                            value=3, inline=True,
+                            className="btn-group",
+                            inputClassName="btn-check",
+                            labelClassName="btn btn-outline-primary btn-sm",
+                            labelCheckedClassName="active",
+                        ),
+                    ], width=4),
+                    dbc.Col([
+                        html.Label("Rebalance frequency",
+                                      className="stat-label mb-2"),
+                        dbc.RadioItems(
+                            id="bv-rebal-select",
+                            options=[{"label": "Daily",   "value": "1d"},
+                                     {"label": "3-day",   "value": "3d"},
+                                     {"label": "Weekly",  "value": "1w"},
+                                     {"label": "Monthly", "value": "1m"}],
+                            value="1m", inline=True,
+                            className="btn-group",
+                            inputClassName="btn-check",
+                            labelClassName="btn btn-outline-primary btn-sm",
+                            labelCheckedClassName="active",
+                        ),
+                    ], width=4),
+                    dbc.Col([
+                        html.Label("Min names per sub-sector",
+                                      className="stat-label mb-2"),
+                        dcc.Slider(
+                            id="bv-min-names",
+                            min=5, max=30, step=5, value=10,
+                            marks={5: "5", 10: "10", 20: "20", 30: "30"},
+                            tooltip={"placement": "bottom",
+                                       "always_visible": False},
+                        ),
+                    ], width=4),
+                ], className="mb-3"),
+                dbc.Row([
+                    dbc.Col(
+                        dbc.Button("Run verification", id="bv-run-btn",
+                                    color="primary", size="md"),
+                        width="auto",
+                    ),
+                    dbc.Col(
+                        html.Span(id="bv-run-status",
+                                   className="text-muted small ms-2"),
+                        className="d-flex align-items-center",
+                    ),
+                ]),
+            ]),
+        ], style=T.CARD_STYLE, className="mb-3"),
+
+        # ----- Results -----
+        dcc.Loading(type="default", children=[
+            # Headline stats — 8 cells across 2 rows
+            dbc.Card([
+                dbc.CardHeader([
+                    html.Span("Factor verdict", className="fw-bold me-2"),
+                    html.Span(id="bv-window-label",
+                                className="text-muted small"),
+                ]),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col(_stat_block("Spread ann. return",
+                                              "bv-stat-spread",
+                                              color=T.PRIMARY), width=3),
+                        dbc.Col(_stat_block("Spread Sharpe (rf=3%)",
+                                              "bv-stat-sharpe"), width=3),
+                        dbc.Col(_stat_block("Mean IC",
+                                              "bv-stat-ic"), width=3),
+                        dbc.Col(_stat_block("IC t-stat",
+                                              "bv-stat-tstat"), width=3),
+                    ], align="center", className="mb-3"),
+                    dbc.Row([
+                        dbc.Col(_stat_block("Long leg ann.",
+                                              "bv-stat-long"), width=3),
+                        dbc.Col(_stat_block("Short leg ann.",
+                                              "bv-stat-short"), width=3),
+                        dbc.Col(_stat_block("Spread max DD",
+                                              "bv-stat-maxdd",
+                                              color=T.PRICE_DOWN), width=3),
+                        dbc.Col(_stat_block("Hit rate (long > short)",
+                                              "bv-stat-hit"), width=3),
+                    ], align="center"),
+                    html.Div(id="bv-verdict-summary",
+                              className="mt-3 small text-muted"),
+                ], style={"padding": "16px 20px"}),
+            ], style=T.CARD_STYLE, className="mb-3"),
+
+            # Three-line equity chart — Long / Short / Spread
+            dbc.Card([
+                dbc.CardHeader(html.Span("Long · Short · Spread curves",
+                                            className="fw-bold")),
+                dbc.CardBody(dcc.Graph(id="bv-equity-chart",
+                                          config={"displayModeBar": False},
+                                          figure={})),
+            ], style=T.CARD_STYLE, className="mb-3"),
+
+            # Decile monotonicity bar chart
+            dbc.Card([
+                dbc.CardHeader([
+                    html.Span("Decile monotonicity ladder",
+                                className="fw-bold me-2"),
+                    html.Span("(real factor → D10 ≥ D9 ≥ … ≥ D1)",
+                                className="text-muted small"),
+                ]),
+                dbc.CardBody(dcc.Graph(id="bv-decile-chart",
+                                          config={"displayModeBar": False},
+                                          figure={})),
+            ], style=T.CARD_STYLE, className="mb-3"),
+
+            # Information Coefficient time-series
+            dbc.Card([
+                dbc.CardHeader([
+                    html.Span("Information Coefficient over time",
+                                className="fw-bold me-2"),
+                    html.Span("(Spearman ρ of pctile vs forward return; "
+                              "real factor → consistently > 0)",
+                                className="text-muted small"),
+                ]),
+                dbc.CardBody(dcc.Graph(id="bv-ic-chart",
+                                          config={"displayModeBar": False},
+                                          figure={})),
+            ], style=T.CARD_STYLE, className="mb-3"),
+
+            # Most recent rebalance composition — long + short side-by-side
+            dbc.Card([
+                dbc.CardHeader([
+                    html.Span("Most recent rebalance composition",
+                                className="fw-bold me-2"),
+                    html.Span(id="bv-latest-rebal-date",
+                                className="text-muted small"),
+                ]),
+                dbc.CardBody(
+                    dbc.Row([
+                        dbc.Col([
+                            html.H6("Long basket (top decile)",
+                                      className="mb-2",
+                                      style={"color": T.PRICE_UP}),
+                            dash_table.DataTable(
+                                id="bv-long-table",
+                                columns=[
+                                    {"name": "Ticker", "id": "ticker"},
+                                    {"name": "Name",   "id": "name"},
+                                    {"name": "Sub-sector",
+                                     "id": "sub_sector"},
+                                    {"name": "Composite %ile",
+                                     "id": "composite",
+                                     "type": "numeric",
+                                     "format": {"specifier": ".1f"}},
+                                ],
+                                data=[],
+                                page_size=10,
+                                sort_action="native",
+                                style_cell=T.DATATABLE_CELL,
+                                style_cell_conditional=[
+                                    {"if": {"column_id": "name"},
+                                     "textAlign": "left"},
+                                    {"if": {"column_id": "sub_sector"},
+                                     "textAlign": "left"},
+                                ],
+                                style_header=T.DATATABLE_HEADER,
+                            ),
+                        ], width=6),
+                        dbc.Col([
+                            html.H6("Short basket (bottom decile)",
+                                      className="mb-2",
+                                      style={"color": T.PRICE_DOWN}),
+                            dash_table.DataTable(
+                                id="bv-short-table",
+                                columns=[
+                                    {"name": "Ticker", "id": "ticker"},
+                                    {"name": "Name",   "id": "name"},
+                                    {"name": "Sub-sector",
+                                     "id": "sub_sector"},
+                                    {"name": "Composite %ile",
+                                     "id": "composite",
+                                     "type": "numeric",
+                                     "format": {"specifier": ".1f"}},
+                                ],
+                                data=[],
+                                page_size=10,
+                                sort_action="native",
+                                style_cell=T.DATATABLE_CELL,
+                                style_cell_conditional=[
+                                    {"if": {"column_id": "name"},
+                                     "textAlign": "left"},
+                                    {"if": {"column_id": "sub_sector"},
+                                     "textAlign": "left"},
+                                ],
+                                style_header=T.DATATABLE_HEADER,
+                            ),
+                        ], width=6),
+                    ]),
+                ),
+            ], style=T.CARD_STYLE, className="mb-3"),
+        ]),
     ])

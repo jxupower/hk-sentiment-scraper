@@ -1,0 +1,75 @@
+# This file exists purely to anchor `ruff` configuration so the CI lint
+# job + local `ruff check` agree on rules. It deliberately does NOT
+# migrate the project to PEP 621 packaging — `requirements.txt` is still
+# the source of truth for runtime deps and `main.py` is still the CLI
+# entry point. Migrating to a full pyproject-driven build (with setuptools
+# / hatch / uv) is a separate effort with no benefit for a single-deploy
+# Docker target.
+
+[tool.ruff]
+# Python 3.11 (matches Dockerfile + Oracle Ubuntu 22.04 default).
+target-version = "py311"
+line-length = 100
+
+# Skip vendored, virtualenv, build, and generated directories. The
+# `data/` dir would also be a no-op (no .py files) but listing it
+# avoids ruff walking a multi-GB cache tree.
+extend-exclude = [
+    "venv",
+    ".venv",
+    "data",
+    "tasks",
+    "scratch",
+    "notebooks",
+    "*.ipynb",
+]
+
+[tool.ruff.lint]
+# Pragmatic starter ruleset for an established codebase. We deliberately
+# keep this NARROW to land CI without forcing a mass-reformat of every
+# existing file:
+#
+#   F  — pyflakes (real bugs: undefined names, redefined symbols)
+#   E9 — syntax / IO errors (catches genuinely broken Python)
+#
+# Notable rules we do NOT enable yet, and why:
+#   I    — isort. ~100 existing files have unsorted imports. Worth
+#          enabling later in a dedicated "ruff format + auto-fix" PR.
+#   E (other than E9) — pycodestyle whitespace + line-length. Mostly
+#          cosmetic; would flag many existing files.
+#   W    — pycodestyle warnings. Cosmetic.
+#   N/D/UP/S — naming, docstrings, upgrade hints, security. Tightening
+#          into these is a follow-up effort, not a blocker for CI.
+#
+# This baseline is small enough that anything ruff flags is genuinely
+# worth fixing — no noise drowning real signals.
+select = ["F", "E9"]
+
+# Selectively ignore the F-rules that show up dozens of times in existing
+# code and are cosmetic rather than bug-bearing. Each can be tightened
+# in a follow-up PR.
+ignore = [
+    "F401",  # unused-import — many config / __init__ modules legitimately re-export
+    "F541",  # f-string with no placeholders — cosmetic, trivial to clean later
+    "F841",  # unused-variable — usually defensive debugging assignments
+    "E501",  # line too long — Dash layout trees intentionally exceed 100
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files (none yet, but reserved) can have unused imports for fixtures.
+"tests/**/*.py" = ["F401", "F811"]
+# Scripts often import + immediately use modules in inline blocks where
+# `from x import y as _` aliasing would hurt readability.
+"scripts/**/*.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "analysis",
+    "config",
+    "dashboard",
+    "scheduler",
+    "scrapers",
+    "storage",
+    "universe",
+    "utils",
+]

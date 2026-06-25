@@ -51,6 +51,35 @@ def create_app(db_path: str, settings) -> dash.Dash:
         title="Croissant Stock Analyser",
     )
 
+    # --- Cloudflare Access pass-through ---------------------------------
+    # When the dashboard runs behind Cloudflare Access (production deploy
+    # per docs/deploy.md), every authenticated request carries the user's
+    # email in the `Cf-Access-Authenticated-User-Email` header. Stash it
+    # on `flask.g` so future per-user features (e.g. portfolios scoped to
+    # the email, audit logging) can read it without re-parsing headers
+    # at every call site.
+    #
+    # In local dev / CI the header is absent; `flask.g.user_email` stays
+    # None and the app behaves as today (single-tenant). No auth is
+    # enforced here — the gating happens at the Cloudflare edge before
+    # the request ever reaches this process.
+    #
+    # Logged at INFO once per unique email so we have a record of who
+    # used the dashboard without spamming on every callback fire.
+    import logging
+    from flask import g, request
+    _seen_emails: set[str] = set()
+    _auth_logger = logging.getLogger("dashboard.auth")
+
+    @app.server.before_request
+    def _capture_cf_access_email():
+        email = request.headers.get("Cf-Access-Authenticated-User-Email")
+        g.user_email = email
+        if email and email not in _seen_emails:
+            _seen_emails.add(email)
+            _auth_logger.info("Cf-Access login: %s", email)
+    # ---------------------------------------------------------------------
+
     # Custom CSS overrides: Inter typography, purple accent, light surfaces,
     # generous padding, soft shadows. All hex codes pull from theme.py — keep
     # them in lockstep via the f-string substitution.

@@ -1,0 +1,165 @@
+# CI for the Croissant Stock Analyser dashboard.
+#
+# Three jobs run in parallel on every push to `main` and every PR:
+#   1. lint        — ruff (rules: E, F, W, I — see pyproject.toml)
+#   2. smoke       — pip install -r requirements.txt, import the top-level
+#                    modules, boot the dashboard headless against an empty
+#                    SQLite DB, GET /_dash-layout, assert 200
+#   3. docker-build — build the production Dockerfile for linux/amd64 and
+#                     linux/arm64 (the Oracle Cloud target) WITHOUT pushing
+#                     to a registry. Caches via GHA backend so subsequent
+#                     runs are fast.
+#
+# The deploy workflow (`.github/workflows/deploy.yml`) runs on top of this
+# — it triggers on a successful CI run, builds + pushes to ghcr.io, and
+# SSHes into the Oracle VM to `docker compose pull && up -d`.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # Allow manual re-runs from the Actions UI.
+  workflow_dispatch:
+
+# Cancel any in-flight runs on the same branch when a new commit lands —
+# saves CI minutes when force-pushing during PR iteration.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # Lint — ruff on the canonical ruleset defined in pyproject.toml
+  # ============================================================
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # ruff alone — no editable install needed for static analysis.
+      - name: Install ruff
+        run: pip install ruff==0.6.9
+
+      - name: ruff check
+        run: ruff check .
+
+  # ============================================================
+  # Smoke — pip install full deps + import-graph sanity + dashboard
+  # boot + /_dash-layout GET. Catches the most common breakages
+  # (missing imports, typos, broken layout construction) without
+  # needing a real test suite.
+  # ============================================================
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # System deps for the C-extension packages that don't always have
+      # manylinux wheels for the GHA runner Python build. Cheap to install.
+      - name: Install system build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              build-essential gcc libpq-dev curl
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Import smoke — catches syntax errors, missing modules, and the
+      # "I refactored the imports but forgot a file" class of bug. Cheap
+      # and surfaces 80% of breakage in <5s.
+      - name: Import smoke
+        run: |
+          python -c "
+          import dashboard.app
+          import dashboard.callbacks
+          import dashboard.screener_callbacks
+          import dashboard.backtest_callbacks
+          import dashboard.recommendations_callbacks
+          import dashboard.portfolio_callbacks
+          import dashboard.risk_callbacks
+          import dashboard.stock_research_callbacks
+          import dashboard.screens_callbacks
+          import scheduler.job_runner
+          import analysis.factor_backtest
+          import analysis.sentiment_aggregation
+          import storage.repository
+          import storage.factory
+          import storage.database
+          import main
+          print('All top-level imports OK')
+          "
+
+      # Boot the dashboard in background, then poll /_dash-layout until it
+      # returns 200 (or 60s passes). USE_CLOUD_DB=false so the boot path
+      # doesn't try to dial out to Supabase — CI has no secrets for that
+      # by design (Supabase creds should not be in CI for a public build).
+      - name: Boot dashboard + GET /_dash-layout
+        env:
+          USE_CLOUD_DB: "false"
+          # Disable the post-boot screener cache pre-warm — it tries to
+          # reach Supabase + akshare which CI can't / shouldn't do.
+          SKIP_DASHBOARD_PREWARM: "true"
+        run: |
+          # Run dashboard in background, capture PID for cleanup.
+          python main.py dashboard --port 8050 > dashboard.log 2>&1 &
+          PID=$!
+          echo "Dashboard PID: $PID"
+
+          # Poll up to 60s for the /_dash-layout endpoint.
+          python scripts/healthcheck.py http://localhost:8050/_dash-layout \
+              --retries 30 --interval 2 --timeout 5
+
+          STATUS=$?
+          echo "--- dashboard.log (last 50 lines) ---"
+          tail -n 50 dashboard.log || true
+          kill $PID 2>/dev/null || true
+          exit $STATUS
+
+  # ============================================================
+  # Docker build — produces the production image for both amd64
+  # and arm64 (Oracle Cloud target). No push, no registry login;
+  # the deploy workflow is the one that actually publishes.
+  # ============================================================
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          # arm64 emulation on the amd64 runner — slow but free, and only
+          # used here to verify the image builds. The real arm64 build
+          # for deploy runs natively on the Oracle VM (or on a runner if
+          # we ever pay for one).
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build multi-arch image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: hk-sentiment-scraper:ci-test
+          cache-from: type=gha,scope=docker-${{ github.ref_name }}
+          cache-to: type=gha,scope=docker-${{ github.ref_name }},mode=max

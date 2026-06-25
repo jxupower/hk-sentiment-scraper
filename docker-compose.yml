@@ -1,0 +1,47 @@
+# Local development + local production-parity testing.
+#
+# `docker compose up --build` boots the same image CI builds (one Dockerfile
+# is the source of truth) with the local data/ directory mounted in so the
+# SQLite store + cache survives a container recreation.
+#
+# Production (Oracle Cloud VM) uses a SEPARATE compose file at
+# /srv/dashboard/docker-compose.yml — see docs/deploy.md. The prod file
+# references the pre-built ghcr.io image instead of `build: .` because the
+# Oracle ARM VMs don't have the build toolchain installed (and don't need
+# it once the image is pulled).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hk-sentiment-scraper:local
+    container_name: hk-sentiment-dashboard
+    # Bind to host loopback only — prevents accidentally exposing the
+    # dashboard to a LAN before CF Tunnel + Access are in front of it in
+    # production. For purely-local dev, http://localhost:8050 still works.
+    ports:
+      - "8050:8050"
+    # Secrets live in .env at the repo root (never committed — see
+    # .gitignore + .dockerignore). The example template is .env.example.
+    env_file:
+      - .env
+    # SQLite + HKEX xlsx cache survive container recreation via this
+    # bind mount. Inside the container the path is /app/data, matching
+    # the VOLUME declaration in the Dockerfile.
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    # The image-level HEALTHCHECK is already correct; restating it here
+    # so `docker compose ps` shows the health column consistently.
+    healthcheck:
+      test:
+        - "CMD"
+        - "curl"
+        - "--fail"
+        - "--silent"
+        - "http://localhost:8050/_dash-layout"
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3

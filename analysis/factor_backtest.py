@@ -1060,3 +1060,462 @@ def next_backtest_portfolio_name(strategy_label: str, repo) -> str:
         if suffix.isdigit():
             nums.append(int(suffix))
     return f"{prefix}{(max(nums) + 1) if nums else 1}"
+
+
+# ============================================================================
+# Factor-verification long/short backtest
+# ----------------------------------------------------------------------------
+# Verifies that the V/Q/G composite percentile is a real signal: at each
+# rebalance, build dollar-neutral long-top-decile / short-bottom-decile
+# baskets (sub-sector-neutral, equal-weight within each leg), then track
+# the spread. A real factor should produce a positive cumulative spread
+# with positive Sharpe + Information Coefficient + decile monotonicity.
+#
+# Distinct from `run_preset_backtest` in three ways:
+#   - No preset filter — the test must isolate the V/Q/G signal alone
+#   - Long AND short legs (signed weights), not just long-only top-10
+#   - Equal-weight within each leg (mcap-weighting would conflate with the
+#     size factor and contaminate the test)
+# ============================================================================
+
+DEFAULT_DECILE_FRACTION = 0.10
+DEFAULT_MIN_NAMES_PER_SUBSECTOR = 10
+N_DECILES = 10
+
+
+@dataclass
+class FactorVerificationResult:
+    """Output bundle for a long/short factor-verification backtest.
+
+    All curves start at 100. `spread_curve[i]` is the cumulative value of
+    a $1-long / $1-short market-neutral basket (200% gross exposure)."""
+    market: str
+    start_date: str
+    end_date: str
+    rebalance_freq: str
+    # Three normalised equity curves (date, value)
+    long_curve: list[tuple[str, float]] = field(default_factory=list)
+    short_curve: list[tuple[str, float]] = field(default_factory=list)
+    spread_curve: list[tuple[str, float]] = field(default_factory=list)
+    # Mean forward return per decile bucket (1 = bottom, 10 = top), pooled
+    # across all rebalance periods. The signature monotonicity chart.
+    decile_returns: dict[int, float] = field(default_factory=dict)
+    decile_counts: dict[int, int] = field(default_factory=dict)
+    # Per-rebalance Information Coefficient (Spearman ρ between composite
+    # pctile and forward return). NaNs / Nones filtered out before stats.
+    ic_series: list[tuple[str, float]] = field(default_factory=list)
+    # Per-rebalance long + short composition (latest snapshot is what the
+    # dashboard shows in its holdings tables).
+    rebalance_log: list[dict] = field(default_factory=list)
+    # Headline metrics — all decimal (0.10 = 10%).
+    metrics: dict = field(default_factory=dict)
+    # Diagnostics
+    n_subsectors_used: int = 0
+    avg_long_size: float = 0.0
+    avg_short_size: float = 0.0
+    actual_start: str = ""
+    actual_end: str = ""
+
+
+def _signed_period_return(holdings_signed: list[tuple[str, float]],
+                            t_start: str, t_end: str,
+                            price_cache: dict,
+                            ) -> tuple[float, float]:
+    """Per-period long-leg + short-leg returns given a list of
+    `(ticker, signed_weight)` pairs. Returns `(r_long, r_short)`:
+
+      r_long  = Σ   w_i  × (P_end/P_start - 1)  for positive-weight names
+      r_short = Σ  |w_j| × (P_end/P_start - 1)  for negative-weight names
+
+    Note `r_short` is the return of being LONG the short basket — the L/S
+    spread is `r_long − r_short`. Tickers missing a price at either
+    endpoint are skipped (treated as cash, zero contribution).
+    """
+    r_long = 0.0
+    r_short = 0.0
+    for ticker, w in holdings_signed:
+        series = price_cache.get(ticker)
+        if not series:
+            continue
+        p0 = _price_on_or_before(series, t_start)
+        p1 = _price_on_or_before(series, t_end)
+        if p0 is None or p1 is None or p0 <= 0:
+            continue
+        ret = p1 / p0 - 1.0
+        if w >= 0:
+            r_long += w * ret
+        else:
+            r_short += abs(w) * ret
+    return r_long, r_short
+
+
+def _decile_buckets_per_subsector(results, n_buckets: int = N_DECILES,
+                                     min_names: int = DEFAULT_MIN_NAMES_PER_SUBSECTOR
+                                     ) -> dict[str, list[list]]:
+    """Group scored results by sub_sector (carried on FactorResult.sector
+    after the engine's strict bucketing — see factor_scores.py:308) and
+    split each sub-sector into N equal-sized buckets sorted by composite
+    percentile ASCENDING (so bucket 0 = lowest composite, bucket N-1 =
+    highest composite).
+
+    Sub-sectors with fewer than `min_names` ranked tickers are skipped
+    entirely — a decile split on 3 tickers is meaningless. Returns
+    `{sub_sector: [bucket_0_results, ..., bucket_{N-1}_results]}`."""
+    by_sub: dict[str, list] = {}
+    for r in results:
+        if r.disqualified or r.composite_pctile is None:
+            continue
+        sub = (r.sector or "—")
+        if sub == "—":
+            continue
+        by_sub.setdefault(sub, []).append(r)
+
+    out: dict[str, list[list]] = {}
+    for sub, rs in by_sub.items():
+        if len(rs) < min_names:
+            continue
+        rs_sorted = sorted(rs, key=lambda r: r.composite_pctile)
+        n = len(rs_sorted)
+        buckets: list[list] = [[] for _ in range(n_buckets)]
+        # Equal-sized buckets by index. Last bucket absorbs the remainder
+        # when n is not divisible by n_buckets (the convention for
+        # decile-based factor analysis).
+        for i, r in enumerate(rs_sorted):
+            b = min(int(i * n_buckets / n), n_buckets - 1)
+            buckets[b].append(r)
+        out[sub] = buckets
+    return out
+
+
+def _spearman_safe(x: list[float], y: list[float]) -> Optional[float]:
+    """Spearman rank correlation, returning None if either series is too
+    short, fully constant, or NaN-bearing. Wraps scipy with the right
+    nan_policy."""
+    if not x or len(x) != len(y) or len(x) < 5:
+        return None
+    try:
+        from scipy.stats import spearmanr
+        rho, _p = spearmanr(x, y, nan_policy="omit")
+        if rho is None or math.isnan(rho):
+            return None
+        return float(rho)
+    except Exception:
+        return None
+
+
+def run_factor_verification_backtest(
+    start_date: str,
+    end_date: str,
+    rebalance_freq: str,
+    db_path: str,
+    sector_risk_path: Optional[str] = None,
+    market: str = "HK",
+    min_names_per_subsector: int = DEFAULT_MIN_NAMES_PER_SUBSECTOR,
+) -> FactorVerificationResult:
+    """V/Q/G factor-verification long/short backtest.
+
+    At each rebalance, score the universe (no preset filter) and within
+    each sub-sector pick the top decile (LONG) + bottom decile (SHORT)
+    by composite V/Q/G percentile. Pool across sub-sectors, equal-weight
+    within each leg, hold until the next rebalance.
+
+    Outputs three normalised equity curves (long / short / spread), per-
+    decile mean forward returns (the monotonicity test), per-rebalance
+    Information Coefficient, and headline annualised metrics.
+    """
+    from analysis.factor_scores import FactorScoringEngine
+    from analysis.data_loader import get_universe_fundamentals
+    from storage.database import Database
+    from storage.factory import get_prices_repo
+
+    market = (market or "HK").upper()
+    benchmark = benchmark_for_market(market)
+
+    db = Database(db_path)
+    prices_repo = get_prices_repo(db)
+
+    # --- Calendar + memoised snapshot list (same pattern as preset BT) ---
+    trading_days = _hsi_trading_days(prices_repo, start_date, end_date,
+                                       benchmark=benchmark)
+    if not trading_days:
+        raise RuntimeError(
+            f"No {benchmark} trading days between {start_date} and "
+            f"{end_date}. Run a price refresh first."
+        )
+    rebal_dates = _rebalance_dates(trading_days, rebalance_freq)
+    snapshot_dates = _list_snapshot_dates(db_path)
+    effective_per_rebal = [_effective_snapshot_date(t, snapshot_dates)
+                            for t in rebal_dates]
+    needed = sorted({s for s in effective_per_rebal if s is not None})
+    logger.info("FactorVerify: %d rebalances span %d unique snapshots — "
+                 "scoring %d times", len(rebal_dates), len(needed), len(needed))
+
+    # --- Score each needed snapshot once ---------------------------------
+    engine = FactorScoringEngine(db_path, sector_risk_path)
+    score_cache: dict[str, list] = {}
+    snap_to_first_rebal: dict[str, str] = {}
+    for i, t in enumerate(rebal_dates):
+        snap = effective_per_rebal[i]
+        if snap is not None and snap not in snap_to_first_rebal:
+            snap_to_first_rebal[snap] = t
+
+    for snap_date in needed:
+        raw_rows = get_universe_fundamentals(db, as_of_date=snap_date)
+        as_of_t = snap_to_first_rebal.get(snap_date, snap_date)
+        price_map = _bulk_as_of_prices(prices_repo,
+                                         [r["ticker"] for r in raw_rows],
+                                         as_of_t)
+        enriched = [_enrich_as_of(r, price_map.get(r["ticker"]))
+                     for r in raw_rows]
+        results, _diag = engine.compute(as_of_date=snap_date,
+                                          pre_loaded_rows=enriched,
+                                          market=market)
+        score_cache[snap_date] = results
+
+    # --- Per rebalance: build long / short / decile buckets --------------
+    # `verify_log[i]` keeps the per-rebalance decision so we can render the
+    # latest holdings + compute IC + decile returns after price lookups.
+    verify_log: list[dict] = []
+    universe_tickers: set[str] = set()
+    subsectors_seen: set[str] = set()
+    long_sizes: list[int] = []
+    short_sizes: list[int] = []
+
+    for i, t in enumerate(rebal_dates):
+        snap = effective_per_rebal[i]
+        if snap is None:
+            verify_log.append({"date": t, "long": [], "short": [],
+                                  "deciles": {}})
+            continue
+        scored = score_cache[snap]
+        buckets_by_sub = _decile_buckets_per_subsector(
+            scored, n_buckets=N_DECILES,
+            min_names=min_names_per_subsector,
+        )
+        subsectors_seen.update(buckets_by_sub.keys())
+
+        # Pool top + bottom decile across all qualifying sub-sectors.
+        longs: list = []
+        shorts: list = []
+        deciles_pool: dict[int, list] = {b: [] for b in range(N_DECILES)}
+        for sub, buckets in buckets_by_sub.items():
+            shorts.extend(buckets[0])               # bucket 0 = lowest composite
+            longs.extend(buckets[N_DECILES - 1])    # bucket N-1 = highest
+            for b, rs in enumerate(buckets):
+                deciles_pool[b].extend(rs)
+
+        long_sizes.append(len(longs))
+        short_sizes.append(len(shorts))
+        universe_tickers.update(r.ticker for r in longs)
+        universe_tickers.update(r.ticker for r in shorts)
+        for rs in deciles_pool.values():
+            universe_tickers.update(r.ticker for r in rs)
+
+        # Signed equal-weight: |Σw_long| = 1.0, |Σw_short| = 1.0
+        w_long = (1.0 / len(longs)) if longs else 0.0
+        w_short = (-1.0 / len(shorts)) if shorts else 0.0
+        holdings_signed = ([(r.ticker, w_long) for r in longs] +
+                            [(r.ticker, w_short) for r in shorts])
+
+        verify_log.append({
+            "date": t,
+            "long": longs,
+            "short": shorts,
+            "deciles": deciles_pool,
+            "holdings_signed": holdings_signed,
+        })
+
+    # --- Bulk-fetch price series ----------------------------------------
+    price_cache: dict[str, list[dict]] = {}
+    for ticker in universe_tickers:
+        try:
+            price_cache[ticker] = prices_repo.get_price_series(
+                ticker, start_date, end_date,
+            )
+        except Exception as e:
+            logger.warning("FactorVerify: price fetch failed for %s: %s",
+                            ticker, e)
+            price_cache[ticker] = []
+
+    # --- Per-period returns: long, short, spread, deciles, IC -----------
+    long_curve: list[tuple[str, float]] = []
+    short_curve: list[tuple[str, float]] = []
+    spread_curve: list[tuple[str, float]] = []
+    period_long_rets: list[float] = []
+    period_short_rets: list[float] = []
+    period_spread_rets: list[float] = []
+    decile_period_rets: dict[int, list[float]] = {b: [] for b in range(N_DECILES)}
+    ic_series: list[tuple[str, float]] = []
+
+    long_val = 100.0
+    short_val = 100.0
+    spread_val = 100.0
+    # Anchor curves at the first rebalance date.
+    if verify_log:
+        long_curve.append((verify_log[0]["date"], long_val))
+        short_curve.append((verify_log[0]["date"], short_val))
+        spread_curve.append((verify_log[0]["date"], spread_val))
+
+    for i in range(len(verify_log) - 1):
+        snap = verify_log[i]
+        t = snap["date"]
+        t_next = verify_log[i + 1]["date"]
+        if not snap.get("holdings_signed"):
+            long_curve.append((t_next, long_val))
+            short_curve.append((t_next, short_val))
+            spread_curve.append((t_next, spread_val))
+            continue
+
+        r_long, r_short = _signed_period_return(
+            snap["holdings_signed"], t, t_next, price_cache,
+        )
+        r_spread = r_long - r_short
+        period_long_rets.append(r_long)
+        period_short_rets.append(r_short)
+        period_spread_rets.append(r_spread)
+
+        # Decile bucket returns (equal-weight within each decile).
+        for b, rs in snap.get("deciles", {}).items():
+            if not rs:
+                continue
+            w = 1.0 / len(rs)
+            r_b = 0.0
+            n_priced = 0
+            for r in rs:
+                series = price_cache.get(r.ticker)
+                if not series:
+                    continue
+                p0 = _price_on_or_before(series, t)
+                p1 = _price_on_or_before(series, t_next)
+                if p0 is None or p1 is None or p0 <= 0:
+                    continue
+                r_b += w * (p1 / p0 - 1.0)
+                n_priced += 1
+            if n_priced > 0:
+                decile_period_rets[b].append(r_b)
+
+        # Information Coefficient — Spearman ρ of composite_pctile vs
+        # this-period forward return, across every ranked + priced ticker
+        # (pooled across all sub-sectors).
+        pcts, fwds = [], []
+        for sub_buckets in snap.get("deciles", {}).values():
+            for r in sub_buckets:
+                if r.composite_pctile is None:
+                    continue
+                series = price_cache.get(r.ticker)
+                if not series:
+                    continue
+                p0 = _price_on_or_before(series, t)
+                p1 = _price_on_or_before(series, t_next)
+                if p0 is None or p1 is None or p0 <= 0:
+                    continue
+                pcts.append(float(r.composite_pctile))
+                fwds.append(p1 / p0 - 1.0)
+        ic = _spearman_safe(pcts, fwds)
+        if ic is not None:
+            ic_series.append((t_next, ic))
+
+        long_val *= (1.0 + r_long)
+        short_val *= (1.0 + r_short)
+        spread_val *= (1.0 + r_spread)
+        long_curve.append((t_next, long_val))
+        short_curve.append((t_next, short_val))
+        spread_curve.append((t_next, spread_val))
+
+    # --- Headline metrics -----------------------------------------------
+    ppy = PERIODS_PER_YEAR.get(rebalance_freq, 12)
+    n_periods = len(period_spread_rets)
+
+    def _ann_ret(curve: list[tuple[str, float]]) -> float:
+        if len(curve) < 2 or curve[0][1] <= 0:
+            return 0.0
+        total = curve[-1][1] / curve[0][1] - 1.0
+        years = n_periods / ppy if ppy else 0
+        if years <= 0:
+            return total
+        return (1.0 + total) ** (1.0 / years) - 1.0
+
+    def _ann_vol(rets: list[float]) -> float:
+        if len(rets) < 2:
+            return 0.0
+        mean = sum(rets) / len(rets)
+        var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+        return math.sqrt(var * ppy)
+
+    def _max_dd(curve: list[tuple[str, float]]) -> float:
+        if not curve:
+            return 0.0
+        peak = curve[0][1]
+        worst = 0.0
+        for _, v in curve:
+            if v > peak:
+                peak = v
+            dd = (v - peak) / peak if peak > 0 else 0.0
+            if dd < worst:
+                worst = dd
+        return worst
+
+    ann_long = _ann_ret(long_curve)
+    ann_short = _ann_ret(short_curve)
+    ann_spread = _ann_ret(spread_curve)
+    vol_spread = _ann_vol(period_spread_rets)
+    sharpe_spread = ((ann_spread - RISK_FREE_RATE_ANNUAL) / vol_spread
+                       if vol_spread > 0 else 0.0)
+    dd_spread = _max_dd(spread_curve)
+    hit_rate = (sum(1 for r in period_spread_rets if r > 0) / n_periods
+                  if n_periods else 0.0)
+    ic_vals = [v for _, v in ic_series]
+    mean_ic = sum(ic_vals) / len(ic_vals) if ic_vals else 0.0
+    if len(ic_vals) > 1:
+        ic_mean = mean_ic
+        ic_var = sum((v - ic_mean) ** 2 for v in ic_vals) / (len(ic_vals) - 1)
+        ic_std = math.sqrt(ic_var)
+        ic_tstat = (ic_mean / (ic_std / math.sqrt(len(ic_vals)))
+                      if ic_std > 0 else 0.0)
+    else:
+        ic_tstat = 0.0
+
+    decile_means: dict[int, float] = {}
+    decile_counts: dict[int, int] = {}
+    for b, rs in decile_period_rets.items():
+        decile_counts[b + 1] = len(rs)        # 1-indexed for display
+        decile_means[b + 1] = sum(rs) / len(rs) if rs else 0.0
+
+    metrics = {
+        "ann_return_long":   ann_long,
+        "ann_return_short":  ann_short,
+        "ann_return_spread": ann_spread,
+        "ann_vol_spread":    vol_spread,
+        "spread_sharpe":     sharpe_spread,
+        "spread_max_dd":     dd_spread,
+        "hit_rate":          hit_rate,
+        "mean_ic":           mean_ic,
+        "ic_tstat":          ic_tstat,
+        "n_periods":         n_periods,
+        "n_ic_observations": len(ic_vals),
+    }
+
+    actual_start = verify_log[0]["date"] if verify_log else start_date
+    actual_end = verify_log[-1]["date"] if verify_log else end_date
+
+    return FactorVerificationResult(
+        market=market,
+        start_date=start_date,
+        end_date=end_date,
+        rebalance_freq=rebalance_freq,
+        long_curve=long_curve,
+        short_curve=short_curve,
+        spread_curve=spread_curve,
+        decile_returns=decile_means,
+        decile_counts=decile_counts,
+        ic_series=ic_series,
+        rebalance_log=verify_log,
+        metrics=metrics,
+        n_subsectors_used=len(subsectors_seen),
+        avg_long_size=(sum(long_sizes) / len(long_sizes)
+                         if long_sizes else 0.0),
+        avg_short_size=(sum(short_sizes) / len(short_sizes)
+                          if short_sizes else 0.0),
+        actual_start=actual_start,
+        actual_end=actual_end,
+    )

@@ -583,18 +583,22 @@ class FactorScoringEngine:
         target_signal = signal_map[ticker]
         sorted_signals = sorted(signal_map.values())
         n = len(signal_map)
-        below = sum(1 for v in sorted_signals if v < target_signal)
+        # Rank is "#1 = best" by convention (matches the published percentile,
+        # where 100 = best). Higher signal = better for all three factors
+        # (Value/Quality/Growth) because polarity is already baked into the
+        # signal — so #1 is the ticker with the largest signal value.
+        above = sum(1 for v in sorted_signals if v > target_signal)
         equal = sum(1 for v in sorted_signals if v == target_signal)
-        # 1-indexed rank position via midrank, rounded to nearest int.
-        rank_pos = below + (equal + 1) // 2 if equal > 0 else below + 1
+        rank_pos = above + (equal + 1) // 2 if equal > 0 else above + 1
         pctile = _percentile_rank(ticker, signal_map)
 
         # Build target + nearest-peer PeerSnapshots for the side-by-side
-        # comparison table. Rank map is 1-indexed by ascending signal. Ties
-        # break on ticker string for stable ordering. Nearest 3 by absolute
-        # signal distance — surfaces the names actually sitting around the
-        # target in the rank.
-        ranked = sorted(signal_map.items(), key=lambda kv: (kv[1], kv[0]))
+        # comparison table. Rank map is 1-indexed by DESCENDING signal so #1 =
+        # highest signal = highest percentile, matching the result-line
+        # display and user intuition. Ties break on ticker string for stable
+        # ordering. Nearest 3 by absolute signal distance — surfaces the
+        # names actually sitting around the target in the rank.
+        ranked = sorted(signal_map.items(), key=lambda kv: (-kv[1], kv[0]))
         rank_by_ticker = {t: i + 1 for i, (t, _) in enumerate(ranked)}
         by_ticker_row = {f["ticker"]: f for f in bucket}
 

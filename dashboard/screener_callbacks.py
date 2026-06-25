@@ -1,3 +1,4 @@
+import math
 import sqlite3
 import threading
 import time
@@ -25,10 +26,12 @@ _manual_price_refresh_lock = threading.Lock()
 # manual "Refresh prices now" button fires so a price refresh is reflected
 # without waiting for natural TTL expiry.
 
-# 60s TTL on the Screener's universe-wide latest-snapshot pull. Underlying
-# data refreshes daily via cron; auto-refresh interval is 5 min anyway, so
-# 60s lag is well within tolerance.
-_QUERY_LATEST_CACHE: dict = {"rows": None, "expires": 0.0}
+# 60s TTL on the Screener's latest-snapshot pull. Keyed per market so a
+# HK→US flip pays only for the US slice (not the combined 6,884-row pull).
+# Previously a single global cache shipped both markets even when only
+# one was visible. Underlying data refreshes daily via cron; 60s freshness
+# is well within tolerance.
+_QUERY_LATEST_CACHE: dict = {}   # {market.upper(): {"rows": [...], "expires": ts}}
 _QUERY_LATEST_TTL = 60
 
 # 5-min TTL on per-row "Get price" clicks. Same ticker re-clicked during a
@@ -46,8 +49,7 @@ _PE_CHART_TTL = 60
 def _flush_perf_caches() -> None:
     """Wipe price + query + chart caches. Called from the manual price-
     refresh button so freshly-pulled prices surface immediately."""
-    _QUERY_LATEST_CACHE["rows"] = None
-    _QUERY_LATEST_CACHE["expires"] = 0.0
+    _QUERY_LATEST_CACHE.clear()
     _PRICE_CACHE.clear()
     _PE_CHART_CACHE.clear()
 
@@ -518,9 +520,17 @@ def register_screener_callbacks(app, db_path: str):
     # builds the chart. Previously the flag was State, so the chart only
     # appeared on the *next* filter change after Load was clicked.
     update_inputs.append(Input("screener-subsector-chart-loaded", "data"))
+    # Server-side pagination + sort. page_current / sort_by come from the
+    # DataTable itself when the user clicks a page or column header.
+    # Promoting them to Input lets the callback fire on every paginate /
+    # sort click and return only the visible page slice (~10KB) instead
+    # of the full ~1.6MB payload (US universe).
+    update_inputs.append(Input("screener-table", "page_current"))
+    update_inputs.append(Input("screener-table", "sort_by"))
 
     @app.callback(
         Output("screener-table", "data"),
+        Output("screener-table", "page_count"),
         Output("screener-stat-total", "children"),
         Output("screener-stat-with-data", "children"),
         Output("screener-stat-latest", "children"),
@@ -532,26 +542,37 @@ def register_screener_callbacks(app, db_path: str):
         Output("screener-sector-filter", "options"),
         Output("screener-subsector-filter", "options"),
         *update_inputs,
-        State("user-language", "data"),
-        State("user-market", "data"),
+        # Promoted to Input so toggling language / market in the header
+        # (or confirming the startup modal with a different pick) re-fires
+        # this callback and rebuilds the table with the right language for
+        # stock names + the right market scope for the universe. Was State
+        # before but that left names + industry labels stuck in whichever
+        # language the user last LOADED, not the one they were viewing.
+        Input("user-language", "data"),
+        Input("user-market", "data"),
     )
     def update_screener(_n, _clicks, sector_filter, subsector_filter,
                           min_completeness, pe_aggregation,
                           ticker_query, name_query, *slider_values_then_loaded_lang_market):
         from dashboard.i18n import T as I
         from config.settings import get_sector_label, get_subsector_label
-        # Trailing positional args (in order): user-language State,
-        # user-market State, screener-subsector-chart-loaded Input,
-        # then everything before that is the sliders.
+        # Trailing positional args (in order from the END):
+        #   [-1] user-market  · [-2] user-language
+        #   [-3] sort_by      · [-4] page_current
+        #   [-5] screener-subsector-chart-loaded
+        # Everything before that is the per-filter slider tuples.
         market = (slider_values_then_loaded_lang_market[-1] or "HK").upper()
         lang = slider_values_then_loaded_lang_market[-2] or "en"
-        subsector_loaded = slider_values_then_loaded_lang_market[-3]
-        slider_values = slider_values_then_loaded_lang_market[:-3]
+        sort_by = slider_values_then_loaded_lang_market[-3] or []
+        page_current = slider_values_then_loaded_lang_market[-4] or 0
+        subsector_loaded = slider_values_then_loaded_lang_market[-5]
+        slider_values = slider_values_then_loaded_lang_market[:-5]
 
-        rows = _query_latest(db_path)
-        # Market scoping: keep only rows belonging to the active market.
-        # Rows without a market column (legacy) default to 'HK'.
-        rows = [r for r in rows if (r.get("market") or "HK") == market]
+        # Cache key includes market — HK and US slice independently and
+        # don't churn each other's cache. The downstream Python filter for
+        # `r.market == market` is no longer needed; get_universe_fundamentals
+        # honoured the market scope at the SQL level.
+        rows = _query_latest(db_path, market=market)
         total_universe = _count_universe(db_path, market=market)
         # "Latest snapshot" reflects the freshest *price* date in the
         # historical_prices store — that's what the daily EOD refresh job
@@ -593,16 +614,39 @@ def register_screener_callbacks(app, db_path: str):
                         if _in_range(_xform_value(xform_key, r.get(key)),
                                       lo, hi)]
 
-        # Pre-fetch bilingual names for the filtered set in one DB round-trip
-        # via the local `securities_reference` mirror (sub-ms vs the legacy
-        # `securities_meta` table). Same return shape as the old call.
+        # ----- Server-side sort + paginate (Fix 1) -----
+        # Sort the FILTERED set by whatever column the user clicked. Empty
+        # sort_by = preserve the upstream mcap-desc default from _query_latest.
+        if sort_by:
+            for spec in reversed(sort_by):
+                key = spec.get("column_id")
+                direction = spec.get("direction") or "asc"
+                reverse = direction == "desc"
+                # None values sort last regardless of direction so the user
+                # never wades through ~30% NULLs when sorting ascending.
+                filtered.sort(
+                    key=lambda r, k=key: (r.get(k) is None, r.get(k) or 0),
+                    reverse=reverse,
+                )
+        total_filtered = len(filtered)
+        # Page slice: page_current is 0-indexed; clamp so a stale
+        # page_current after filter narrowing doesn't return an empty page.
+        PAGE = 25
+        n_pages = max(1, math.ceil(total_filtered / PAGE))
+        page_idx = min(max(0, int(page_current or 0)), n_pages - 1)
+        page_rows = filtered[page_idx * PAGE:(page_idx + 1) * PAGE]
+
+        # Pre-fetch bilingual names ONLY for the visible page (25 tickers)
+        # via the local `securities_reference` mirror. Was: pre-fetch for
+        # the FULL filtered set (up to 4k+ tickers); now ~1 ms instead of
+        # ~10 ms and the payload to the browser drops from 1.6 MB to ~10 KB.
         from storage.repository import SecuritiesReferenceRepository
         from storage.database import Database
-        _filtered_tickers = [r.get("ticker") for r in filtered if r.get("ticker")]
+        _page_tickers = [r.get("ticker") for r in page_rows if r.get("ticker")]
         _names = SecuritiesReferenceRepository(Database(db_path)).get_names(
-            _filtered_tickers, lang=lang,
+            _page_tickers, lang=lang,
         )
-        table_data = [_format_row(r, lang, names_by_ticker=_names) for r in filtered]
+        table_data = [_format_row(r, lang, names_by_ticker=_names) for r in page_rows]
 
         # Dropdown options come from the full snapshot population, not filtered
         # view. The displayed label translates via the sub_sectors_zh / parent_
@@ -632,11 +676,12 @@ def register_screener_callbacks(app, db_path: str):
 
         return (
             table_data,
+            n_pages,                          # screener-table.page_count
             f"{total_universe:,}",
             f"{len(rows):,}",
             latest_date,
             I("screener.row_count", lang,
-                count=len(filtered), total=len(rows)),
+                count=total_filtered, total=len(rows)),
             chart,
             subsector_chart,
             sector_header,
@@ -708,8 +753,13 @@ def _register_range_sync(app, slug: str, lo: float, hi: float):
         return [mn_c, mx_c]
 
 
-def _query_latest(db_path: str) -> list[dict]:
+def _query_latest(db_path: str, market: str | None = None) -> list[dict]:
     """Latest snapshot per ticker, joined with securities for name + watchlist flag.
+
+    `market` (HK / US / None) restricts the fetch + caches the result
+    under that key. A HK→US flip therefore only pays for the slice the
+    user is viewing — previously the global cache fetched both markets
+    (6,884 rows / 2.5s) on cold load even when only one was visible.
 
     Routes through `analysis.data_loader.get_universe_fundamentals` so US
     fundamentals (stored in Supabase under `USE_CLOUD_DB=true`) come through
@@ -726,17 +776,18 @@ def _query_latest(db_path: str) -> list[dict]:
     filters + stat cards then see the same coverage as if the daily
     yfinance `.info` cron had been running.
 
-    60s TTL cached: every filter slider + auto-refresh tick used to re-run
-    this; now it hits warm cache for the next minute."""
+    60s TTL cached PER market: every filter slider + auto-refresh tick
+    used to re-run this; now it hits warm cache for the next minute."""
     now = time.time()
-    if (_QUERY_LATEST_CACHE["rows"] is not None
-            and _QUERY_LATEST_CACHE["expires"] > now):
-        return _QUERY_LATEST_CACHE["rows"]
+    key = (market or "ALL").upper()
+    entry = _QUERY_LATEST_CACHE.get(key)
+    if entry is not None and entry["expires"] > now:
+        return entry["rows"]
     from analysis.data_loader import get_universe_fundamentals
     from storage.database import Database
     from storage.repository import LatestPricesRepository
     db = Database(db_path)
-    rows = get_universe_fundamentals(db)
+    rows = get_universe_fundamentals(db, market=market)
 
     # Enrich every row missing `last_price` from the local `latest_prices`
     # cache table. This used to be a single DISTINCT-ON over ~16M Supabase
@@ -809,8 +860,7 @@ def _query_latest(db_path: str) -> list[dict]:
     # ordering so default screener rows are big-name-first).
     rows.sort(key=lambda r: (r.get("market_cap") is None,
                               -(r.get("market_cap") or 0)))
-    _QUERY_LATEST_CACHE["rows"] = rows
-    _QUERY_LATEST_CACHE["expires"] = now + _QUERY_LATEST_TTL
+    _QUERY_LATEST_CACHE[key] = {"rows": rows, "expires": now + _QUERY_LATEST_TTL}
     return rows
 
 

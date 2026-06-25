@@ -23,11 +23,15 @@ from dash.exceptions import PreventUpdate
 
 from analysis.factor_backtest import (
     next_backtest_portfolio_name,
+    run_factor_verification_backtest,
     run_preset_backtest,
 )
 from dashboard.charts import (
+    decile_monotonicity_chart,
     drawdown_curve_chart,
     equity_curve_chart,
+    ic_timeseries_chart,
+    long_short_spread_chart,
     sector_breakdown_chart,
 )
 from dashboard.screener_presets import INVESTOR_PRESETS
@@ -440,3 +444,135 @@ def register_backtest_callbacks(app, db_path: str):
                "ts": int(time.time() * 1000)}
         return (f"Saved as '{name}' — switching to Portfolio tab.",
                  "tab-portfolio", nav)
+
+    # ===============================================================
+    # Factor verification sub-tab — long top decile / short bottom
+    # decile V/Q/G test. See analysis/factor_backtest.py:
+    # run_factor_verification_backtest for the algorithm.
+    # ===============================================================
+    @app.callback(
+        Output("bv-stat-spread", "children"),
+        Output("bv-stat-sharpe", "children"),
+        Output("bv-stat-ic", "children"),
+        Output("bv-stat-tstat", "children"),
+        Output("bv-stat-long", "children"),
+        Output("bv-stat-short", "children"),
+        Output("bv-stat-maxdd", "children"),
+        Output("bv-stat-hit", "children"),
+        Output("bv-window-label", "children"),
+        Output("bv-verdict-summary", "children"),
+        Output("bv-equity-chart", "figure"),
+        Output("bv-decile-chart", "figure"),
+        Output("bv-ic-chart", "figure"),
+        Output("bv-long-table", "data"),
+        Output("bv-short-table", "data"),
+        Output("bv-latest-rebal-date", "children"),
+        Output("bv-run-status", "children"),
+        Output("bv-run-btn", "disabled", allow_duplicate=True),
+        Input("bv-run-btn", "n_clicks"),
+        State("bv-horizon-select", "value"),
+        State("bv-rebal-select", "value"),
+        State("bv-min-names", "value"),
+        State("user-market", "data"),
+        prevent_initial_call=True,
+    )
+    def run_factor_verification(_n, horizon_years, rebal_freq,
+                                  min_names, market):
+        if not horizon_years or not rebal_freq:
+            raise PreventUpdate
+        from datetime import date, timedelta
+        market = (market or "HK").upper()
+        end_iso = date.today().isoformat()
+        start_iso = (date.today() -
+                      timedelta(days=int(horizon_years) * YEARS_TO_DAYS)).isoformat()
+        min_names = int(min_names or 10)
+
+        def _fail(msg):
+            empty_fig = {}
+            return ("—",) * 8 + ("", "", empty_fig, empty_fig, empty_fig,
+                                  [], [], "", msg, False)
+
+        t0 = time.time()
+        try:
+            result = run_factor_verification_backtest(
+                start_date=start_iso, end_date=end_iso,
+                rebalance_freq=rebal_freq, db_path=db_path,
+                market=market, min_names_per_subsector=min_names,
+            )
+        except Exception as e:
+            logger.exception("Factor verification failed")
+            return _fail(f"Failed: {e}")
+        elapsed = time.time() - t0
+        m = result.metrics
+
+        spread_pct  = f"{m['ann_return_spread'] * 100:+.1f}%"
+        sharpe_str  = f"{m['spread_sharpe']:+.2f}"
+        ic_str      = f"{m['mean_ic']:+.4f}"
+        tstat_str   = f"{m['ic_tstat']:+.2f}"
+        long_pct    = f"{m['ann_return_long'] * 100:+.1f}%"
+        short_pct   = f"{m['ann_return_short'] * 100:+.1f}%"
+        maxdd_pct   = f"{m['spread_max_dd'] * 100:.1f}%"
+        hit_pct     = f"{m['hit_rate'] * 100:.0f}%"
+        window_lbl  = (f"{result.actual_start} → {result.actual_end} · "
+                        f"{result.n_subsectors_used} sub-sectors · "
+                        f"avg long {result.avg_long_size:.0f} / "
+                        f"short {result.avg_short_size:.0f} · "
+                        f"{m['n_periods']} periods")
+
+        # Verdict summary text
+        spread_real = (m["ann_return_spread"] > 0
+                         and m["spread_sharpe"] > 0.5
+                         and m["mean_ic"] > 0.02)
+        d10 = result.decile_returns.get(10, 0.0)
+        d1 = result.decile_returns.get(1, 0.0)
+        d10_d1 = d10 > d1
+        n_correct = sum(1 for b in range(1, 10)
+                          if result.decile_returns.get(b + 1, 0.0)
+                              > result.decile_returns.get(b, 0.0))
+        verdict_summary = (
+            f"Signal real? {'✓ YES' if spread_real else '✗ NO'} "
+            f"(needs ann>0, Sharpe>0.5, IC>0.02). "
+            f"D10 vs D1: {'✓' if d10_d1 else '✗'} "
+            f"(D10={d10*100:+.2f}%, D1={d1*100:+.2f}%). "
+            f"Inner-step monotonicity: {n_correct}/9 steps go the right way."
+        )
+
+        eq_fig = long_short_spread_chart(
+            result.long_curve, result.short_curve, result.spread_curve,
+        )
+        decile_fig = decile_monotonicity_chart(
+            result.decile_returns, result.decile_counts,
+        )
+        ic_fig = ic_timeseries_chart(result.ic_series)
+
+        # Latest rebalance composition tables
+        latest = result.rebalance_log[-1] if result.rebalance_log else None
+        long_rows, short_rows = [], []
+        latest_date = ""
+        if latest:
+            latest_date = f"as of {latest['date']}"
+            for r in latest.get("long", []):
+                long_rows.append({
+                    "ticker":     r.ticker,
+                    "name":       r.name,
+                    "sub_sector": getattr(r, "sector", "—") or "—",
+                    "composite":  round(r.composite_pctile, 1)
+                                     if r.composite_pctile is not None else None,
+                })
+            for r in latest.get("short", []):
+                short_rows.append({
+                    "ticker":     r.ticker,
+                    "name":       r.name,
+                    "sub_sector": getattr(r, "sector", "—") or "—",
+                    "composite":  round(r.composite_pctile, 1)
+                                     if r.composite_pctile is not None else None,
+                })
+            long_rows.sort(key=lambda x: -(x["composite"] or 0))
+            short_rows.sort(key=lambda x: (x["composite"] or 0))
+
+        return (spread_pct, sharpe_str, ic_str, tstat_str,
+                 long_pct, short_pct, maxdd_pct, hit_pct,
+                 window_lbl, verdict_summary,
+                 eq_fig, decile_fig, ic_fig,
+                 long_rows, short_rows, latest_date,
+                 f"Done in {elapsed:.1f}s", False)

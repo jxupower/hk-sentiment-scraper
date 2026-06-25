@@ -1,4 +1,6 @@
+import os
 import sys
+import time
 from datetime import datetime
 
 import click
@@ -198,6 +200,31 @@ def dashboard(port: int, debug: bool):
     try:
         from dashboard.app import create_app
         app = create_app(components["settings"].DB_PATH, components["settings"])
+
+        # Pre-warm the Screener's per-market cache for both HK + US in
+        # background threads. The first user to land on the Screener tab
+        # then hits warm cache (~0ms data fetch) instead of paying the
+        # 2.5s cold Supabase round-trip. Threads daemon so dashboard
+        # boot isn't blocked if a warm-up errors.
+        #
+        # `SKIP_DASHBOARD_PREWARM=true` is the escape hatch used by the CI
+        # smoke job — CI runs against an empty SQLite DB with no Supabase
+        # creds, so the warm-up has nothing useful to do and the failed
+        # network calls just add noise to the log.
+        if os.getenv("SKIP_DASHBOARD_PREWARM", "").lower() != "true":
+            import threading
+            from dashboard.screener_callbacks import _query_latest
+            def _warm(market):
+                try:
+                    t0 = time.time()
+                    rows = _query_latest(components["settings"].DB_PATH, market=market)
+                    console.print(f"[dim]Screener cache warmed: {market} · "
+                                  f"{len(rows):,} rows · {time.time()-t0:.1f}s[/dim]")
+                except Exception as e:
+                    console.print(f"[yellow]Pre-warm {market} failed: {e}[/yellow]")
+            threading.Thread(target=_warm, args=("HK",), daemon=True).start()
+            threading.Thread(target=_warm, args=("US",), daemon=True).start()
+
         app.run(host="0.0.0.0", port=port, debug=debug)
     except KeyboardInterrupt:
         runner.stop()
@@ -756,6 +783,129 @@ def backtest_optimize(screen_id, industry, start, end, train_months,
         ir = f"{r.avg_information_ratio:+.3f}" if r.avg_information_ratio is not None else "N/A"
         table.add_row(r.industry, ir, key)
     console.print(table)
+
+
+@backtest.command("factor-verify")
+@click.option("--market", default="HK", show_default=True,
+                type=click.Choice(["HK", "US"]),
+                help="Market scope for the V/Q/G universe.")
+@click.option("--start", default="2023-01-01", show_default=True,
+                help="Start date (YYYY-MM-DD).")
+@click.option("--end", default=None, help="End date. Defaults to today.")
+@click.option("--freq", default="1m", show_default=True,
+                type=click.Choice(["1d", "3d", "1w", "1m"]),
+                help="Rebalance stride in trading days.")
+@click.option("--min-names", default=10, show_default=True, type=int,
+                help="Minimum ranked tickers per sub-sector to include "
+                       "in the decile cuts.")
+@click.option("--out-csv", default=None,
+                help="Optional CSV output of (decile, mean_return, n_obs) + "
+                       "the IC time series.")
+def backtest_factor_verify(market, start, end, freq, min_names, out_csv):
+    """Long top decile / short bottom decile V/Q/G factor-efficacy test.
+
+    Sub-sector-neutral · equal-weight within each leg · dollar-neutral
+    long+short. Outputs annualised long/short/spread returns, the Spread
+    Sharpe at rf=3%, mean Information Coefficient + its t-stat, and the
+    per-decile mean forward-return ladder (the monotonicity test).
+
+    Paper signal test only — no transaction costs, no borrow fees, no
+    HK shorting constraints. Cf. analysis/factor_backtest.run_factor_
+    verification_backtest for the algorithm."""
+    from datetime import date as date_cls
+    import config.settings as settings
+    from analysis.factor_backtest import run_factor_verification_backtest
+
+    end = end or date_cls.today().strftime("%Y-%m-%d")
+    console.print(f"[bold cyan]Factor verification: {market} | freq={freq} | "
+                  f"{start} to {end}[/bold cyan]")
+
+    result = run_factor_verification_backtest(
+        start_date=start, end_date=end, rebalance_freq=freq,
+        db_path=settings.DB_PATH, market=market,
+        min_names_per_subsector=min_names,
+    )
+    m = result.metrics
+
+    def pct(v):
+        return f"{v*100:+.2f}%" if v is not None else "N/A"
+    def num(v, d=3):
+        return f"{v:+.{d}f}" if v is not None else "N/A"
+
+    table = Table(title=f"Long/Short V/Q/G verification — {market}",
+                    show_lines=False)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("Window actually traded",
+                    f"{result.actual_start} → {result.actual_end}")
+    table.add_row("Sub-sectors used (≥10 names)",
+                    f"{result.n_subsectors_used}")
+    table.add_row("Avg long basket size", f"{result.avg_long_size:.0f}")
+    table.add_row("Avg short basket size", f"{result.avg_short_size:.0f}")
+    table.add_row("N rebalance periods", f"{m['n_periods']}")
+    table.add_row("", "")
+    table.add_row("Long leg ann. return", pct(m["ann_return_long"]))
+    table.add_row("Short leg ann. return", pct(m["ann_return_short"]))
+    table.add_row("[bold]Spread ann. return[/bold]",
+                    f"[bold]{pct(m['ann_return_spread'])}[/bold]")
+    table.add_row("Spread ann. vol", pct(m["ann_vol_spread"]))
+    table.add_row("Spread Sharpe (rf=3%)", num(m["spread_sharpe"]))
+    table.add_row("Spread max drawdown", pct(m["spread_max_dd"]))
+    table.add_row("Hit rate (long > short)", pct(m["hit_rate"]))
+    table.add_row("Mean Information Coefficient",
+                    num(m["mean_ic"], 4))
+    table.add_row("IC t-stat", num(m["ic_tstat"], 2))
+    console.print(table)
+
+    # Decile monotonicity ladder
+    dec_table = Table(title="Decile forward-return ladder "
+                            "(1 = bottom, 10 = top)",
+                       show_lines=False)
+    dec_table.add_column("Decile", style="bold")
+    dec_table.add_column("Mean period return", justify="right")
+    dec_table.add_column("Observations", justify="right")
+    for b in range(1, 11):
+        dec_table.add_row(f"D{b}", pct(result.decile_returns.get(b, 0.0)),
+                           str(result.decile_counts.get(b, 0)))
+    console.print(dec_table)
+
+    # Pass/fail criteria summary
+    spread_real = (m["ann_return_spread"] > 0
+                     and m["spread_sharpe"] > 0.5
+                     and m["mean_ic"] > 0.02)
+    d10 = result.decile_returns.get(10, 0.0)
+    d1 = result.decile_returns.get(1, 0.0)
+    monotone_endpoints = d10 > d1
+    n_correct_steps = sum(1 for b in range(1, 10)
+                            if result.decile_returns.get(b + 1, 0.0)
+                                 > result.decile_returns.get(b, 0.0))
+    console.print()
+    console.print("[bold]Factor verdict:[/bold]")
+    console.print(f"  Spread real (ann>0, Sharpe>0.5, IC>0.02): "
+                  f"{'[green]YES[/green]' if spread_real else '[yellow]NO[/yellow]'}")
+    console.print(f"  D10 > D1 (endpoint monotonicity): "
+                  f"{'[green]YES[/green]' if monotone_endpoints else '[red]NO[/red]'}"
+                  f" (D10={pct(d10)}, D1={pct(d1)})")
+    console.print(f"  Inner-step monotonicity: "
+                  f"{n_correct_steps}/9 steps go in the right direction")
+
+    if out_csv:
+        import csv
+        with open(out_csv, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["section", "key", "value"])
+            for k, v in m.items():
+                w.writerow(["metrics", k, v])
+            for b in range(1, 11):
+                w.writerow(["decile",
+                              f"D{b}",
+                              result.decile_returns.get(b, 0.0)])
+                w.writerow(["decile_n",
+                              f"D{b}",
+                              result.decile_counts.get(b, 0)])
+            for d, ic in result.ic_series:
+                w.writerow(["ic", d, ic])
+        console.print(f"  CSV: [cyan]{out_csv}[/cyan]")
 
 
 def _print_sector_signals(sector_signal_repo):

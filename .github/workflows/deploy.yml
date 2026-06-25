@@ -1,0 +1,154 @@
+# CD pipeline for the Croissant Stock Analyser.
+#
+# Triggers on a successful CI run on the main branch (so any failing
+# lint / smoke / docker-build run blocks the deploy automatically — no
+# separate gate needed).
+#
+# Two jobs in sequence:
+#   1. build-push  — multi-arch Docker build (linux/arm64), push to ghcr.io
+#                    with both :latest and a :sha-<short> tag for rollbacks
+#   2. deploy      — SSH into the Oracle VM, docker compose pull, up -d
+#
+# Required GitHub repo secrets (set via Settings → Secrets):
+#   - VM_HOST          : Oracle Cloud VM public IP
+#   - SSH_PRIVATE_KEY  : private key whose .pub is in /home/deploy/.ssh/authorized_keys
+#
+# GHCR auth uses the built-in GITHUB_TOKEN (workflow `permissions:` block grants
+# `packages: write`), so no PAT is needed in CI itself.
+#
+# Image registry: ghcr.io/jxupower/hk-sentiment-scraper
+# - :latest          → always tracks main
+# - :sha-<7chars>    → immutable per commit, used for rollback
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:       # manual re-deploy from Actions UI
+
+# Prevent two deploys racing each other. If a new commit lands while one
+# deploy is in flight, the previous gets cancelled — the new one is
+# always the one we want.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # 1. Build the production image + push to ghcr.io
+  # ============================================================
+  build-push:
+    # Only fire when CI succeeded. `workflow_dispatch` invocations skip
+    # this check (workflow_run isn't in conclusion).
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.sha_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        name: Compute image tags
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "sha_tag=sha-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "Will tag image as: latest, sha-${SHORT_SHA}"
+
+      # QEMU only needed because the GHA runner is amd64 but the Oracle
+      # target is arm64. Native arm64 runners exist (`ubuntu-latest-arm`)
+      # but they cost; QEMU emulation is free and the build is only ~8min.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push arm64 image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ghcr.io/jxupower/hk-sentiment-scraper:latest
+            ghcr.io/jxupower/hk-sentiment-scraper:${{ steps.meta.outputs.sha_tag }}
+          # Aggressive caching to keep redeploys fast (~1-2min after first build).
+          cache-from: type=gha,scope=deploy-arm64
+          cache-to: type=gha,scope=deploy-arm64,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+  # ============================================================
+  # 2. SSH into Oracle VM + pull + restart
+  # ============================================================
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          # `script_stop: true` aborts the SSH session on the first failed
+          # command — without it, a failed `docker compose pull` would
+          # silently proceed to `up -d` and the deploy would "succeed".
+          script_stop: true
+          script: |
+            set -e
+            echo "==> Deploying image: ${{ needs.build-push.outputs.image_tag }}"
+            echo "==> Pulling latest image..."
+            sudo docker compose -f /srv/dashboard/docker-compose.yml pull
+            echo "==> Recreating container..."
+            sudo docker compose -f /srv/dashboard/docker-compose.yml up -d
+            echo "==> Reaping dangling images..."
+            sudo docker image prune -f
+            echo "==> Container status:"
+            sudo docker compose -f /srv/dashboard/docker-compose.yml ps
+
+      # Verify the container actually became healthy after the deploy.
+      # If it's still "starting" after 90s, the deploy is considered failed
+      # (likely a config / network / image regression) and the workflow
+      # exits non-zero so the Actions UI shows red.
+      - name: Wait for healthy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: deploy
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            for i in $(seq 1 18); do
+              STATUS=$(sudo docker inspect --format='{{.State.Health.Status}}' \
+                  hk-sentiment-dashboard 2>/dev/null || echo "missing")
+              if [ "$STATUS" = "healthy" ]; then
+                echo "Container healthy after ${i} attempts (~$((i * 5))s)"
+                exit 0
+              fi
+              echo "[$i/18] Status: $STATUS, sleeping 5s..."
+              sleep 5
+            done
+            echo "Container did not become healthy within 90s — failing deploy"
+            sudo docker compose -f /srv/dashboard/docker-compose.yml logs --tail=100
+            exit 1

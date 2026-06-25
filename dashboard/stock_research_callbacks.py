@@ -59,6 +59,10 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-save-btn", "children"),
         Output("sr-export-btn", "children"),
         Output("sr-devil-btn", "children"),
+        Output("sr-forensic-ai-btn", "children"),
+        Output("sr-forensic-ai-note", "children"),
+        Output("sr-bullbear-btn", "children"),
+        Output("sr-bullbear-note", "children"),
         Input("user-language", "data"),
         Input("user-market", "data"),
     )
@@ -113,6 +117,10 @@ def register_stock_research_callbacks(app, db_path: str):
             I("research.btn.save_notes", lang),
             I("research.btn.export_md", lang),
             I("research.btn.counter_args", lang),
+            I("research.btn.ai_forensic", lang),
+            I("research.ai_forensic.note", lang),
+            I("research.btn.bullbear", lang),
+            I("research.bullbear.note", lang),
         )
     sector_risk_path = os.path.join(os.path.dirname(__file__), "..", "config",
                                      "sector_risk.yaml")
@@ -519,19 +527,84 @@ def register_stock_research_callbacks(app, db_path: str):
                 income_chart, balance_chart, cashflow_chart, earnings_chart,
                 income_table, balance_table, cashflow_table, earnings_table)
 
+    # ----- AI Forensic Review (Section 3b) -----
+    # Claude-powered red-flag scan over the cached income/balance/cashflow
+    # rows. Distinct from Section 3's rule-based forensic card — that one
+    # is hand-coded heuristics in analysis/forensic.py, this is an LLM pass
+    # that can pick up patterns the static rules miss.
+    @app.callback(
+        Output("sr-forensic-ai-output", "children"),
+        Input("sr-forensic-ai-btn", "n_clicks"),
+        State("sr-ticker-select", "value"),
+        prevent_initial_call=True,
+    )
+    def ai_forensic_review(_clicks, ticker):
+        if not ticker:
+            return ""
+        from config.settings import CLAUDE_API_KEY
+        if not CLAUDE_API_KEY:
+            return html.P("Add CLAUDE_API_KEY to .env to use AI Forensic Review.",
+                          className="text-muted small fst-italic")
+        from analysis.data_loader import get_or_fetch_financial_statements
+        from storage.database import Database
+        try:
+            fs = get_or_fetch_financial_statements(ticker, Database(db_path))
+        except Exception as e:
+            return html.P(f"Could not load statements: {e}",
+                          className="text-muted small")
+        if not (fs and any(fs.get(k) for k in ("income", "balance", "cashflow"))):
+            return html.P("No financial statements available for this ticker. "
+                          "Click 'Load Financial Statements' above first.",
+                          className="text-muted small fst-italic")
+        r = build_research_report(ticker, db_path, sector_risk_path,
+                                    skip_financial_statements=True)
+        return _generate_forensic_review(fs, ticker,
+                                           r.name if r else ticker)
+
+    # ----- AI Bull / Bear Stress Test (Section 3b) -----
+    # Uses the full research-report context (factor scores, screens, risk +
+    # red flags, DCF MoS) rather than raw statement rows — Bull/Bear is
+    # thesis-level reasoning, not line-item-level. Asks Claude to argue each
+    # side at maximum conviction without balancing, then surface 3-5 KPIs to
+    # watch over the next 12 months.
+    @app.callback(
+        Output("sr-bullbear-output", "children"),
+        Input("sr-bullbear-btn", "n_clicks"),
+        State("sr-ticker-select", "value"),
+        prevent_initial_call=True,
+    )
+    def bull_bear_stress_test(_clicks, ticker):
+        if not ticker:
+            return ""
+        from config.settings import CLAUDE_API_KEY
+        if not CLAUDE_API_KEY:
+            return html.P("Add CLAUDE_API_KEY to .env to use AI Bull / Bear "
+                          "Stress Test.",
+                          className="text-muted small fst-italic")
+        r = build_research_report(ticker, db_path, sector_risk_path,
+                                    skip_financial_statements=True)
+        if r is None:
+            return html.P("No data for this ticker.",
+                          className="text-muted small")
+        return _generate_bull_bear_stress_test(r)
+
     # Reset Section 3b when the user picks a different ticker so stale
     # statements from the prior ticker don't bleed through until they click
-    # the Load button again.
+    # the Load button again. Also clears the AI forensic + Bull/Bear outputs
+    # so the previous ticker's reviews don't sit next to a different ticker's
+    # data.
     @app.callback(
         Output("sr-fs-tabs-wrapper", "style", allow_duplicate=True),
         Output("sr-fs-source-pill", "children", allow_duplicate=True),
         Output("sr-fs-coverage", "children", allow_duplicate=True),
         Output("sr-fs-status", "children", allow_duplicate=True),
+        Output("sr-forensic-ai-output", "children", allow_duplicate=True),
+        Output("sr-bullbear-output", "children", allow_duplicate=True),
         Input("sr-ticker-select", "value"),
         prevent_initial_call=True,
     )
     def reset_fs_section_on_ticker_change(_ticker):
-        return {"display": "none"}, "", "", ""
+        return {"display": "none"}, "", "", "", "", ""
 
     # ----- Period-driven charts (Sections 4 + 5) -----
     # Fires on ticker change AND period selector change. Does NOT call
@@ -780,7 +853,7 @@ def _render_composite(r, ticker: str, opts: list,
     Matches the Outputs ordering exactly — same number of fields as the
     single-stock path, just with single-stock-specific cells empty and
     the composite cards populated."""
-    import math
+    # `math` is already imported at module top — local re-import was redundant.
     def _fmt_pct(v, n=1):
         if v is None or (isinstance(v, float) and math.isnan(v)):
             return "—"
@@ -1805,6 +1878,212 @@ def _load_dcf_inputs_only(db_path: str, ticker: str) -> Optional[DCFInputs]:
             inputs.eps_ttm = eps
             return inputs
     return None
+
+
+def _serialize_statement_for_ai(statement_type: str,
+                                  rows: list[dict], max_periods: int = 5) -> str:
+    """Compact text serialization of one financial statement for the LLM prompt.
+
+    Format: header row of period-end dates, then one row per line item with
+    raw numeric values (no rounding). Values in native currency so the AI
+    sees the same scale the user does in the table view. Returns empty
+    string if `rows` is empty.
+    """
+    if not rows:
+        return ""
+    rows_sorted = sorted(rows, key=lambda r: r["period_end_date"],
+                          reverse=True)[:max_periods]
+    periods = [r["period_end_date"] for r in rows_sorted]
+    # Union of line items preserving order of first appearance, mirroring
+    # the on-screen DataTable so AI references match what the user reads.
+    seen: dict[str, int] = {}
+    for r in rows_sorted:
+        for k in r["line_items"].keys():
+            seen.setdefault(k, len(seen))
+    line_items_ordered = list(seen.keys())
+    ccy = rows_sorted[0].get("currency") or ""
+    title = {"income": "Income Statement", "balance": "Balance Sheet",
+              "cashflow": "Cash Flow Statement"}.get(statement_type,
+                                                       statement_type)
+    header = title + (f" (currency: {ccy})" if ccy else "")
+    lines = [header, "Period," + ",".join(periods)]
+    for li in line_items_ordered:
+        vals = []
+        for r in rows_sorted:
+            v = r["line_items"].get(li)
+            vals.append("" if v is None else f"{v:.0f}")
+        lines.append(f"{li}," + ",".join(vals))
+    return "\n".join(lines)
+
+
+def _generate_forensic_review(fs: dict, ticker: str, name: str) -> html.Div:
+    """Claude-powered forensic red-flag scan over cached financial statements.
+
+    Feeds 5 most recent periods of Income / Balance / Cash Flow as plain
+    CSV-ish text and asks Claude to identify warning signs across the
+    seven Plain-Bagel-style review areas. The prompt explicitly tells the
+    model it has no access to footnote / MD&A / auditor text so it should
+    flag absences rather than fabricate findings on areas 5-7.
+    """
+    from config.settings import CLAUDE_API_KEY
+    try:
+        import anthropic
+        income_txt = _serialize_statement_for_ai("income", fs.get("income", []))
+        balance_txt = _serialize_statement_for_ai("balance", fs.get("balance", []))
+        cashflow_txt = _serialize_statement_for_ai("cashflow", fs.get("cashflow", []))
+        data_blocks = "\n\n".join(b for b in
+                                    (income_txt, balance_txt, cashflow_txt) if b)
+
+        prompt = (
+            f"You are reviewing only the quantitative line items from "
+            f"{ticker} ({name})'s most recent reports. You do NOT have access "
+            f"to footnote narrative, accounting-policy disclosures, MD&A, or "
+            f"the auditor letter. For areas 5/6/7 (accounting changes, "
+            f"management commentary, auditor signals), flag what the absence "
+            f"of text-based data prevents you from verifying and tell the "
+            f"user what to look up in the 10-K / annual report. Do not "
+            f"invent text-based findings.\n\n"
+            "Act as a forensic financial analyst reviewing this company's "
+            "most recent annual report or 10-K filing for potential red "
+            "flags. Your job is not to provide an investment recommendation. "
+            "Your job is to identify warning signs that a careful analyst "
+            "should investigate further.\n\n"
+            "Review the following areas and flag anything unusual, "
+            "inconsistent or worth deeper scrutiny:\n"
+            "  1. Revenue quality: unusual revenue recognition policies, "
+            "large deferred revenue movements, revenue growth that does not "
+            "match cash flow\n"
+            "  2. Margin trends: gross margin or operating margin "
+            "compression with limited explanation\n"
+            "  3. Working capital: rising accounts receivable or inventory "
+            "relative to revenue growth\n"
+            "  4. Debt and liquidity: debt levels, covenant risks, "
+            "refinancing timelines\n"
+            "  5. Footnotes and accounting changes: any changes in "
+            "accounting policy or estimates\n"
+            "  6. Management commentary: language that is vague, defensive "
+            "or inconsistent with the numbers\n"
+            "  7. Auditor signals: any qualified opinions, going concern "
+            "language or auditor changes\n\n"
+            "For each red flag, cite the specific line item(s) and period "
+            "you are referencing so the user can verify in the statements "
+            "above. Explain why it matters and what a follow-up analysis "
+            "should focus on.\n\n"
+            "Output format: numbered list. Each item on its own line as: "
+            "'[Area N] Red flag — Why it matters — Follow-up'. Plain text, "
+            "no markdown.\n\n"
+            "Financial statement data (most recent 5 periods, newest first):"
+            f"\n\n{data_blocks}"
+        )
+        client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=900,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        return html.Div([html.P(p, style={"color": T.TEXT,
+                                            "fontSize": "0.85rem",
+                                            "marginBottom": "0.5rem",
+                                            "whiteSpace": "pre-wrap"})
+                          for p in text.split("\n") if p.strip()])
+    except Exception as e:
+        return html.P(f"Forensic review unavailable: {e}",
+                      className="text-muted small fst-italic")
+
+
+def _generate_bull_bear_stress_test(r) -> html.Div:
+    """Claude-powered paired Bull / Bear case + 12-month monitoring KPIs.
+
+    Uses the full research-report context (factor scores, screens, risk +
+    red flags, DCF margin-of-safety) rather than raw statement rows —
+    Bull/Bear is thesis-level reasoning, not line-item-level.
+
+    The prompt explicitly asks Claude NOT to balance the two views: each
+    section reads as if a true believer is arguing to a sceptical committee.
+    Output rendered via `dcc.Markdown` so the three-section structure with
+    bulleted KPIs renders cleanly.
+    """
+    from config.settings import CLAUDE_API_KEY
+    try:
+        import anthropic
+        fr = r.factor_result
+        context = [f"Ticker: {r.ticker} ({r.name})",
+                    f"Sector: {r.sector}"]
+        if fr:
+            context.append(f"Composite percentile: {fr.composite_pctile}")
+            context.append(
+                f"V/Q/G/S percentiles: {fr.value_pctile}/{fr.quality_pctile}/"
+                f"{fr.growth_pctile}/{fr.sentiment_pctile}")
+        passed = [s.name for s in r.screen_pass_fail if s.passed]
+        if passed:
+            context.append(f"Passes screens: {', '.join(passed)}")
+        failed = [s.name for s in r.screen_pass_fail if not s.passed]
+        if failed:
+            context.append(f"Fails screens: {', '.join(failed)}")
+        if r.risk_flags:
+            context.append(
+                f"Sector risk flags: {', '.join(f.label for f in r.risk_flags)}")
+        if r.red_flags:
+            context.append(
+                "Forensic red flags: "
+                + "; ".join(rf.title for rf in r.red_flags[:6]))
+        if r.default_dcf:
+            mos = r.default_dcf.margin_of_safety
+            context.append(
+                f"DCF margin of safety: {mos*100:+.0f}%" if mos
+                else "DCF margin of safety: NA")
+        if r.market_cap:
+            context.append(f"Market cap: ${r.market_cap/1e9:.1f}B")
+        if r.current_price:
+            context.append(f"Current price: ${r.current_price:.2f}")
+
+        prompt = (
+            f"I am considering an investment in {r.ticker} ({r.name}). I want "
+            "you to stress-test my thinking by making the strongest possible "
+            "case for both sides. Do not try to balance the two views. Each "
+            "section should be written as if the analyst genuinely believes "
+            "that position and is trying to convince a sceptical investment "
+            "committee.\n\n"
+            "Bull case: make the most compelling possible argument for why "
+            "this company could significantly outperform over the next 3 to "
+            "5 years. Cover the business model, competitive position, growth "
+            "drivers and why the market may be underpricing the "
+            "opportunity.\n\n"
+            "Bear case: make the most compelling possible argument for why "
+            "this company could significantly underperform or decline in "
+            "value over the next 3 to 5 years. Cover structural risks, "
+            "competitive threats, valuation concerns and what the bulls are "
+            "getting wrong.\n\n"
+            "After both cases, list the 3 to 5 specific data points or "
+            "events I should monitor over the next 12 months that would "
+            "tell me which case is playing out.\n\n"
+            "Output format (markdown):\n"
+            "**Bull case**\n"
+            "...prose, can use bullet points...\n\n"
+            "**Bear case**\n"
+            "...prose, can use bullet points...\n\n"
+            "**What to monitor over the next 12 months**\n"
+            "- KPI 1: what to watch and which case it confirms\n"
+            "- KPI 2: ...\n"
+            "(3-5 items total)\n\n"
+            "Use the context below to ground both cases in this specific "
+            "ticker — reference the numbers and flags rather than writing "
+            "generic sector commentary.\n\n"
+            "Context:\n" + "\n".join(context)
+        )
+        client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=1600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        return dcc.Markdown(text,
+                              style={"color": T.TEXT, "fontSize": "0.88rem",
+                                      "lineHeight": "1.55"},
+                              className="bullbear-md")
+    except Exception as e:
+        return html.P(f"Bull/Bear stress test unavailable: {e}",
+                      className="text-muted small fst-italic")
 
 
 def _generate_devil_advocate(r) -> html.Div:

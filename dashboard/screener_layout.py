@@ -66,7 +66,13 @@ def _range_filter(label: str, slug: str, lo: float, hi: float, step: float):
 
 def build_screener_tab() -> html.Div:
     return html.Div([
-        dcc.Interval(id="screener-auto-refresh", interval=300_000, n_intervals=0),
+        # Raised from 5min → 1hr. The previous 5-min cadence silently
+        # re-flushed the full ~1.6MB Screener payload to every browser
+        # every 5 minutes — pure network/render burn since the underlying
+        # `historical_prices` table only moves once a day after the EOD
+        # cron. 1hr is well within "stale" tolerance; the manual "Refresh
+        # prices now" button covers the same-day case.
+        dcc.Interval(id="screener-auto-refresh", interval=3_600_000, n_intervals=0),
         # Per-session flag: has the user clicked "Load Sub-Sector P/E Chart"?
         # Once True, the sub-sector chart stays reactive to filter changes for
         # the rest of the session. Saves ~1s/render before that click.
@@ -352,9 +358,22 @@ def build_screener_tab() -> html.Div:
                         {"name": "Completeness", "id": "completeness_pct", "type": "numeric"},
                     ],
                     data=[],
+                    # Server-side pagination + sort + native filter.
+                    # Previously page_action defaulted to 'native' which
+                    # shipped the entire ~1.6 MB / 4,123-row US payload
+                    # to the browser on every render. Now we ship only
+                    # the visible 25-row page (~10 KB), with the server
+                    # applying sort + page slicing per the user's input.
+                    # Filter stays native — Dash filter_action='custom'
+                    # requires re-implementing its mini-DSL, not worth
+                    # the work since the search boxes + sliders + sector
+                    # dropdowns already do the heavy filtering server-side.
+                    page_action="custom",
+                    page_current=0,
                     page_size=25,
-                    sort_action="native",
-                    filter_action="native",
+                    sort_action="custom",
+                    sort_by=[],
+                    filter_action="none",
                     style_cell=T.DATATABLE_CELL,
                     style_cell_conditional=[
                         {"if": {"column_id": "ticker"}, "textAlign": "left",

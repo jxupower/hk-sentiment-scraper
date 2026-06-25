@@ -1,0 +1,57 @@
+# Virtual envs + local Python caches — never want these in the image.
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local SQLite DB + cached HKEX downloads + seed checkpoints — these get
+# regenerated on first boot inside the container. Shipping a stale DB
+# would also balloon the image size by ~50MB.
+data/sentiment.db
+data/sentiment.db-shm
+data/sentiment.db-wal
+data/cache/
+data/.seed_checkpoint.json
+
+# Secrets — must NEVER be baked into the image. The runtime gets these
+# via `docker run --env-file` or a Compose `env_file:` mount.
+.env
+.env.*
+!.env.example
+
+# Git internals + large editor / OS clutter.
+.git/
+.gitignore
+.gitattributes
+.github/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Notebooks, screenshots, scratch directories that the user keeps locally.
+*.ipynb
+*.ipynb_checkpoints/
+*.png
+*.jpg
+*.jpeg
+*.xlsx
+*.csv.bak
+notebooks/
+scratch/
+tasks/
+
+# CI artefacts + claude planning files (none of this belongs in the image).
+plans/
+*.log
+*.pid
+
+# Docker meta — no need to copy these into the image being built.
+Dockerfile
+docker-compose.yml
+.dockerignore

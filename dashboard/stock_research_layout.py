@@ -388,6 +388,68 @@ def build_stock_research_tab() -> html.Div:
                         ]),
                     ]),
                 ]),
+
+                # AI Forensic Review — separate Claude pass over the cached
+                # statement rows. Distinct from Section 3's rule-based
+                # `Forensic red flags` card (that one is hand-coded heuristics
+                # in analysis/forensic.py; this one is an LLM scan of the
+                # actual line items).
+                dbc.Card([
+                    dbc.CardBody([
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Button("AI Forensic Review",
+                                           id="sr-forensic-ai-btn",
+                                           color="primary", size="sm"),
+                            ], width="auto"),
+                            dbc.Col(
+                                html.Span(
+                                    "AI reviews quantitative line items only "
+                                    "— no access to footnotes, MD&A, or "
+                                    "auditor letters.",
+                                    id="sr-forensic-ai-note",
+                                    style={"color": T.TEXT_MUTED,
+                                            "fontSize": "0.75rem",
+                                            "fontStyle": "italic"}),
+                            ),
+                        ], align="center", className="g-2 mb-2"),
+                        dcc.Loading(type="dot", color=T.PRIMARY, children=[
+                            html.Div(id="sr-forensic-ai-output",
+                                      className="mt-2"),
+                        ]),
+                    ], style={"padding": "14px 16px"}),
+                ], style=CARD_STYLE, className="mt-3"),
+
+                # AI Bull / Bear Stress Test — paired argumentation across the
+                # full research context (factor scores, screens, risk + red
+                # flags, DCF). Asks Claude to argue each side at maximum
+                # conviction without balancing, then list 12-month monitoring
+                # KPIs. Complements the Section 6 devil's-advocate (bear-only).
+                dbc.Card([
+                    dbc.CardBody([
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Button("AI Bull / Bear Stress Test",
+                                           id="sr-bullbear-btn",
+                                           color="primary", size="sm"),
+                            ], width="auto"),
+                            dbc.Col(
+                                html.Span(
+                                    "Strongest case for each side, then "
+                                    "3-5 KPIs to monitor over the next 12 "
+                                    "months. Not balanced — read both.",
+                                    id="sr-bullbear-note",
+                                    style={"color": T.TEXT_MUTED,
+                                            "fontSize": "0.75rem",
+                                            "fontStyle": "italic"}),
+                            ),
+                        ], align="center", className="g-2 mb-2"),
+                        dcc.Loading(type="dot", color=T.PRIMARY, children=[
+                            html.Div(id="sr-bullbear-output",
+                                      className="mt-2"),
+                        ]),
+                    ], style={"padding": "14px 16px"}),
+                ], style=CARD_STYLE, className="mt-3"),
             ]),
 
             # Period selector — drives Sections 4 + 5

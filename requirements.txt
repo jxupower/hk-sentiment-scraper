@@ -11,8 +11,12 @@ anthropic>=0.25
 APScheduler>=3.10
 
 # Dashboard
-dash>=2.16
-dash-bootstrap-components>=1.5
+# Pinned to Dash 4.x: the codebase uses 4.x-specific features
+# (`allow_duplicate=True` + `prevent_initial_call="initial_duplicate"`
+# semantics, dbc.Tabs id targeting). Downgrading would break the
+# i18n + startup-modal callbacks.
+dash>=4.0,<5.0
+dash-bootstrap-components>=2.0,<3.0
 plotly>=5.20
 
 # Config

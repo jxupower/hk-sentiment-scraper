@@ -5,6 +5,7 @@ lookup.
 from __future__ import annotations
 
 import sqlite3
+from typing import Optional  # noqa: F401 — used in func annotations after `from __future__ import annotations`
 
 import dash
 from dash import Input, Output, State, html

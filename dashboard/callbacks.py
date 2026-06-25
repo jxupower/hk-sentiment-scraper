@@ -42,6 +42,15 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
     # Sync language button outlines to the localStorage-persisted Store on
     # page load — mirrors the market-toggle init-sync below so returning
     # users see the right button highlighted.
+    #
+    # `prevent_initial_call="initial_duplicate"` is REQUIRED by Dash 4.x
+    # when combined with `allow_duplicate=True` on the outputs — `False`
+    # raises DuplicateCallback at app startup. The string flag is what
+    # allows the callback to fire on initial render even though it shares
+    # the `outline` output with the click handler above. Both buttons
+    # start `outline=True` (neutral) in layout.py so first paint is
+    # neutral and the callback paints the active one as soon as the
+    # localStorage-hydrated Store lands.
     app.clientside_callback(
         """
         function(lang) {
@@ -120,6 +129,73 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
     def rebuild_tabs_on_market(market, lang, sectors):
         from dashboard.layout import build_tabs
         return build_tabs(lang or "en", sectors or [])
+
+    # Update each tab's `label` prop on language change WITHOUT rebuilding
+    # the tab children. Keeps in-tab editable state (Portfolio holdings,
+    # Stock Research notes, Screener filters) intact while still flipping
+    # the visible tab strip text. Also fires on initial load with the
+    # localStorage-hydrated language — fixes the "tab strip stuck in EN
+    # after refreshing a ZH session" bug.
+    from dashboard.layout import TAB_DEFS
+    # i18n_T is already imported at module top — no need to re-import.
+
+    @app.callback(
+        [Output(tab_id, "label") for _, tab_id, _ in TAB_DEFS],
+        Input("user-language", "data"),
+        prevent_initial_call=False,
+    )
+    def update_tab_labels(lang):
+        lang = lang or "en"
+        return [i18n_T(key, lang) for key, _, _ in TAB_DEFS]
+
+    # ----- Startup modal (HK/US + EN/中文 confirmation) -----
+    # Two things happen on Confirm:
+    #   1. The localStorage-persisted user-language + user-market stores
+    #      take the modal's selections. This re-triggers every data-loading
+    #      callback that listens on Input("user-language") / Input("user-
+    #      market"), so any background-loaded data in the wrong language
+    #      / wrong market gets immediately replaced.
+    #   2. dashboard-init-confirmed flips to True, which closes the modal.
+    # Clientside so the dismiss is instant — no server round-trip.
+    app.clientside_callback(
+        """
+        function(n_clicks, market, lang) {
+            if (!n_clicks) {
+                return [window.dash_clientside.no_update,
+                          window.dash_clientside.no_update,
+                          window.dash_clientside.no_update,
+                          window.dash_clientside.no_update];
+            }
+            return [market || "HK", lang || "en", true, false];
+        }
+        """,
+        Output("user-market", "data", allow_duplicate=True),
+        Output("user-language", "data", allow_duplicate=True),
+        Output("dashboard-init-confirmed", "data"),
+        Output("startup-modal", "is_open"),
+        Input("startup-confirm-btn", "n_clicks"),
+        State("startup-market-select", "value"),
+        State("startup-lang-select", "value"),
+        prevent_initial_call=True,
+    )
+
+    # On page load, prime the startup-modal radio buttons from the
+    # localStorage-persisted Stores so returning users see THEIR last
+    # market + language pre-selected (one click to confirm + dismiss
+    # instead of two to switch + confirm).
+    app.clientside_callback(
+        """
+        function(market, lang) {
+            return [(market || "HK").toUpperCase(),
+                     (lang || "en").toLowerCase()];
+        }
+        """,
+        Output("startup-market-select", "value"),
+        Output("startup-lang-select", "value"),
+        Input("user-market", "data"),
+        Input("user-language", "data"),
+        prevent_initial_call=False,
+    )
 
     # Server-side: update the global chrome (header tagline + last-updated
     # prefix) when language changes.

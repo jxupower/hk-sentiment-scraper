@@ -133,8 +133,11 @@ def register_recommendations_callbacks(app, db_path: str):
         Input("rec-min-composite-filter", "value"),
         Input("rec-show-filter", "value"),
         Input("rec-sector-filter", "value"),
-        State("user-language", "data"),
-        State("user-market", "data"),
+        # Promoted to Input so a language flip / market switch / startup
+        # modal confirm re-fires this callback with the right lang for
+        # bilingual stock names + sector labels and the right market scope.
+        Input("user-language", "data"),
+        Input("user-market", "data"),
     )
     def update_recommendations(_n, _clicks, w_val, w_qual, w_growth, w_sent,
                                 window_days, min_composite, show_filter, sector_filter,

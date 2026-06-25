@@ -39,8 +39,12 @@ def build_tabs(lang: str, sectors: list[str]) -> list:
             children = _sentiment_tab(sectors)
         else:
             children = builder()
-        tabs.append(dbc.Tab(label=i18n_T(key, lang), tab_id=tab_id,
-                              children=children))
+        # `id=tab_id` (in addition to `tab_id=tab_id`) is required so the
+        # `update_tab_labels` callback in dashboard.callbacks can target
+        # this Tab's `label` prop directly on language change without
+        # rebuilding the children (which would wipe in-tab editable state).
+        tabs.append(dbc.Tab(label=i18n_T(key, lang), id=tab_id,
+                              tab_id=tab_id, children=children))
     return tabs
 
 
@@ -59,6 +63,16 @@ def build_layout(sectors: list[str]) -> html.Div:
         # Discovery rank, Stock Research, Backtest benchmark, Risk Forecast
         # indices, Portfolio holdings, Sentiment sector cards).
         dcc.Store(id="user-market", data="HK", storage_type="local"),
+        # Startup-modal confirmation flag. Memory store (NOT local) so the
+        # modal reappears on every fresh dashboard load — gives the user
+        # one explicit chance to pick market + language before they read
+        # any data. Data callbacks fire in the background while the modal
+        # is up; the Confirm action writes the user's choices to the
+        # localStorage-persisted stores above and the data callbacks
+        # re-fire with the right language + market.
+        dcc.Store(id="dashboard-init-confirmed", data=False,
+                    storage_type="memory"),
+        _startup_modal(),
         _header_bar(),
         dbc.Container([
             dbc.Tabs(id="main-tabs", active_tab="tab-screener",
@@ -103,6 +117,70 @@ def _sentiment_tab(sectors: list[str]) -> html.Div:
     ])
 
 
+def _startup_modal() -> dbc.Modal:
+    """Centered first-load modal that asks the user for market + language
+    before they read any data. The data callbacks fire in the background
+    while the modal is up; the Confirm click writes the picks to the
+    localStorage-persisted `user-market` / `user-language` stores so the
+    callbacks re-fire with the right language + market and replace any
+    placeholder text the user might glimpse behind the modal.
+
+    The modal is gated on `dashboard-init-confirmed` (memory store, fresh
+    per page load), so a hard refresh re-shows it. The header EN / 中文
+    and HK / US toggles remain as a mid-session quick-switch — they go
+    through the same Stores."""
+    return dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle("Welcome · 欢迎"), close_button=False),
+        dbc.ModalBody([
+            html.P("Pick your market and language to start. "
+                    "数据正在后台加载，请先选择以确保以正确语言显示。",
+                    className="text-muted small mb-3"),
+            dbc.Row([
+                dbc.Col([
+                    html.Label("Market · 市场",
+                                  className="stat-label mb-2 fw-bold"),
+                    dbc.RadioItems(
+                        id="startup-market-select",
+                        options=[
+                            {"label": "Hong Kong · 香港", "value": "HK"},
+                            {"label": "United States · 美国", "value": "US"},
+                        ],
+                        value="HK",
+                        className="d-block",
+                        labelClassName="d-block mb-2",
+                    ),
+                ], width=6),
+                dbc.Col([
+                    html.Label("Language · 语言",
+                                  className="stat-label mb-2 fw-bold"),
+                    dbc.RadioItems(
+                        id="startup-lang-select",
+                        options=[
+                            {"label": "English", "value": "en"},
+                            {"label": "中文", "value": "zh"},
+                        ],
+                        value="en",
+                        className="d-block",
+                        labelClassName="d-block mb-2",
+                    ),
+                ], width=6),
+            ]),
+        ]),
+        dbc.ModalFooter([
+            dbc.Button("Confirm · 确认",
+                         id="startup-confirm-btn",
+                         color="primary", size="md"),
+        ]),
+    ],
+        id="startup-modal",
+        is_open=True,            # opens on every fresh load
+        backdrop="static",       # click-outside cannot dismiss
+        keyboard=False,          # Esc cannot dismiss
+        centered=True,
+        size="md",
+    )
+
+
 def _header_bar():
     return html.Div([
         dbc.Container([
@@ -128,24 +206,28 @@ def _header_bar():
                     html.Span(id="last-updated",
                                 style={"color": T.PRIMARY, "fontSize": "0.8rem",
                                          "fontWeight": "500", "marginRight": "12px"}),
-                    # Market toggle (HK / US). Clientside callback flips the
-                    # user-market Store + outline state on click; server-side
-                    # callbacks re-fetch every tab's data scoped to the
-                    # active market. The store is localStorage-persisted so
-                    # the choice survives reloads.
+                    # Market toggle (HK / US). Both buttons start `outline=True`
+                    # (neutral gray); the clientside init-sync callback in
+                    # dashboard.callbacks paints the active one based on the
+                    # localStorage-hydrated `user-market` store on first render.
+                    # Hardcoding one as `outline=False` here would force the
+                    # WRONG button to look active on first paint when the user's
+                    # last session ended on the other market.
                     dbc.ButtonGroup([
                         dbc.Button("HK", id="market-hk-btn", color="primary",
-                                     size="sm", outline=False, n_clicks=0),
+                                     size="sm", outline=True, n_clicks=0),
                         dbc.Button("US", id="market-us-btn", color="primary",
                                      size="sm", outline=True, n_clicks=0),
                     ], size="sm", className="me-2"),
-                    # English / 中文 segmented toggle. Clientside callback
-                    # flips the user-language Store + this button's `outline`
-                    # state on click; server-side callbacks rebuild every
-                    # translatable surface in response.
+                    # English / 中文 segmented toggle. Same neutral-start pattern
+                    # as the market toggle above — init-sync clientside callback
+                    # paints the active button from the `user-language` Store on
+                    # first render. Hardcoding "EN active" used to leave returning
+                    # ZH users with a broken-looking toggle ("EN highlighted but
+                    # page is Chinese").
                     dbc.ButtonGroup([
                         dbc.Button("EN", id="lang-en-btn", color="primary",
-                                     size="sm", outline=False, n_clicks=0),
+                                     size="sm", outline=True, n_clicks=0),
                         dbc.Button("中文", id="lang-zh-btn", color="primary",
                                      size="sm", outline=True, n_clicks=0),
                     ], size="sm"),

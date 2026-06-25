@@ -468,6 +468,120 @@ def equity_curve_chart(curve: list, benchmark: list,
     return fig
 
 
+def long_short_spread_chart(long_curve: list, short_curve: list,
+                                spread_curve: list) -> go.Figure:
+    """Three-line factor-verification chart: long-leg cum value, short-leg
+    cum value (both starting at 100, representing $1 invested in that
+    basket), and the spread = long - short, also normalised to start at
+    100. The spread is what a dollar-neutral $1-long / $1-short market-
+    neutral basket earns; a real factor produces a spread that drifts
+    consistently above 100."""
+    if not long_curve and not short_curve and not spread_curve:
+        return _empty_fig("Long / Short / Spread",
+                          "No verification data yet — run the test to populate.")
+    fig = go.Figure()
+    if long_curve:
+        d, v = zip(*long_curve)
+        fig.add_trace(go.Scatter(
+            x=list(d), y=list(v), mode="lines", name="Long leg",
+            line=dict(color=T.PRICE_UP, width=2.2),
+            hovertemplate="%{x}<br>%{y:.1f}<extra>Long</extra>",
+        ))
+    if short_curve:
+        d, v = zip(*short_curve)
+        fig.add_trace(go.Scatter(
+            x=list(d), y=list(v), mode="lines", name="Short leg (as if long)",
+            line=dict(color=T.PRICE_DOWN, width=2.2),
+            hovertemplate="%{x}<br>%{y:.1f}<extra>Short basket</extra>",
+        ))
+    if spread_curve:
+        d, v = zip(*spread_curve)
+        fig.add_trace(go.Scatter(
+            x=list(d), y=list(v), mode="lines",
+            name="Spread (long − short)",
+            line=dict(color=T.PRIMARY, width=3),
+            hovertemplate="%{x}<br>%{y:.1f}<extra>Spread</extra>",
+        ))
+    all_dates = ([d for d, _ in (long_curve or spread_curve or short_curve)])
+    fig.add_hline(y=100, line_dash="dot", line_color=T.TEXT_FAINT,
+                   annotation_text="$1 base", annotation_position="bottom right",
+                   annotation_font_color=T.TEXT_MUTED)
+    fig.update_layout(
+        T.chart_layout("Long · Short · Spread (start = 100)"),
+        yaxis_title="Index (start = 100)",
+        xaxis=dict(rangebreaks=_trading_day_rangebreaks(list(all_dates))),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                     xanchor="right", x=1),
+        height=340, margin=dict(t=50, b=40, l=60, r=20),
+    )
+    return fig
+
+
+def decile_monotonicity_chart(decile_means: dict,
+                                 decile_counts: dict | None = None
+                                 ) -> go.Figure:
+    """10-bar chart of mean forward period return per composite-pctile
+    decile. D1 = lowest composite, D10 = highest. A real factor produces
+    a monotonically rising ladder; a noisy factor looks like a hash.
+    Counts (if given) annotate each bar with the number of period
+    observations behind the mean."""
+    if not decile_means:
+        return _empty_fig("Decile monotonicity",
+                          "No verification data yet.")
+    deciles = sorted(decile_means.keys())
+    values = [decile_means[d] * 100.0 for d in deciles]
+    colors = [T.PRICE_UP if v >= 0 else T.PRICE_DOWN for v in values]
+    text = [f"{v:+.2f}%" for v in values]
+    hover = [(f"D{d}: {v:+.2f}%<br>n_periods={decile_counts.get(d, 0)}"
+              if decile_counts else f"D{d}: {v:+.2f}%")
+             for d, v in zip(deciles, values)]
+    fig = go.Figure(go.Bar(
+        x=[f"D{d}" for d in deciles], y=values,
+        marker_color=colors, text=text, textposition="outside",
+        hovertext=hover, hoverinfo="text",
+    ))
+    fig.add_hline(y=0, line_color=T.TEXT_FAINT, line_width=1)
+    fig.update_layout(
+        T.chart_layout("Mean period return by composite-pctile decile"),
+        yaxis_title="Mean period return (%)",
+        height=320, margin=dict(t=50, b=40, l=60, r=20),
+        showlegend=False,
+    )
+    return fig
+
+
+def ic_timeseries_chart(ic_series: list) -> go.Figure:
+    """Information Coefficient over time — Spearman ρ at each rebalance
+    between composite percentile and forward return. Bars positive →
+    factor predicted the cross-section correctly that period; negative →
+    factor was wrong. A real factor has a mean line consistently above 0
+    and a t-stat > 2."""
+    if not ic_series:
+        return _empty_fig("Information Coefficient", "No verification data yet.")
+    dates, vals = zip(*ic_series)
+    mean_ic = sum(vals) / len(vals)
+    colors = [T.PRICE_UP if v >= 0 else T.PRICE_DOWN for v in vals]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=list(dates), y=list(vals), marker_color=colors,
+        name="Period IC",
+        hovertemplate="%{x}<br>IC %{y:+.4f}<extra></extra>",
+    ))
+    fig.add_hline(y=mean_ic, line_color=T.PRIMARY, line_width=2,
+                   annotation_text=f"mean IC {mean_ic:+.4f}",
+                   annotation_font_color=T.PRIMARY,
+                   annotation_position="top right")
+    fig.add_hline(y=0, line_color=T.TEXT_FAINT, line_width=1)
+    fig.update_layout(
+        T.chart_layout("Information Coefficient per rebalance"),
+        yaxis_title="Spearman ρ (pctile vs forward return)",
+        xaxis=dict(rangebreaks=_trading_day_rangebreaks(list(dates))),
+        height=280, margin=dict(t=50, b=40, l=60, r=20),
+        showlegend=False,
+    )
+    return fig
+
+
 def drawdown_curve_chart(drawdown: list) -> go.Figure:
     """Filled drawdown timeline — 0% at fresh peaks, negative when
     underwater. Companions the equity curve so users see *when* the
