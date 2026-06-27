@@ -492,6 +492,17 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-fs-balance-table", "children"),
         Output("sr-fs-cashflow-table", "children"),
         Output("sr-fs-earnings-table", "children"),
+        # New analyst-friendly layers (KPI strip + compact table + math walkthrough)
+        # per statement — see plan layer breakdown.
+        Output("sr-fs-income-kpis", "children"),
+        Output("sr-fs-balance-kpis", "children"),
+        Output("sr-fs-cashflow-kpis", "children"),
+        Output("sr-fs-income-analyst", "children"),
+        Output("sr-fs-balance-analyst", "children"),
+        Output("sr-fs-cashflow-analyst", "children"),
+        Output("sr-fs-income-math", "children"),
+        Output("sr-fs-balance-math", "children"),
+        Output("sr-fs-cashflow-math", "children"),
         Input("sr-fs-load-btn", "n_clicks"),
         State("sr-ticker-select", "value"),
         prevent_initial_call=True,
@@ -499,14 +510,16 @@ def register_stock_research_callbacks(app, db_path: str):
     def load_financial_statements(_clicks, ticker):
         if not ticker:
             return ({"display": "none"}, "", "", "Pick a ticker first.",
-                    {}, {}, {}, {}, "", "", "", "")
+                    {}, {}, {}, {}, "", "", "", "",
+                    "", "", "", "", "", "", "", "", "")
         from analysis.data_loader import get_or_fetch_financial_statements
         from storage.database import Database
         try:
             fs = get_or_fetch_financial_statements(ticker, Database(db_path))
         except Exception as e:
             return ({"display": "none"}, "", "", f"Fetch failed: {e}",
-                    {}, {}, {}, {}, "", "", "", "")
+                    {}, {}, {}, {}, "", "", "", "",
+                    "", "", "", "", "", "", "", "", "")
         fs = fs or {"income": [], "balance": [], "cashflow": []}
         source_pill, coverage = _build_fs_meta(fs)
         income_chart = fst.build_statement_chart("income", fs["income"])
@@ -523,9 +536,23 @@ def register_stock_research_callbacks(app, db_path: str):
                            if fs["cashflow"]
                            else fst.build_unavailable_state("cashflow", ticker=ticker))
         earnings_table = fst.build_earnings_table(fs["income"])
+        # Analyst-friendly layers — empty html.Div when source data missing
+        # so the slot stays in the layout without rendering an empty card.
+        income_kpis = fst.build_kpi_strip("income", fs["income"])
+        balance_kpis = fst.build_kpi_strip("balance", fs["balance"])
+        cashflow_kpis = fst.build_kpi_strip("cashflow", fs["cashflow"])
+        income_analyst = fst.build_analyst_table("income", fs["income"])
+        balance_analyst = fst.build_analyst_table("balance", fs["balance"])
+        cashflow_analyst = fst.build_analyst_table("cashflow", fs["cashflow"])
+        income_math = fst.build_math_walkthrough("income", fs["income"])
+        balance_math = fst.build_math_walkthrough("balance", fs["balance"])
+        cashflow_math = fst.build_math_walkthrough("cashflow", fs["cashflow"])
         return ({"display": "block"}, source_pill, coverage, "",
                 income_chart, balance_chart, cashflow_chart, earnings_chart,
-                income_table, balance_table, cashflow_table, earnings_table)
+                income_table, balance_table, cashflow_table, earnings_table,
+                income_kpis, balance_kpis, cashflow_kpis,
+                income_analyst, balance_analyst, cashflow_analyst,
+                income_math, balance_math, cashflow_math)
 
     # ----- AI Forensic Review (Section 3b) -----
     # Claude-powered red-flag scan over the cached income/balance/cashflow
@@ -591,8 +618,9 @@ def register_stock_research_callbacks(app, db_path: str):
     # Reset Section 3b when the user picks a different ticker so stale
     # statements from the prior ticker don't bleed through until they click
     # the Load button again. Also clears the AI forensic + Bull/Bear outputs
-    # so the previous ticker's reviews don't sit next to a different ticker's
-    # data.
+    # AND all 9 analyst-layer slots (KPI strip + compact table + math
+    # walkthrough × 3 statement types) so the previous ticker's display
+    # doesn't sit next to a different ticker's data.
     @app.callback(
         Output("sr-fs-tabs-wrapper", "style", allow_duplicate=True),
         Output("sr-fs-source-pill", "children", allow_duplicate=True),
@@ -600,11 +628,21 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-fs-status", "children", allow_duplicate=True),
         Output("sr-forensic-ai-output", "children", allow_duplicate=True),
         Output("sr-bullbear-output", "children", allow_duplicate=True),
+        Output("sr-fs-income-kpis", "children", allow_duplicate=True),
+        Output("sr-fs-balance-kpis", "children", allow_duplicate=True),
+        Output("sr-fs-cashflow-kpis", "children", allow_duplicate=True),
+        Output("sr-fs-income-analyst", "children", allow_duplicate=True),
+        Output("sr-fs-balance-analyst", "children", allow_duplicate=True),
+        Output("sr-fs-cashflow-analyst", "children", allow_duplicate=True),
+        Output("sr-fs-income-math", "children", allow_duplicate=True),
+        Output("sr-fs-balance-math", "children", allow_duplicate=True),
+        Output("sr-fs-cashflow-math", "children", allow_duplicate=True),
         Input("sr-ticker-select", "value"),
         prevent_initial_call=True,
     )
     def reset_fs_section_on_ticker_change(_ticker):
-        return {"display": "none"}, "", "", "", "", ""
+        return ({"display": "none"}, "", "", "", "", "",
+                "", "", "", "", "", "", "", "", "")
 
     # ----- Period-driven charts (Sections 4 + 5) -----
     # Fires on ticker change AND period selector change. Does NOT call

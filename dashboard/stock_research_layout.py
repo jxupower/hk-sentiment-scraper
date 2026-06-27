@@ -347,38 +347,52 @@ def build_stock_research_tab() -> html.Div:
                               children=[
                         dbc.Tabs(id="sr-fs-tabs", active_tab="income",
                                   className="mb-3", children=[
+                            # Each statement tab now stacks 4 layers (see
+                            # plan: KPI strip → headline chart → compact
+                            # analyst table → math walkthrough), with the
+                            # original full DataTable preserved under an
+                            # "advanced" collapsible at the bottom.
                             dbc.Tab(label="Income", tab_id="income", children=[
+                                html.Div(id="sr-fs-income-kpis"),
                                 dcc.Graph(id="sr-fs-income-chart",
                                           config={"displayModeBar": False}, figure={}),
+                                html.Div(id="sr-fs-income-analyst"),
+                                html.Div(id="sr-fs-income-math"),
                                 html.Details([
-                                    html.Summary("Show full income statement",
+                                    html.Summary("Show every line item (advanced)",
                                                   style={"color": T.PRIMARY, "cursor": "pointer",
                                                          "fontSize": "0.85rem", "fontWeight": "600",
                                                          "marginBottom": "8px"}),
                                     html.Div(id="sr-fs-income-table"),
-                                ], className="mt-2"),
+                                ], className="mt-3"),
                             ]),
                             dbc.Tab(label="Balance Sheet", tab_id="balance", children=[
+                                html.Div(id="sr-fs-balance-kpis"),
                                 dcc.Graph(id="sr-fs-balance-chart",
                                           config={"displayModeBar": False}, figure={}),
+                                html.Div(id="sr-fs-balance-analyst"),
+                                html.Div(id="sr-fs-balance-math"),
                                 html.Details([
-                                    html.Summary("Show full balance sheet",
+                                    html.Summary("Show every line item (advanced)",
                                                   style={"color": T.PRIMARY, "cursor": "pointer",
                                                          "fontSize": "0.85rem", "fontWeight": "600",
                                                          "marginBottom": "8px"}),
                                     html.Div(id="sr-fs-balance-table"),
-                                ], className="mt-2"),
+                                ], className="mt-3"),
                             ]),
                             dbc.Tab(label="Cash Flow", tab_id="cashflow", children=[
+                                html.Div(id="sr-fs-cashflow-kpis"),
                                 dcc.Graph(id="sr-fs-cashflow-chart",
                                           config={"displayModeBar": False}, figure={}),
+                                html.Div(id="sr-fs-cashflow-analyst"),
+                                html.Div(id="sr-fs-cashflow-math"),
                                 html.Details([
-                                    html.Summary("Show full cash flow statement",
+                                    html.Summary("Show every line item (advanced)",
                                                   style={"color": T.PRIMARY, "cursor": "pointer",
                                                          "fontSize": "0.85rem", "fontWeight": "600",
                                                          "marginBottom": "8px"}),
                                     html.Div(id="sr-fs-cashflow-table"),
-                                ], className="mt-2"),
+                                ], className="mt-3"),
                             ]),
                             dbc.Tab(label="Earnings", tab_id="earnings", children=[
                                 dcc.Graph(id="sr-fs-earnings-chart",
