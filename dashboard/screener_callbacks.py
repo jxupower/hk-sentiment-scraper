@@ -48,10 +48,20 @@ _PE_CHART_TTL = 60
 
 def _flush_perf_caches() -> None:
     """Wipe price + query + chart caches. Called from the manual price-
-    refresh button so freshly-pulled prices surface immediately."""
+    refresh button so freshly-pulled prices surface immediately.
+
+    Also clears the Market tab's in-process OHLC cache (15-min TTL by
+    default) so the manual refresh isn't fooled by stale index prices."""
     _QUERY_LATEST_CACHE.clear()
     _PRICE_CACHE.clear()
     _PE_CHART_CACHE.clear()
+    try:
+        from dashboard.market_callbacks import _flush_index_price_cache
+        _flush_index_price_cache()
+    except ImportError:
+        # Market tab callbacks not registered (e.g. minimal test harness);
+        # silently skip rather than crash the refresh.
+        pass
 
 
 def _row_set_signature(rows: list) -> tuple:

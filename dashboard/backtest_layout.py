@@ -477,6 +477,34 @@ def _build_verification_subtab() -> html.Div:
                         ),
                     ], width=4),
                 ], className="mb-3"),
+                # Long/short ↔ long-only toggle. Default ON (preserves the
+                # historical V/Q/G long-top-decile minus short-bottom-decile
+                # spread test). When OFF: only the long-top-decile basket is
+                # held; spread / short curves are dropped and spread metrics
+                # report off the long curve so the verdict block still reads.
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Switch(
+                            id="bv-allow-shorts",
+                            label="Short positions allowed",
+                            value=True,
+                            className="mt-1",
+                            style={"fontSize": "0.85rem"},
+                        ),
+                        html.Span(
+                            id="bv-allow-shorts-hint",
+                            children=(
+                                "When ON: long top decile − short bottom "
+                                "decile (dollar-neutral). When OFF: long "
+                                "top decile only."
+                            ),
+                            className="text-muted",
+                            style={"fontSize": "0.72rem",
+                                    "marginLeft": "8px",
+                                    "fontStyle": "italic"},
+                        ),
+                    ], width=12),
+                ], className="mb-2"),
                 dbc.Row([
                     dbc.Col(
                         dbc.Button("Run verification", id="bv-run-btn",

@@ -67,10 +67,14 @@ class PortfolioBundle:
     candidate_marginal: dict[str, float]        # ticker -> Sharpe drop if removed
     backtest: dict[str, BacktestStrategy]       # strategy_name -> BacktestStrategy
 
+    # Solver-mode flag (so downstream UI / warnings can branch on whether
+    # weights may be negative without re-deriving from the array)
+    allow_shorts: bool = False
+
     # Cache metadata
-    built_at: datetime
-    last_price_date: str
-    key: tuple
+    built_at: datetime = None
+    last_price_date: str = ""
+    key: tuple = ()
 
 
 _lock = Lock()
@@ -81,6 +85,7 @@ _order: list[tuple] = []
 def get_or_build(holdings: list[dict], *,
                   lookback_days: int, rebalance_days: int,
                   weight_cap: float, rf: float,
+                  allow_shorts: bool = False,
                   db, ttl_seconds: int = _DEFAULT_TTL_SECONDS,
                   ) -> PortfolioBundle:
     """Build (or hit cache for) the full portfolio analysis bundle.
@@ -88,6 +93,9 @@ def get_or_build(holdings: list[dict], *,
     `holdings` is the editable-table data: a list of dicts with keys
     `ticker` and `shares`. Tickers must be non-empty; rows with empty
     ticker are dropped. Duplicates are collapsed (shares summed).
+
+    `allow_shorts=False` (default): long-only optimisation, w_i ∈ [0, cap].
+    `allow_shorts=True`: symmetric long/short, w_i ∈ [-cap, +cap], Σw=1.
 
     Raises ValueError if fewer than 2 unique tickers remain (a "portfolio"
     of 1 is just a single asset) or no price data is available.
@@ -98,11 +106,14 @@ def get_or_build(holdings: list[dict], *,
         raise ValueError("Need at least 2 tickers in the holdings table.")
 
     # The key includes a snapshot of the holdings so that adding/removing
-    # a candidate invalidates cleanly.
+    # a candidate invalidates cleanly. allow_shorts toggles the entire
+    # solve, so it MUST be in the key — otherwise toggling the switch
+    # without changing holdings would silently return the stale bundle.
     holdings_key = tuple((h["ticker"], float(h.get("shares") or 0))
                           for h in cleaned)
     cache_key_prefix = (tuple(tickers), holdings_key, lookback_days,
-                         rebalance_days, round(weight_cap, 4), round(rf, 4))
+                         rebalance_days, round(weight_cap, 4), round(rf, 4),
+                         bool(allow_shorts))
 
     # last_price_date is the freshest among the constituent tickers — we
     # resolve it before computing returns so a single function call can
@@ -123,7 +134,7 @@ def get_or_build(holdings: list[dict], *,
     # Build outside the lock — math can take 1-2s and we don't want to
     # serialize concurrent users on different tickers.
     bundle = _build(cleaned, tickers, lookback_days, rebalance_days,
-                     weight_cap, rf, db, last_date, key)
+                     weight_cap, rf, allow_shorts, db, last_date, key)
 
     with _lock:
         _entries[key] = bundle
@@ -165,7 +176,8 @@ def _clean_holdings(holdings: list[dict]) -> list[dict]:
 
 
 def _build(holdings: list[dict], tickers: list[str], lookback: int,
-            rebalance: int, weight_cap: float, rf: float, db,
+            rebalance: int, weight_cap: float, rf: float,
+            allow_shorts: bool, db,
             last_date: str, key: tuple) -> PortfolioBundle:
     # Returns matrix
     returns = compute_returns_matrix(tickers, lookback_days=lookback, db=db)
@@ -202,11 +214,14 @@ def _build(holdings: list[dict], tickers: list[str], lookback: int,
         sigma_c = ms.sigma[np.ix_(idx_current, idx_current)]
         # If cap is so tight that current alone can't sum to 1, lift the cap
         # for this subset specifically (still a sensible result for a "best
-        # rebalance given my holdings" view)
-        local_cap = max(weight_cap, 1.0 / len(current_tickers))
+        # rebalance given my holdings" view). Only matters long-only — under
+        # shorts the cap is per-side, so Σw=1 is feasible at any cap > 0.
+        local_cap = (weight_cap if allow_shorts
+                       else max(weight_cap, 1.0 / len(current_tickers)))
         try:
             w_c_local = max_sharpe_portfolio(mu_c, sigma_c, rf=rf,
-                                              weight_cap=local_cap)
+                                              weight_cap=local_cap,
+                                              allow_shorts=allow_shorts)
         except Exception:
             w_c_local = np.full(len(current_tickers), 1.0 / len(current_tickers))
         w_current_optimal = np.zeros(len(tickers))
@@ -225,7 +240,8 @@ def _build(holdings: list[dict], tickers: list[str], lookback: int,
     # Full-universe optimum
     try:
         w_full_optimal = max_sharpe_portfolio(ms.mu, ms.sigma, rf=rf,
-                                                weight_cap=weight_cap)
+                                                weight_cap=weight_cap,
+                                                allow_shorts=allow_shorts)
         m_full_optimal = portfolio_metrics(w_full_optimal, ms.mu, ms.sigma, rf=rf)
     except Exception:
         w_full_optimal = np.full(len(tickers), 1.0 / len(tickers))
@@ -233,17 +249,20 @@ def _build(holdings: list[dict], tickers: list[str], lookback: int,
 
     # Frontier
     frontier = efficient_frontier(ms.mu, ms.sigma, n_points=30,
-                                    weight_cap=weight_cap, rf=rf)
+                                    weight_cap=weight_cap, rf=rf,
+                                    allow_shorts=allow_shorts)
 
     # Candidate marginal values (only for tickers flagged as candidates)
     cand_mv = candidate_marginal_value(ms.mu, ms.sigma, tickers,
                                          candidate_tickers, rf=rf,
-                                         weight_cap=weight_cap)
+                                         weight_cap=weight_cap,
+                                         allow_shorts=allow_shorts)
 
     # Walk-forward backtest
     backtest = walk_forward_backtest(returns, lookback=min(lookback, len(returns) // 2),
                                        rebalance_freq=rebalance, rf=rf,
-                                       weight_cap=weight_cap)
+                                       weight_cap=weight_cap,
+                                       allow_shorts=allow_shorts)
 
     return PortfolioBundle(
         tickers=tickers,
@@ -262,6 +281,7 @@ def _build(holdings: list[dict], tickers: list[str], lookback: int,
         frontier=frontier,
         candidate_marginal=cand_mv,
         backtest=backtest,
+        allow_shorts=allow_shorts,
         built_at=datetime.now(),
         last_price_date=last_date,
         key=key,

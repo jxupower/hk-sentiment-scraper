@@ -44,9 +44,10 @@ EN: dict[str, str] = {
     "lang.zh":                "中文",
 
     # ---- Tabs ----
+    "tab.market":             "Market",
     "tab.screener":           "Screener",
+    # (rest of tabs follow; new Market-tab strings live near the end of EN block)
     "tab.discovery":          "Discovery",
-    "tab.screens":            "Screens",
     "tab.backtest":           "Backtest",
     "tab.research":           "Stock Research",
     "tab.risk":               "Risk Forecast",
@@ -465,11 +466,70 @@ EN: dict[str, str] = {
     "risk.drawdown_hist":             "Drawdown histogram",
 
     # ============================================================
-    # Screens tab
+    # Screens tab (legacy — Screens tab itself is gone, but Stock
+    # Research's "Screens passed/failed" badges still reference these)
     # ============================================================
     "screens.title":                  "Rule-based screens",
     "screens.passing":                "Passing Tickers",
     "screens.matching":               "Matching Tickers",
+
+    # ============================================================
+    # Market tab (new default landing tab)
+    # ============================================================
+    "market.alert.strong":            "Market overview. ",
+    "market.alert.body":              ("Pick an index above; chart + KPI cards + member table below "
+                                          "auto-load. Constituent membership is cached from Wikipedia "
+                                          "(except Hang Seng Tech which is hand-curated, and NASDAQ "
+                                          "Composite / Russell 2000 which are price-only — no "
+                                          "constituent list maintained). Refresh via "),
+    "market.label.index":             "Index",
+    "market.label.period":            "Period",
+    "market.label.style":             "Chart style",
+    "market.chart_style.line":        "Line",
+    "market.chart_style.candle":      "Candle",
+    "market.kpi.last_close":          "Last close",
+    "market.kpi.period_return":       "Period return",
+    "market.kpi.ytd_return":          "YTD return",
+    "market.kpi.max_drawdown":        "Max drawdown (period)",
+    "market.col.ticker":              "Ticker",
+    "market.col.name":                "Name",
+    "market.col.sector":              "Sector",
+    "market.col.market_cap_b":        "Mkt Cap (B)",
+    "market.col.last_price":          "Last",
+    "market.col.trailing_pe":         "P/E",
+    "market.col.price_to_book":       "P/B",
+    "market.col.dividend_yield":      "Div Y %",
+    "market.col.return_on_equity":    "ROE %",
+    "market.col.debt_to_equity":      "D/E",
+    "market.col.earnings_growth":     "Earn Gr %",
+    "market.constituents_of":         "Constituents of {name}",
+    "market.no_constituents":         ("Constituent list not maintained for this index — "
+                                          "the chart above still reflects the index price."),
+    "market.meta.priced":             ("{n_found} of {n_total} constituents priced{missing} · "
+                                          "membership refreshed {updated}"),
+    "market.meta.missing":            " · {n} not in fundamentals snapshot",
+    "market.no_data":                 "{ticker} — no data",
+    "market.period_label":            "{start} → {end} · {n} trading days",
+
+    # Per-index ZH names (Wikipedia YAML's `name` is English; we look these
+    # up by ticker for the chart title only).
+    "market.index_name.^HSI":         "Hang Seng Index",
+    "market.index_name.^HSTECH":      "Hang Seng Tech Index",
+    "market.index_name.^HSCEI":       "Hang Seng China Enterprises Index",
+    "market.index_name.^GSPC":        "S&P 500",
+    "market.index_name.^DJI":         "Dow Jones Industrial Average",
+    "market.index_name.^NDX":         "NASDAQ-100",
+    "market.index_name.^IXIC":        "NASDAQ Composite",
+    "market.index_name.^RUT":         "Russell 2000",
+    # Index-radio option labels (so the segmented control flips too)
+    "market.index_opt.^HSI":          "Hang Seng (^HSI)",
+    "market.index_opt.^HSTECH":       "Hang Seng Tech (^HSTECH)",
+    "market.index_opt.^HSCEI":        "Hang Seng China Ent. (^HSCEI)",
+    "market.index_opt.^GSPC":         "S&P 500 (^GSPC)",
+    "market.index_opt.^DJI":          "Dow Jones (^DJI)",
+    "market.index_opt.^NDX":          "NASDAQ-100 (^NDX)",
+    "market.index_opt.^IXIC":         "NASDAQ Composite (^IXIC)",
+    "market.index_opt.^RUT":          "Russell 2000 (^RUT)",
 }
 
 
@@ -486,9 +546,9 @@ ZH: dict[str, str] = {
     "lang.zh":                "中文",
 
     # ---- Tabs ----
+    "tab.market":             "市场",
     "tab.screener":           "筛选器",
     "tab.discovery":          "发现",
-    "tab.screens":            "规则筛选",
     "tab.backtest":           "回测",
     "tab.research":           "个股研究",
     "tab.risk":               "风险预测",
@@ -878,11 +938,66 @@ ZH: dict[str, str] = {
     "risk.drawdown_hist":             "回撤分布直方图",
 
     # ============================================================
-    # Screens tab
+    # Screens tab (legacy — Screens tab itself is gone, but Stock
+    # Research's "Screens passed/failed" badges still reference these)
     # ============================================================
     "screens.title":                  "规则筛选",
     "screens.passing":                "符合的标的",
     "screens.matching":               "匹配的标的",
+
+    # ============================================================
+    # Market tab (new default landing tab)
+    # ============================================================
+    "market.alert.strong":            "市场概览。",
+    "market.alert.body":              ("从上方选择指数；下方图表、关键指标卡片与成分股表会自动加载。"
+                                          "成分股名单来自 Wikipedia 缓存（恒生科技为人工维护；"
+                                          "纳斯达克综合指数与罗素 2000 仅显示价格，不维护成分股名单）。"
+                                          "可通过以下命令刷新："),
+    "market.label.index":             "指数",
+    "market.label.period":            "时间区间",
+    "market.label.style":             "图表样式",
+    "market.chart_style.line":        "折线",
+    "market.chart_style.candle":      "K 线",
+    "market.kpi.last_close":          "最新收盘",
+    "market.kpi.period_return":       "区间回报",
+    "market.kpi.ytd_return":          "年初至今回报",
+    "market.kpi.max_drawdown":        "最大回撤 (区间)",
+    "market.col.ticker":              "代码",
+    "market.col.name":                "名称",
+    "market.col.sector":              "行业",
+    "market.col.market_cap_b":        "市值 (十亿)",
+    "market.col.last_price":          "最新价",
+    "market.col.trailing_pe":         "市盈率",
+    "market.col.price_to_book":       "市净率",
+    "market.col.dividend_yield":      "股息率 %",
+    "market.col.return_on_equity":    "ROE %",
+    "market.col.debt_to_equity":      "负债权益比",
+    "market.col.earnings_growth":     "盈利增长 %",
+    "market.constituents_of":         "{name} 成分股",
+    "market.no_constituents":         "该指数未维护成分股名单 — 上方图表仍反映指数走势。",
+    "market.meta.priced":             "{n_total} 只成分股中已定价 {n_found} 只{missing} · 名单更新于 {updated}",
+    "market.meta.missing":            " · {n} 只缺基本面快照",
+    "market.no_data":                 "{ticker} — 暂无数据",
+    "market.period_label":            "{start} → {end} · {n} 个交易日",
+
+    # Per-index ZH names
+    "market.index_name.^HSI":         "恒生指数",
+    "market.index_name.^HSTECH":      "恒生科技指数",
+    "market.index_name.^HSCEI":       "恒生中国企业指数",
+    "market.index_name.^GSPC":        "标普 500",
+    "market.index_name.^DJI":         "道琼斯工业平均指数",
+    "market.index_name.^NDX":         "纳斯达克 100",
+    "market.index_name.^IXIC":        "纳斯达克综合指数",
+    "market.index_name.^RUT":         "罗素 2000",
+    # Index-radio option labels
+    "market.index_opt.^HSI":          "恒生 (^HSI)",
+    "market.index_opt.^HSTECH":       "恒生科技 (^HSTECH)",
+    "market.index_opt.^HSCEI":        "恒生中国企业 (^HSCEI)",
+    "market.index_opt.^GSPC":         "标普 500 (^GSPC)",
+    "market.index_opt.^DJI":          "道琼斯 (^DJI)",
+    "market.index_opt.^NDX":          "纳斯达克 100 (^NDX)",
+    "market.index_opt.^IXIC":         "纳斯达克综合 (^IXIC)",
+    "market.index_opt.^RUT":          "罗素 2000 (^RUT)",
 }
 
 

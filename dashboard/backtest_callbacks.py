@@ -473,11 +473,12 @@ def register_backtest_callbacks(app, db_path: str):
         State("bv-horizon-select", "value"),
         State("bv-rebal-select", "value"),
         State("bv-min-names", "value"),
+        State("bv-allow-shorts", "value"),
         State("user-market", "data"),
         prevent_initial_call=True,
     )
     def run_factor_verification(_n, horizon_years, rebal_freq,
-                                  min_names, market):
+                                  min_names, allow_shorts, market):
         if not horizon_years or not rebal_freq:
             raise PreventUpdate
         from datetime import date, timedelta
@@ -493,11 +494,13 @@ def register_backtest_callbacks(app, db_path: str):
                                   [], [], "", msg, False)
 
         t0 = time.time()
+        allow_shorts = bool(allow_shorts) if allow_shorts is not None else True
         try:
             result = run_factor_verification_backtest(
                 start_date=start_iso, end_date=end_iso,
                 rebalance_freq=rebal_freq, db_path=db_path,
                 market=market, min_names_per_subsector=min_names,
+                allow_shorts=allow_shorts,
             )
         except Exception as e:
             logger.exception("Factor verification failed")
@@ -510,17 +513,24 @@ def register_backtest_callbacks(app, db_path: str):
         ic_str      = f"{m['mean_ic']:+.4f}"
         tstat_str   = f"{m['ic_tstat']:+.2f}"
         long_pct    = f"{m['ann_return_long'] * 100:+.1f}%"
-        short_pct   = f"{m['ann_return_short'] * 100:+.1f}%"
+        # Long-only mode → no short leg; show em-dash instead of "+0.0%".
+        short_pct   = (f"{m['ann_return_short'] * 100:+.1f}%" if allow_shorts
+                        else "—")
         maxdd_pct   = f"{m['spread_max_dd'] * 100:.1f}%"
         hit_pct     = f"{m['hit_rate'] * 100:.0f}%"
+        sizes_lbl   = (f"avg long {result.avg_long_size:.0f} / "
+                        f"short {result.avg_short_size:.0f}"
+                        if allow_shorts
+                        else f"avg long {result.avg_long_size:.0f} (long-only)")
         window_lbl  = (f"{result.actual_start} → {result.actual_end} · "
                         f"{result.n_subsectors_used} sub-sectors · "
-                        f"avg long {result.avg_long_size:.0f} / "
-                        f"short {result.avg_short_size:.0f} · "
+                        f"{sizes_lbl} · "
                         f"{m['n_periods']} periods")
 
-        # Verdict summary text
-        spread_real = (m["ann_return_spread"] > 0
+        # Verdict summary text — wording adapts to mode. In long-only the
+        # "spread" stat in the headline cells IS the long curve's annualised
+        # return; the criterion text is reframed accordingly.
+        signal_real = (m["ann_return_spread"] > 0
                          and m["spread_sharpe"] > 0.5
                          and m["mean_ic"] > 0.02)
         d10 = result.decile_returns.get(10, 0.0)
@@ -529,8 +539,10 @@ def register_backtest_callbacks(app, db_path: str):
         n_correct = sum(1 for b in range(1, 10)
                           if result.decile_returns.get(b + 1, 0.0)
                               > result.decile_returns.get(b, 0.0))
+        signal_label = ("Long-leg signal real?" if not allow_shorts
+                          else "Spread signal real?")
         verdict_summary = (
-            f"Signal real? {'✓ YES' if spread_real else '✗ NO'} "
+            f"{signal_label} {'✓ YES' if signal_real else '✗ NO'} "
             f"(needs ann>0, Sharpe>0.5, IC>0.02). "
             f"D10 vs D1: {'✓' if d10_d1 else '✗'} "
             f"(D10={d10*100:+.2f}%, D1={d1*100:+.2f}%). "

@@ -275,6 +275,34 @@ def build_portfolio_tab() -> html.Div:
                         ),
                     ], xs=12, sm=6, md=2),
                 ], className="g-3"),
+                # Long-only ↔ long/short toggle. Default OFF (preserves
+                # historical behaviour). When ON, the per-asset cap becomes
+                # symmetric: weights are bounded in [-cap, +cap] and Σw=1
+                # still holds — a classical fully-invested long/short book
+                # where shorts free up capital that the longs deploy.
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Switch(
+                            id="portfolio-allow-shorts",
+                            label="Short positions allowed",
+                            value=False,
+                            className="mt-2",
+                            style={"fontSize": "0.85rem"},
+                        ),
+                        html.Span(
+                            id="portfolio-allow-shorts-hint",
+                            children=(
+                                "When OFF: long-only, weights in [0, cap]. "
+                                "When ON: weights in [-cap, +cap], Σw=1 "
+                                "(shorts fund longs)."
+                            ),
+                            className="text-muted",
+                            style={"fontSize": "0.72rem",
+                                    "marginLeft": "8px",
+                                    "fontStyle": "italic"},
+                        ),
+                    ], width=12),
+                ], className="g-2"),
                 html.Div([
                     dbc.Button("Compute optimal portfolio",
                                 id="portfolio-compute-btn",

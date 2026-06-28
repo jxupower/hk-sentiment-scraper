@@ -214,7 +214,9 @@ def dashboard(port: int, debug: bool):
         if os.getenv("SKIP_DASHBOARD_PREWARM", "").lower() != "true":
             import threading
             from dashboard.screener_callbacks import _query_latest
+
             def _warm(market):
+                # Screener-tab universe snapshot
                 try:
                     t0 = time.time()
                     rows = _query_latest(components["settings"].DB_PATH, market=market)
@@ -222,6 +224,40 @@ def dashboard(port: int, debug: bool):
                                   f"{len(rows):,} rows · {time.time()-t0:.1f}s[/dim]")
                 except Exception as e:
                     console.print(f"[yellow]Pre-warm {market} failed: {e}[/yellow]")
+
+                # Market-tab default index price series + bilingual constituent
+                # names. The first user landing on the (default) Market tab
+                # would otherwise pay 400-2,500ms for the yfinance/akshare
+                # round-trip + 3-10ms for the names lookup; running both here
+                # in the background daemon takes them off the critical path.
+                try:
+                    from analysis.data_loader import get_or_fetch_prices
+                    from config.index_constituents import constituents_for
+                    from storage.database import Database as _Db
+                    from storage.repository import SecuritiesReferenceRepository
+
+                    default_index = "^HSI" if market == "HK" else "^GSPC"
+                    db = _Db(components["settings"].DB_PATH)
+
+                    t1 = time.time()
+                    price_rows = get_or_fetch_prices(default_index, db) or []
+                    console.print(f"[dim]Market index {default_index} pre-warmed: "
+                                  f"{len(price_rows):,} rows · {time.time()-t1:.1f}s[/dim]")
+
+                    tickers = constituents_for(default_index)
+                    if tickers:
+                        t2 = time.time()
+                        for lang in ("en", "zh"):
+                            SecuritiesReferenceRepository(db).get_names(
+                                tickers, lang=lang)
+                        console.print(
+                            f"[dim]Market names pre-warmed: "
+                            f"{len(tickers)} {default_index} constituents × "
+                            f"2 langs · {time.time()-t2:.1f}s[/dim]"
+                        )
+                except Exception as e:
+                    console.print(f"[yellow]Market pre-warm {market} failed: {e}[/yellow]")
+
             threading.Thread(target=_warm, args=("HK",), daemon=True).start()
             threading.Thread(target=_warm, args=("US",), daemon=True).start()
 
@@ -459,6 +495,29 @@ def fundamentals_refresh(tickers: str, throttle: float):
     table.add_row("Skipped (already had today's)", str(summary["skipped"]))
     table.add_row("Failed (yfinance error)", str(summary["failed"]))
     console.print(table)
+
+
+@cli.group()
+def market():
+    """Index constituent membership for the Market tab."""
+
+
+@market.command("refresh-constituents")
+@click.option("--only", default=None,
+              help="Comma-separated symbols to refresh (default: all 5 "
+                   "Wikipedia-sourced indices). Symbols not in the scraper "
+                   "config — like ^HSTECH which is hand-curated — are "
+                   "skipped silently.")
+def market_refresh_constituents(only: str | None):
+    """Re-scrape Wikipedia for index membership and overwrite
+    config/index_constituents.yaml. Run quarterly or whenever an index
+    publishes a reconstitution."""
+    import subprocess
+    cmd = [sys.executable, "scripts/refresh_index_constituents.py"]
+    if only:
+        cmd.extend(["--only", only])
+    rc = subprocess.call(cmd)
+    sys.exit(rc)
 
 
 @cli.group()
@@ -798,16 +857,19 @@ def backtest_optimize(screen_id, industry, start, end, train_months,
 @click.option("--min-names", default=10, show_default=True, type=int,
                 help="Minimum ranked tickers per sub-sector to include "
                        "in the decile cuts.")
+@click.option("--allow-shorts/--long-only", default=True, show_default=True,
+                help="Include the short bottom-decile leg (default) or run "
+                       "long-only on the top decile alone.")
 @click.option("--out-csv", default=None,
                 help="Optional CSV output of (decile, mean_return, n_obs) + "
                        "the IC time series.")
-def backtest_factor_verify(market, start, end, freq, min_names, out_csv):
-    """Long top decile / short bottom decile V/Q/G factor-efficacy test.
+def backtest_factor_verify(market, start, end, freq, min_names,
+                              allow_shorts, out_csv):
+    """V/Q/G factor-efficacy test (long top decile, optional short bottom).
 
-    Sub-sector-neutral · equal-weight within each leg · dollar-neutral
-    long+short. Outputs annualised long/short/spread returns, the Spread
-    Sharpe at rf=3%, mean Information Coefficient + its t-stat, and the
-    per-decile mean forward-return ladder (the monotonicity test).
+    Sub-sector-neutral · equal-weight within each leg. With shorts: dollar-
+    neutral long+short, "spread" = long − short. Long-only: just the top
+    decile, "spread" metrics report off the long curve.
 
     Paper signal test only — no transaction costs, no borrow fees, no
     HK shorting constraints. Cf. analysis/factor_backtest.run_factor_
@@ -817,13 +879,15 @@ def backtest_factor_verify(market, start, end, freq, min_names, out_csv):
     from analysis.factor_backtest import run_factor_verification_backtest
 
     end = end or date_cls.today().strftime("%Y-%m-%d")
+    mode_tag = "L/S" if allow_shorts else "long-only"
     console.print(f"[bold cyan]Factor verification: {market} | freq={freq} | "
-                  f"{start} to {end}[/bold cyan]")
+                  f"{mode_tag} | {start} to {end}[/bold cyan]")
 
     result = run_factor_verification_backtest(
         start_date=start, end_date=end, rebalance_freq=freq,
         db_path=settings.DB_PATH, market=market,
         min_names_per_subsector=min_names,
+        allow_shorts=allow_shorts,
     )
     m = result.metrics
 

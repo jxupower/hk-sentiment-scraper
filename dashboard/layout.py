@@ -3,9 +3,9 @@ import dash_bootstrap_components as dbc
 
 from dashboard import theme as T
 from dashboard.i18n import T as i18n_T
+from dashboard.market_layout import build_market_tab
 from dashboard.screener_layout import build_screener_tab
 from dashboard.recommendations_layout import build_recommendations_tab
-from dashboard.screens_layout import build_screens_tab
 from dashboard.backtest_layout import build_backtest_tab
 from dashboard.stock_research_layout import build_stock_research_tab
 from dashboard.risk_layout import build_risk_tab
@@ -16,16 +16,19 @@ from dashboard.portfolio_layout import build_portfolio_tab
 # rebuild them with translated labels via Output("main-tabs", "children").
 # Each entry is (slug-key, tab_id, child_builder); the child layout is
 # already-built once (DOM stays stable), only the displayed label flips.
+#
+# Market tab is the default landing view (was Screener; replaced the old
+# rule-based Screens tab which was tuned for HK and didn't work for US).
 TAB_DEFS = [
+    ("tab.market",     "tab-market",          build_market_tab),
     ("tab.screener",   "tab-screener",        build_screener_tab),
     ("tab.discovery",  "tab-recommendations", build_recommendations_tab),
-    ("tab.screens",    "tab-screens",         build_screens_tab),
     ("tab.backtest",   "tab-backtest",        build_backtest_tab),
     ("tab.research",   "tab-stock-research",  build_stock_research_tab),
     ("tab.risk",       "tab-risk",            build_risk_tab),
     ("tab.portfolio",  "tab-portfolio",       build_portfolio_tab),
-    # Sentiment is now the rightmost tab — fundamentals-driven workflow
-    # (Screener / Discovery / Research) is the primary entry point.
+    # Sentiment is the rightmost tab — fundamentals-driven workflow
+    # (Market / Screener / Discovery / Research) is the primary entry point.
     ("tab.sentiment",  "tab-sentiment",       None),   # special: needs `sectors`
 ]
 
@@ -75,7 +78,7 @@ def build_layout(sectors: list[str]) -> html.Div:
         _startup_modal(),
         _header_bar(),
         dbc.Container([
-            dbc.Tabs(id="main-tabs", active_tab="tab-screener",
+            dbc.Tabs(id="main-tabs", active_tab="tab-market",
                        className="mb-4",
                        children=build_tabs("en", sectors)),
         ], fluid=True, className="py-3", style={"maxWidth": "1600px"}),

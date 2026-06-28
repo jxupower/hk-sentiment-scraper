@@ -541,9 +541,11 @@ def register_portfolio_callbacks(app, db_path: str):
         State("portfolio-rebalance", "value"),
         State("portfolio-cap-slider", "value"),
         State("portfolio-rf", "value"),
+        State("portfolio-allow-shorts", "value"),
         prevent_initial_call=True,
     )
-    def compute_portfolio(_n, table_data, lookback, rebalance, cap_pct, rf_pct):
+    def compute_portfolio(_n, table_data, lookback, rebalance, cap_pct, rf_pct,
+                            allow_shorts):
         if not table_data:
             return _error_state("Add holdings first.")
 
@@ -584,6 +586,7 @@ def register_portfolio_callbacks(app, db_path: str):
                 rebalance_days=int(rebalance or 21),
                 weight_cap=weight_cap,
                 rf=rf,
+                allow_shorts=bool(allow_shorts),
                 db=db,
             )
         except ValueError as e:
@@ -822,7 +825,9 @@ def _build_cap_warning(bundle, weight_cap: float, rf: float):
             mu_c = bundle.mu_sigma.mu[idx_current]
             sigma_c = bundle.mu_sigma.sigma[np.ix_(idx_current, idx_current)]
             w_uncapped = max_sharpe_portfolio(mu_c, sigma_c, rf=rf,
-                                                weight_cap=1.0)
+                                                weight_cap=1.0,
+                                                allow_shorts=getattr(
+                                                    bundle, "allow_shorts", False))
             s_uncapped = portfolio_metrics(w_uncapped, mu_c, sigma_c,
                                             rf=rf)["sharpe"]
             s_capped = bundle.m_current_optimal.get("sharpe", 0.0)

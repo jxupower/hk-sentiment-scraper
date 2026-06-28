@@ -3,9 +3,9 @@ import dash_bootstrap_components as dbc
 
 from dashboard.layout import build_layout
 from dashboard.callbacks import register_callbacks
+from dashboard.market_callbacks import register_market_callbacks
 from dashboard.screener_callbacks import register_screener_callbacks
 from dashboard.recommendations_callbacks import register_recommendations_callbacks
-from dashboard.screens_callbacks import register_screens_callbacks
 from dashboard.backtest_callbacks import register_backtest_callbacks
 from dashboard.stock_research_callbacks import register_stock_research_callbacks
 from dashboard.risk_callbacks import register_risk_callbacks
@@ -304,9 +304,9 @@ def create_app(db_path: str, settings) -> dash.Dash:
 
     app.layout = build_layout(sectors)
     register_callbacks(app, db_path, cfg, watchlist, yahoo)
+    register_market_callbacks(app, db_path)
     register_screener_callbacks(app, db_path)
     register_recommendations_callbacks(app, db_path)
-    register_screens_callbacks(app, db_path)
     register_backtest_callbacks(app, db_path)
     register_stock_research_callbacks(app, db_path)
     register_risk_callbacks(app, db_path)

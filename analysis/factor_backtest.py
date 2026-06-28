@@ -1211,17 +1211,26 @@ def run_factor_verification_backtest(
     sector_risk_path: Optional[str] = None,
     market: str = "HK",
     min_names_per_subsector: int = DEFAULT_MIN_NAMES_PER_SUBSECTOR,
+    allow_shorts: bool = True,
 ) -> FactorVerificationResult:
-    """V/Q/G factor-verification long/short backtest.
+    """V/Q/G factor-verification backtest.
 
     At each rebalance, score the universe (no preset filter) and within
-    each sub-sector pick the top decile (LONG) + bottom decile (SHORT)
-    by composite V/Q/G percentile. Pool across sub-sectors, equal-weight
-    within each leg, hold until the next rebalance.
+    each sub-sector pick the top decile by composite V/Q/G percentile.
 
-    Outputs three normalised equity curves (long / short / spread), per-
-    decile mean forward returns (the monotonicity test), per-rebalance
-    Information Coefficient, and headline annualised metrics.
+    `allow_shorts=True` (default — historical behaviour): also short the
+    bottom decile per sub-sector. Pool across sub-sectors, equal-weight
+    within each leg. Three normalised equity curves emitted (long, short,
+    spread = long − short).
+
+    `allow_shorts=False`: long-only. The short leg is skipped entirely;
+    short_curve / spread_curve come back empty, ann_return_short = 0, and
+    the spread_sharpe / spread_max_dd / hit_rate metrics are computed off
+    the long curve so the verdict logic still reads naturally.
+
+    Per-decile mean forward returns (the monotonicity test) and per-
+    rebalance Information Coefficient are independent of the long-only
+    flag — they cover every decile, not just the extremes.
     """
     from analysis.factor_scores import FactorScoringEngine
     from analysis.data_loader import get_universe_fundamentals
@@ -1294,12 +1303,13 @@ def run_factor_verification_backtest(
         )
         subsectors_seen.update(buckets_by_sub.keys())
 
-        # Pool top + bottom decile across all qualifying sub-sectors.
+        # Pool top + (optionally) bottom decile across qualifying sub-sectors.
         longs: list = []
         shorts: list = []
         deciles_pool: dict[int, list] = {b: [] for b in range(N_DECILES)}
         for sub, buckets in buckets_by_sub.items():
-            shorts.extend(buckets[0])               # bucket 0 = lowest composite
+            if allow_shorts:
+                shorts.extend(buckets[0])           # bucket 0 = lowest composite
             longs.extend(buckets[N_DECILES - 1])    # bucket N-1 = highest
             for b, rs in enumerate(buckets):
                 deciles_pool[b].extend(rs)
@@ -1307,11 +1317,14 @@ def run_factor_verification_backtest(
         long_sizes.append(len(longs))
         short_sizes.append(len(shorts))
         universe_tickers.update(r.ticker for r in longs)
-        universe_tickers.update(r.ticker for r in shorts)
+        if allow_shorts:
+            universe_tickers.update(r.ticker for r in shorts)
         for rs in deciles_pool.values():
             universe_tickers.update(r.ticker for r in rs)
 
         # Signed equal-weight: |Σw_long| = 1.0, |Σw_short| = 1.0
+        # (shorts list is empty in long-only mode, so the short weights
+        # never materialise)
         w_long = (1.0 / len(longs)) if longs else 0.0
         w_short = (-1.0 / len(shorts)) if shorts else 0.0
         holdings_signed = ([(r.ticker, w_long) for r in longs] +
@@ -1350,11 +1363,14 @@ def run_factor_verification_backtest(
     long_val = 100.0
     short_val = 100.0
     spread_val = 100.0
-    # Anchor curves at the first rebalance date.
+    # Anchor curves at the first rebalance date. In long-only mode the short
+    # + spread curves stay empty so the UI's `if curve:` checks naturally
+    # render a single-trace chart instead of flat-line clutter.
     if verify_log:
         long_curve.append((verify_log[0]["date"], long_val))
-        short_curve.append((verify_log[0]["date"], short_val))
-        spread_curve.append((verify_log[0]["date"], spread_val))
+        if allow_shorts:
+            short_curve.append((verify_log[0]["date"], short_val))
+            spread_curve.append((verify_log[0]["date"], spread_val))
 
     for i in range(len(verify_log) - 1):
         snap = verify_log[i]
@@ -1362,13 +1378,18 @@ def run_factor_verification_backtest(
         t_next = verify_log[i + 1]["date"]
         if not snap.get("holdings_signed"):
             long_curve.append((t_next, long_val))
-            short_curve.append((t_next, short_val))
-            spread_curve.append((t_next, spread_val))
+            if allow_shorts:
+                short_curve.append((t_next, short_val))
+                spread_curve.append((t_next, spread_val))
             continue
 
         r_long, r_short = _signed_period_return(
             snap["holdings_signed"], t, t_next, price_cache,
         )
+        # Long-only: r_short is always 0 (shorts list empty above), but be
+        # explicit to keep the math walkthrough honest.
+        if not allow_shorts:
+            r_short = 0.0
         r_spread = r_long - r_short
         period_long_rets.append(r_long)
         period_short_rets.append(r_short)
@@ -1419,8 +1440,9 @@ def run_factor_verification_backtest(
         short_val *= (1.0 + r_short)
         spread_val *= (1.0 + r_spread)
         long_curve.append((t_next, long_val))
-        short_curve.append((t_next, short_val))
-        spread_curve.append((t_next, spread_val))
+        if allow_shorts:
+            short_curve.append((t_next, short_val))
+            spread_curve.append((t_next, spread_val))
 
     # --- Headline metrics -----------------------------------------------
     ppy = PERIODS_PER_YEAR.get(rebalance_freq, 12)
@@ -1456,12 +1478,21 @@ def run_factor_verification_backtest(
         return worst
 
     ann_long = _ann_ret(long_curve)
-    ann_short = _ann_ret(short_curve)
-    ann_spread = _ann_ret(spread_curve)
-    vol_spread = _ann_vol(period_spread_rets)
+    ann_short = _ann_ret(short_curve) if allow_shorts else 0.0
+    # In long-only mode the "spread" concept collapses to the long curve.
+    # Report spread metrics off the long curve so the verdict block (which
+    # reads ann_return_spread / spread_sharpe / spread_max_dd) still says
+    # something meaningful about the strategy's actual performance.
+    if allow_shorts:
+        ann_spread = _ann_ret(spread_curve)
+        vol_spread = _ann_vol(period_spread_rets)
+        dd_spread = _max_dd(spread_curve)
+    else:
+        ann_spread = ann_long
+        vol_spread = _ann_vol(period_long_rets)
+        dd_spread = _max_dd(long_curve)
     sharpe_spread = ((ann_spread - RISK_FREE_RATE_ANNUAL) / vol_spread
                        if vol_spread > 0 else 0.0)
-    dd_spread = _max_dd(spread_curve)
     hit_rate = (sum(1 for r in period_spread_rets if r > 0) / n_periods
                   if n_periods else 0.0)
     ic_vals = [v for _, v in ic_series]

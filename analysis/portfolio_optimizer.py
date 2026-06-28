@@ -127,24 +127,33 @@ def portfolio_metrics(weights: np.ndarray, mu: np.ndarray, sigma: np.ndarray,
 def max_sharpe_portfolio(mu: np.ndarray, sigma: np.ndarray, *,
                           rf: float = 0.0, weight_cap: float = 0.30,
                           initial_weights: Optional[np.ndarray] = None,
+                          allow_shorts: bool = False,
                           ) -> np.ndarray:
-    """Long-only, fully-invested, per-asset cap, max Sharpe via SLSQP.
+    """Fully-invested (Σw=1) max-Sharpe via SLSQP.
 
-    Returns a length-N weight vector summing to 1.0 (within solver
-    tolerance), each weight in [0, weight_cap]. Raises ValueError when
-    the cap is too small to fit (N × weight_cap < 1)."""
+    `allow_shorts=False` (default — historical behaviour) ⇒ long-only,
+    each weight in [0, weight_cap]. Raises ValueError when N × cap < 1
+    (cap too tight to fit a long-only book).
+
+    `allow_shorts=True` ⇒ long/short with symmetric per-asset cap, each
+    weight in [-weight_cap, +weight_cap]. Σw = 1 still holds (classical
+    fully-invested L/S; shorts free up capital that the longs deploy).
+    Feasibility is essentially unconstrained because longs can always
+    out-weight shorts to meet Σw=1 within the cap envelope.
+    """
     n = len(mu)
-    if n * weight_cap < 1.0 - 1e-9:
+    if not allow_shorts and n * weight_cap < 1.0 - 1e-9:
         raise ValueError(
-            f"weight_cap={weight_cap} too tight for N={n} — "
-            f"need cap >= 1/N = {1.0/n:.3f}")
+            f"weight_cap={weight_cap} too tight for N={n} long-only — "
+            f"need cap >= 1/N = {1.0/n:.3f} (or set allow_shorts=True)")
 
     def neg_sharpe(w):
         m = portfolio_metrics(w, mu, sigma, rf)
         return -m["sharpe"]
 
     w0 = initial_weights if initial_weights is not None else np.full(n, 1.0 / n)
-    bounds = [(0.0, weight_cap)] * n
+    bounds = ([(-weight_cap, weight_cap)] * n if allow_shorts
+                else [(0.0, weight_cap)] * n)
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
 
     res = minimize(neg_sharpe, w0, method="SLSQP",
@@ -153,17 +162,27 @@ def max_sharpe_portfolio(mu: np.ndarray, sigma: np.ndarray, *,
 
     if not res.success:
         # SLSQP can declare failure even when the answer is fine; fall back
-        # to equal-weight if the solution is clearly broken (NaN / out of bounds)
-        if not np.all(np.isfinite(res.x)) or np.any(res.x < -1e-6):
+        # to equal-weight if the solution is clearly broken (NaN). With
+        # shorts the bound check would also flag legitimate negatives, so
+        # we only invalidate on NaN/inf, not sign.
+        if not np.all(np.isfinite(res.x)):
             return np.full(n, 1.0 / n)
-    return _clean_weights(res.x, weight_cap)
+    return _clean_weights(res.x, weight_cap, allow_shorts=allow_shorts)
 
 
-def _clean_weights(w: np.ndarray, cap: float) -> np.ndarray:
-    """Clip tiny numerical artefacts and renormalize."""
-    w = np.clip(w, 0.0, cap)
+def _clean_weights(w: np.ndarray, cap: float, *,
+                     allow_shorts: bool = False) -> np.ndarray:
+    """Clip tiny numerical artefacts and renormalize to Σw = 1.
+
+    Long-only: clip to [0, cap]; renormalise by sum.
+    Long/short: clip to [-cap, cap]; renormalise by sum so Σw = 1 (NOT
+    by abs-sum — that would change the leverage profile). When sum is
+    near zero (rare with the (-cap, cap) bounds + Σw=1 SLSQP constraint),
+    leave as-is to avoid divide-by-tiny."""
+    lo = -cap if allow_shorts else 0.0
+    w = np.clip(w, lo, cap)
     s = w.sum()
-    return w / s if s > 0 else w
+    return w / s if abs(s) > 1e-6 else w
 
 
 # ============== Minimum-variance at target return (for frontier) ==============
@@ -171,21 +190,24 @@ def _clean_weights(w: np.ndarray, cap: float) -> np.ndarray:
 def min_variance_portfolio_at_return(mu: np.ndarray, sigma: np.ndarray,
                                        target_return: float, *,
                                        weight_cap: float = 0.30,
+                                       allow_shorts: bool = False,
                                        ) -> Optional[np.ndarray]:
     """Find the weight vector minimising variance subject to:
-      - Σw = 1, 0 <= w_i <= cap
+      - Σw = 1
       - w'μ = target_return (within solver tol)
-    Returns None when no feasible solution exists (e.g. target_return
-    above what the cap-constrained universe can deliver)."""
+      - w_i ∈ [0, cap]              when allow_shorts=False
+      - w_i ∈ [-cap, +cap]          when allow_shorts=True
+    Returns None when no feasible solution exists."""
     n = len(mu)
-    if n * weight_cap < 1.0 - 1e-9:
+    if not allow_shorts and n * weight_cap < 1.0 - 1e-9:
         return None
 
     def portfolio_var(w):
         return float(np.dot(w, np.dot(sigma, w)))
 
     w0 = np.full(n, 1.0 / n)
-    bounds = [(0.0, weight_cap)] * n
+    bounds = ([(-weight_cap, weight_cap)] * n if allow_shorts
+                else [(0.0, weight_cap)] * n)
     constraints = [
         {"type": "eq", "fun": lambda w: np.sum(w) - 1.0},
         {"type": "eq", "fun": lambda w: np.dot(w, mu) - target_return},
@@ -199,7 +221,7 @@ def min_variance_portfolio_at_return(mu: np.ndarray, sigma: np.ndarray,
     actual = float(np.dot(res.x, mu))
     if abs(actual - target_return) > 1e-3:
         return None
-    return _clean_weights(res.x, weight_cap)
+    return _clean_weights(res.x, weight_cap, allow_shorts=allow_shorts)
 
 
 # ============== Efficient frontier ==============
@@ -215,13 +237,14 @@ class FrontierPoint:
 
 def efficient_frontier(mu: np.ndarray, sigma: np.ndarray, *,
                         n_points: int = 30, weight_cap: float = 0.30,
-                        rf: float = 0.0) -> list[FrontierPoint]:
+                        rf: float = 0.0,
+                        allow_shorts: bool = False) -> list[FrontierPoint]:
     """Trace the efficient frontier by sweeping target returns.
 
-    The feasible return range is constrained by the per-asset cap: the
-    maximum achievable return is `cap × top-k μ_i` where k = ceil(1/cap)
-    (you can put at most `cap` on each of the top names). We sweep
-    between the minimum-variance portfolio's return and that upper bound.
+    Long-only: max achievable return = `cap × top-k μ_i` (you can put at
+    most `cap` on each of the top names; the rest go to next-best).
+    Long/short: max achievable return = `cap × top-k μ - cap × bottom-k μ`
+    (long the best, short the worst, both at cap).
 
     Points that fail to solve (infeasible targets) are dropped silently.
     """
@@ -230,7 +253,8 @@ def efficient_frontier(mu: np.ndarray, sigma: np.ndarray, *,
     def variance(w):
         return float(np.dot(w, np.dot(sigma, w)))
     w0 = np.full(n, 1.0 / n)
-    bounds = [(0.0, weight_cap)] * n
+    bounds = ([(-weight_cap, weight_cap)] * n if allow_shorts
+                else [(0.0, weight_cap)] * n)
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
     res = minimize(variance, w0, method="SLSQP",
                     bounds=bounds, constraints=constraints,
@@ -239,16 +263,28 @@ def efficient_frontier(mu: np.ndarray, sigma: np.ndarray, *,
         return []
     min_var_ret = float(np.dot(res.x, mu))
 
-    # Upper bound: cap × top names
-    top_indices = np.argsort(-mu)
+    # Upper-bound the sweep so we don't waste cycles on infeasible targets.
+    # Long-only: stuff `cap` into top names until Σw=1.
+    # Long/short: stuff `+cap` into top names + `-cap` into bottom names
+    # (the spread above what long-only alone could achieve is the L/S kicker).
+    sorted_indices = np.argsort(-mu)        # high → low μ
     cum = 0.0
     max_ret = 0.0
-    for idx in top_indices:
+    for idx in sorted_indices:
         take = min(weight_cap, 1.0 - cum)
         max_ret += take * mu[idx]
         cum += take
         if cum >= 1.0 - 1e-9:
             break
+    if allow_shorts:
+        # Add the contribution from shorting the worst names at -cap each.
+        # We can short up to ~half the book in a self-funding way without
+        # blowing Σw=1 (longs get the freed capital). Cap the number of
+        # short names at the number of longs we already counted to keep
+        # the bound conservative.
+        n_longs = int(np.ceil(1.0 / weight_cap))
+        for idx in sorted_indices[-n_longs:]:
+            max_ret += weight_cap * (-mu[idx])   # shorting μ_low boosts return
 
     if max_ret <= min_var_ret:
         return []
@@ -256,7 +292,9 @@ def efficient_frontier(mu: np.ndarray, sigma: np.ndarray, *,
     targets = np.linspace(min_var_ret, max_ret, n_points)
     points: list[FrontierPoint] = []
     for tr in targets:
-        w = min_variance_portfolio_at_return(mu, sigma, tr, weight_cap=weight_cap)
+        w = min_variance_portfolio_at_return(mu, sigma, tr,
+                                                weight_cap=weight_cap,
+                                                allow_shorts=allow_shorts)
         if w is None:
             continue
         m = portfolio_metrics(w, mu, sigma, rf)
@@ -295,6 +333,7 @@ def candidate_marginal_value(mu: np.ndarray, sigma: np.ndarray,
                                 tickers: list[str],
                                 candidate_tickers: list[str], *,
                                 rf: float = 0.0, weight_cap: float = 0.30,
+                                allow_shorts: bool = False,
                                 ) -> dict[str, float]:
     """For each candidate ticker, return the drop in `S_full_optimal` if
     that candidate is removed from the universe. Higher value = more
@@ -304,7 +343,8 @@ def candidate_marginal_value(mu: np.ndarray, sigma: np.ndarray,
     candidate is contributing; near-zero when the optimizer wouldn't
     have used it anyway.
     """
-    w_full = max_sharpe_portfolio(mu, sigma, rf=rf, weight_cap=weight_cap)
+    w_full = max_sharpe_portfolio(mu, sigma, rf=rf, weight_cap=weight_cap,
+                                     allow_shorts=allow_shorts)
     s_full = portfolio_metrics(w_full, mu, sigma, rf)["sharpe"]
 
     out: dict[str, float] = {}
@@ -319,13 +359,14 @@ def candidate_marginal_value(mu: np.ndarray, sigma: np.ndarray,
             continue
         mu_k = mu[keep]
         sigma_k = sigma[np.ix_(keep, keep)]
-        # If the remaining cap budget can't sum to 1, the candidate is
-        # genuinely required — give it max marginal value
-        if len(keep) * weight_cap < 1.0 - 1e-9:
+        # Long-only feasibility check (shorts: always feasible at Σw=1)
+        if not allow_shorts and len(keep) * weight_cap < 1.0 - 1e-9:
             out[c] = float(s_full)  # interpretation: removing it breaks feasibility
             continue
         try:
-            w_k = max_sharpe_portfolio(mu_k, sigma_k, rf=rf, weight_cap=weight_cap)
+            w_k = max_sharpe_portfolio(mu_k, sigma_k, rf=rf,
+                                         weight_cap=weight_cap,
+                                         allow_shorts=allow_shorts)
             s_k = portfolio_metrics(w_k, mu_k, sigma_k, rf)["sharpe"]
             out[c] = float(s_full - s_k)
         except Exception:
@@ -370,6 +411,7 @@ def _series_metrics(returns: pd.Series, rf: float = 0.0) -> dict:
 def walk_forward_backtest(returns: pd.DataFrame, *,
                             lookback: int, rebalance_freq: int,
                             rf: float = 0.0, weight_cap: float = 0.30,
+                            allow_shorts: bool = False,
                             ) -> dict[str, BacktestStrategy]:
     """Walk-forward simulation of the max-Sharpe strategy vs three
     baselines (equal-weight, status-quo-frozen, first-asset buy-and-hold
@@ -414,7 +456,8 @@ def walk_forward_backtest(returns: pd.DataFrame, *,
         try:
             ms = estimate_mu_sigma(train)
             w_ms = max_sharpe_portfolio(ms.mu, ms.sigma, rf=rf,
-                                          weight_cap=weight_cap)
+                                          weight_cap=weight_cap,
+                                          allow_shorts=allow_shorts)
         except Exception:
             w_ms = np.full(N, 1.0 / N)
 
