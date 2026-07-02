@@ -66,6 +66,13 @@ def build_layout(sectors: list[str]) -> html.Div:
         # Discovery rank, Stock Research, Backtest benchmark, Risk Forecast
         # indices, Portfolio holdings, Sentiment sector cards).
         dcc.Store(id="user-market", data="HK", storage_type="local"),
+        # Color convention toggle (cn_hk = red-up / green-down [DEFAULT];
+        # standard = green-up / red-down). Same persistence pattern as the
+        # language + market stores. Wired through every callback that
+        # produces direction-encoding output so a click flips every chart,
+        # KPI, and conditional-styled table cell across every tab.
+        dcc.Store(id="user-color-convention", data="cn_hk",
+                    storage_type="local"),
         # Startup-modal confirmation flag. Memory store (NOT local) so the
         # modal reappears on every fresh dashboard load — gives the user
         # one explicit chance to pick market + language before they read
@@ -201,7 +208,7 @@ def _header_bar():
                         "color": T.TEXT_MUTED, "fontWeight": "500", "fontSize": "0.95rem",
                         "marginLeft": "8px",
                     }),
-                ], width=8),
+                ], width=6),
                 dbc.Col([
                     html.Span(id="header-last-updated-prefix",
                                 children="Last updated: ",
@@ -233,9 +240,25 @@ def _header_bar():
                                      size="sm", outline=True, n_clicks=0),
                         dbc.Button("中文", id="lang-zh-btn", color="primary",
                                      size="sm", outline=True, n_clicks=0),
+                    ], size="sm", className="me-2"),
+                    # Color convention toggle. "🔴↑" = CN/HK (red = up), "🟢↑" =
+                    # standard (green = up). Same neutral-start / init-sync
+                    # pattern as the other header toggles. A click flips every
+                    # direction-encoding chart, KPI and table cell across every
+                    # tab via the localStorage-persisted `user-color-convention`
+                    # store.
+                    dbc.ButtonGroup([
+                        dbc.Button("R↑",
+                                     id="color-cnhk-btn", color="primary",
+                                     size="sm", outline=True, n_clicks=0,
+                                     title="Red = up (CN/HK convention)"),
+                        dbc.Button("G↑",
+                                     id="color-std-btn", color="primary",
+                                     size="sm", outline=True, n_clicks=0,
+                                     title="Green = up (US / EU convention)"),
                     ], size="sm"),
-                ], width=4,
-                    className="text-end d-flex align-items-center justify-content-end"),
+                ], width=6,
+                    className="text-end d-flex align-items-center justify-content-end flex-wrap"),
             ], align="center", className="w-100"),
         ], fluid=True, style={"maxWidth": "1600px"}),
     ], style={

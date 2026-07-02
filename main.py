@@ -338,6 +338,7 @@ def universe_us():
 def universe_us_seed(source: str):
     """Download the US universe list and reconcile into the `securities` table."""
     import config.settings as settings
+    from analysis.taxonomy import compile_taxonomy
     from storage.database import Database
     from storage.repository import SecuritiesRepository
     from universe import us_loader, reconciler
@@ -345,6 +346,12 @@ def universe_us_seed(source: str):
     console.print(f"[bold cyan]Seeding US universe (source={source})...[/bold cyan]")
     db = Database(settings.DB_PATH)
     db.initialize()
+
+    # Always recompile + refresh taxonomy before reconcile. Catches any
+    # config drift (typos, dangling refs) upfront and keeps the
+    # sector_taxonomy DB cache in lockstep with the YAML.
+    compile_taxonomy(write_to_db=True)
+
     securities_repo = SecuritiesRepository(db)
 
     records = us_loader.download_and_parse(settings.HKEX_CACHE_DIR, source=source)
@@ -444,6 +451,71 @@ def universe_us_refresh_sectors(throttle: float, force_all: bool):
                   f"errors={summary['errors']:,}")
     console.print("\n[dim]Now re-run `python main.py universe-us seed` to derive "
                   "sub_sector for the newly-tagged rows.[/dim]")
+
+
+@cli.group()
+def taxonomy():
+    """Compile + inspect the sector/sub-sector taxonomy.
+
+    Source of truth: config/sub_sectors.yaml, config/us_sectors.yaml,
+    config/us_size_splits.yaml. The `compile` command Pydantic-validates
+    these and writes the resolved nodes to the sector_taxonomy DB table
+    which the dashboard reads at runtime via analysis.taxonomy.get_taxonomy().
+    """
+
+
+@taxonomy.command("compile")
+def taxonomy_compile():
+    """Validate all source YAMLs and write the compiled taxonomy to DB."""
+    import config.settings as settings
+    from analysis.taxonomy import compile_taxonomy
+    from storage.database import Database
+
+    console.print("[bold cyan]Compiling taxonomy...[/bold cyan]")
+    db = Database(settings.DB_PATH)
+    db.initialize()
+    try:
+        tax = compile_taxonomy(write_to_db=True)
+    except Exception as e:
+        console.print(f"[bold red]Validation failed:[/bold red] {e}")
+        raise click.Abort() from e
+
+    table = Table(title="Taxonomy Compile", show_lines=False)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("Parents", str(len(tax.all_parents())))
+    table.add_row("Sub-sectors", str(len(tax.all_subs())))
+    table.add_row("Version", tax.version)
+    console.print(table)
+
+
+@taxonomy.command("validate")
+def taxonomy_validate():
+    """Validate source YAMLs without writing to DB. Exit non-zero on failure."""
+    from analysis.taxonomy import compile_taxonomy
+    try:
+        tax = compile_taxonomy(write_to_db=False)
+    except Exception as e:
+        console.print(f"[bold red]Validation failed:[/bold red] {e}")
+        raise click.Abort() from e
+    console.print(f"[bold green]OK[/bold green] · "
+                  f"{len(tax.all_parents())} parents · "
+                  f"{len(tax.all_subs())} sub-sectors · "
+                  f"version={tax.version}")
+
+
+@taxonomy.command("show")
+@click.option("--lang", type=click.Choice(["en", "zh"]), default="en",
+              help="Display language for labels.")
+def taxonomy_show(lang: str):
+    """Print the compiled taxonomy from the DB."""
+    from analysis.taxonomy import get_taxonomy
+    tax = get_taxonomy()
+    console.print(f"[bold]Taxonomy version:[/bold] {tax.version}")
+    for parent in sorted(tax.all_parents()):
+        console.print(f"\n[bold cyan]{tax.label(parent, lang)}[/bold cyan]")
+        for sub in tax.children_of(parent):
+            console.print(f"  {tax.label(sub, lang)}")
 
 
 @cli.group()

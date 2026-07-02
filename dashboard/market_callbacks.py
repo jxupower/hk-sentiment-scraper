@@ -196,15 +196,19 @@ def register_market_callbacks(app, db_path: str):
         Output("market-kpi-ytd", "children"),
         Output("market-kpi-ytd", "style"),
         Output("market-kpi-maxdd", "children"),
+        Output("market-kpi-maxdd", "style"),
         Input("market-index-select", "value"),
         Input("market-period-select", "value"),
         Input("market-chart-style", "value"),
         Input("user-language", "data"),
+        Input("user-color-convention", "data"),
     )
-    def update_index_chart_and_kpis(index_ticker, period_days, chart_style, lang):
+    def update_index_chart_and_kpis(index_ticker, period_days, chart_style,
+                                       lang, convention):
         if not index_ticker:
             raise PreventUpdate
         lang = lang or "en"
+        convention = convention or "cn_hk"
         chart_style = (chart_style or "line").lower()
 
         # Single unified fetch path — _get_ohlc_cached returns the full
@@ -225,7 +229,7 @@ def register_market_callbacks(app, db_path: str):
             no_data_msg = I("market.no_data", lang).format(ticker=index_ticker)
             return ({}, no_data_msg, "",
                     "—", "—", empty_kpi_style,
-                    "—", empty_kpi_style, "—")
+                    "—", empty_kpi_style, "—", empty_kpi_style)
 
         # Slice to selected period. period_days=0 means MAX (no slice).
         windowed = _slice_window(prices, period_days)
@@ -237,9 +241,11 @@ def register_market_callbacks(app, db_path: str):
         # Title built off the translated index name.
         chart_label = _localised_index_name(index_ticker, lang)
         if chart_style == "candle":
-            fig = price_candlestick_chart(windowed, label=chart_label)
+            fig = price_candlestick_chart(windowed, label=chart_label,
+                                             convention=convention)
         else:
-            fig = price_chart(windowed, label=chart_label)
+            fig = price_chart(windowed, label=chart_label,
+                                convention=convention)
 
         # KPIs
         closes = [p["adj_close"] for p in windowed if p.get("adj_close")]
@@ -256,16 +262,21 @@ def register_market_callbacks(app, db_path: str):
             n=len(windowed),
         )
 
+        _, down_color = T.resolve_price_colors(convention)
+        maxdd_style = _kpi_value_style(down_color if max_dd is not None
+                                            else T.TEXT_FAINT)
+
         return (
             fig,
             chart_label,
             period_lbl,
             _fmt_index_level(last_close),
             _fmt_signed_pct(period_pct),
-            _kpi_value_style(_color_for_pct(period_pct)),
+            _kpi_value_style(_color_for_pct(period_pct, convention)),
             _fmt_signed_pct(ytd_pct),
-            _kpi_value_style(_color_for_pct(ytd_pct)),
+            _kpi_value_style(_color_for_pct(ytd_pct, convention)),
             _fmt_signed_pct(max_dd) if max_dd is not None else "—",
+            maxdd_style,
         )
 
     # =========================================================
@@ -417,21 +428,21 @@ def _fmt_signed_pct(v) -> str:
         return "—"
 
 
-def _color_for_pct(v) -> str:
-    """Standard finance convention (green positive, red negative) — NOT the
-    CN/HK price-up-red convention used elsewhere on this dashboard. KPI
-    chips read as universal returns; the chart fill colour still follows
-    the CN/HK theme per `price_chart`."""
+def _color_for_pct(v, convention: str = "cn_hk") -> str:
+    """Direction color for a signed percentage. `convention` picks the
+    palette: "cn_hk" (default) → red positive / green negative;
+    "standard" → green positive / red negative."""
     if v is None:
         return T.TEXT_FAINT
     try:
         f = float(v)
     except (TypeError, ValueError):
         return T.TEXT_FAINT
+    up_color, down_color = T.resolve_price_colors(convention)
     if f > 0:
-        return T.SUCCESS
+        return up_color
     if f < 0:
-        return T.DANGER
+        return down_color
     return T.TEXT_MUTED
 
 

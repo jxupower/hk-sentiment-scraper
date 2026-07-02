@@ -88,6 +88,7 @@ sectors:
       aliases: ["Morgan Stanley Wealth Management", "E-Trade"]
     - ticker: "BLK"
       name: "BlackRock"
+      sub_sector: "Asset Management"
       aliases: ["BlackRock Inc", "iShares", "Aladdin"]
     - ticker: "SCHW"
       name: "Charles Schwab"
@@ -129,10 +130,10 @@ sectors:
       name: "Merck"
       aliases: ["Merck & Co", "Keytruda"]
 
-  Health Insurance:
+  Healthcare Plans & Managed Care:
     - ticker: "UNH"
       name: "UnitedHealth"
-      sub_sector: "Health Insurance"
+      sub_sector: "Healthcare Plans & Managed Care"
       aliases: ["UnitedHealth Group", "Optum"]
 
   Oil & Gas:

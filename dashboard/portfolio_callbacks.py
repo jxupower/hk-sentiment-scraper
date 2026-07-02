@@ -542,10 +542,12 @@ def register_portfolio_callbacks(app, db_path: str):
         State("portfolio-cap-slider", "value"),
         State("portfolio-rf", "value"),
         State("portfolio-allow-shorts", "value"),
+        State("user-color-convention", "data"),
         prevent_initial_call=True,
     )
     def compute_portfolio(_n, table_data, lookback, rebalance, cap_pct, rf_pct,
-                            allow_shorts):
+                            allow_shorts, convention):
+        convention = convention or "cn_hk"
         if not table_data:
             return _error_state("Add holdings first.")
 
@@ -603,9 +605,9 @@ def register_portfolio_callbacks(app, db_path: str):
         hero_full = f"{fu:.3f}"
 
         delta_rebal = _delta_text("Δ from rebalancing within current",
-                                    cu - sq)
+                                    cu - sq, convention=convention)
         delta_add = _delta_text("Δ from adding candidates",
-                                  fu - cu)
+                                  fu - cu, convention=convention)
 
         # Charts
         weights_fig = weights_bar_chart(bundle.tickers, bundle.w_status_quo,
@@ -624,9 +626,11 @@ def register_portfolio_callbacks(app, db_path: str):
         currency = "USD" if sole_market == "US" else "HKD"
 
         # Tables
-        backtest_table = _build_backtest_table(bundle.backtest)
-        candidate_table = _build_candidate_table(bundle)
-        trade_list = _build_trade_list(bundle, currency=currency)
+        backtest_table = _build_backtest_table(bundle.backtest,
+                                                    convention=convention)
+        candidate_table = _build_candidate_table(bundle, convention=convention)
+        trade_list = _build_trade_list(bundle, currency=currency,
+                                             convention=convention)
         diagnostics = _build_diagnostics(bundle, currency=currency)
 
         status = (f"Built {len(bundle.tickers)} tickers, {bundle.mu_sigma.n_obs} "
@@ -669,10 +673,9 @@ def _error_state(msg: str):
     )
 
 
-def _delta_text(label: str, delta: float):
-    # Portfolio metric delta (e.g. Sharpe lift): positive return-direction
-    # signal = red in CN/HK convention.
-    color = T.PRICE_UP if delta > 0.001 else (T.PRICE_DOWN if delta < -0.001 else T.TEXT_MUTED)
+def _delta_text(label: str, delta: float, convention: str = "cn_hk"):
+    up, down = T.resolve_price_colors(convention)
+    color = up if delta > 0.001 else (down if delta < -0.001 else T.TEXT_MUTED)
     sym = "+" if delta >= 0 else ""
     return html.Div([
         html.Span(f"{label}: ", style={"color": T.TEXT_MUTED}),
@@ -680,7 +683,7 @@ def _delta_text(label: str, delta: float):
     ])
 
 
-def _build_backtest_table(backtest: dict) -> html.Table:
+def _build_backtest_table(backtest: dict, convention: str = "cn_hk") -> html.Table:
     """Per-strategy: total return, ann return, ann vol, Sharpe, max DD, turnover."""
     def fmt_pct(v, signed=False):
         if v is None: return "—"
@@ -694,8 +697,9 @@ def _build_backtest_table(backtest: dict) -> html.Table:
                        ["Strategy", "Total ret", "Ann ret", "Ann vol",
                         "Sharpe", "Max DD", "Turnover (/rebal)"]],
                       className="small text-muted")]
+    up, down = T.resolve_price_colors(convention)
     for key, s in backtest.items():
-        sharpe_color = T.PRICE_UP if (s.sharpe or 0) > 0 else T.PRICE_DOWN
+        sharpe_color = up if (s.sharpe or 0) > 0 else down
         rows.append(html.Tr([
             html.Td(s.name, style={"fontWeight": "600"}),
             html.Td(fmt_pct(s.total_return, signed=True)),
@@ -709,7 +713,7 @@ def _build_backtest_table(backtest: dict) -> html.Table:
     return html.Table(rows, className="table table-sm w-100 small")
 
 
-def _build_candidate_table(bundle) -> html.Div:
+def _build_candidate_table(bundle, convention: str = "cn_hk") -> html.Div:
     """Marginal value per candidate, sorted descending."""
     if not bundle.candidate_tickers:
         return html.P("No candidates (all rows have shares > 0).",
@@ -719,6 +723,7 @@ def _build_candidate_table(bundle) -> html.Div:
               for t in bundle.candidate_tickers]
     items.sort(key=lambda x: -x[1])
 
+    up_color, _ = T.resolve_price_colors(convention)
     rows = [html.Tr([html.Th(c) for c in
                        ["Candidate", "Δ Sharpe (full - without)",
                         "Optimal weight", "Verdict"]],
@@ -728,8 +733,7 @@ def _build_candidate_table(bundle) -> html.Div:
         opt_w = bundle.w_full_optimal[idx]
         verdict = ("✓ valuable add" if dv > 0.05
                    else ("~ marginal" if dv > 0.01 else "✗ negligible"))
-        # Marginal Sharpe lift: positive = bullish "add this name" = red.
-        v_color = T.PRICE_UP if dv > 0.05 else (T.WARNING if dv > 0.01 else T.TEXT_MUTED)
+        v_color = up_color if dv > 0.05 else (T.WARNING if dv > 0.01 else T.TEXT_MUTED)
         rows.append(html.Tr([
             html.Td(t, style={"fontWeight": "600"}),
             html.Td(f"+{dv:.3f}" if dv > 0 else f"{dv:.3f}",
@@ -740,7 +744,8 @@ def _build_candidate_table(bundle) -> html.Div:
     return html.Table(rows, className="table table-sm w-100 small")
 
 
-def _build_trade_list(bundle, currency: str = "HKD") -> html.Div:
+def _build_trade_list(bundle, currency: str = "HKD",
+                         convention: str = "cn_hk") -> html.Div:
     """What to buy/sell to move from status-quo to full-optimal weights."""
     if bundle.w_status_quo.sum() == 0:
         return html.P("No current holdings — can't compute trade list.",
@@ -755,6 +760,7 @@ def _build_trade_list(bundle, currency: str = "HKD") -> html.Div:
         return html.P("Total portfolio value is zero — can't compute trade list.",
                        className="text-muted small")
 
+    up, down = T.resolve_price_colors(convention)
     rows = [html.Tr([html.Th(c) for c in
                        ["Ticker", "Current shares", "Target shares",
                         "Δ shares", f"Δ {currency}"]],
@@ -767,8 +773,7 @@ def _build_trade_list(bundle, currency: str = "HKD") -> html.Div:
         target_shares = target_value / price if price > 0 else 0.0
         delta = target_shares - current_shares
         delta_hkd = delta * price
-        # Trade list delta: BUY (positive shares Δ) = red, SELL = green.
-        color = T.PRICE_UP if delta > 0 else (T.PRICE_DOWN if delta < 0 else T.TEXT_MUTED)
+        color = up if delta > 0 else (down if delta < 0 else T.TEXT_MUTED)
         rows.append(html.Tr([
             html.Td(t, style={"fontWeight": "600"}),
             html.Td(f"{current_shares:,.0f}"),

@@ -212,11 +212,11 @@ sectors:
   Coal:
     - ticker: "1088.HK"
       name: "China Shenhua Energy"
-      sub_sector: "Thermal Coal"
+      sub_sector: "Coal"
       aliases: ["Shenhua Energy", "China Shenhua", "Shenhua coal"]
     - ticker: "1898.HK"
       name: "China Coal Energy"
-      sub_sector: "Thermal Coal"
+      sub_sector: "Coal"
       aliases: ["China Coal", "Zhongmei Energy", "China Coal Group"]
 
   Chemicals:

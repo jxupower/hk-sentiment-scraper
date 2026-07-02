@@ -271,6 +271,48 @@ class Database:
                     growth_5y  REAL,            -- fraction, e.g. 0.12 = 12%
                     fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
+
+                -- Compiled taxonomy: parents + sub-sectors with bilingual labels.
+                -- Written by analysis.taxonomy.compile_taxonomy(); read by
+                -- get_taxonomy() at runtime. Source of truth lives in
+                -- config/sub_sectors.yaml et al.
+                CREATE TABLE IF NOT EXISTS sector_taxonomy (
+                    canonical_name TEXT PRIMARY KEY,
+                    kind           TEXT NOT NULL,                 -- 'parent' | 'sub'
+                    parent_name    TEXT,                          -- NULL for parents
+                    label_en       TEXT NOT NULL,
+                    label_zh       TEXT NOT NULL,
+                    display_order  INTEGER NOT NULL DEFAULT 999,
+                    is_active      INTEGER NOT NULL DEFAULT 1,    -- BOOLEAN as INTEGER
+                    compiled_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CHECK (kind IN ('parent', 'sub'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_sector_taxonomy_parent
+                    ON sector_taxonomy(parent_name);
+
+                -- Single-row key/value table for the compile version hash
+                -- (used as cache-bust key by the runtime Taxonomy singleton).
+                CREATE TABLE IF NOT EXISTS taxonomy_meta (
+                    key        TEXT PRIMARY KEY,
+                    value      TEXT NOT NULL,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                -- Reclassification audit. Reconciler writes one row per
+                -- ticker only when (sub_sector, effective_sector) changes.
+                CREATE TABLE IF NOT EXISTS ticker_taxonomy_history (
+                    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker               TEXT NOT NULL,
+                    sub_sector           TEXT,
+                    effective_sector     TEXT,
+                    market_cap_at_change REAL,
+                    reason               TEXT NOT NULL,
+                    changed_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_tth_ticker_time
+                    ON ticker_taxonomy_history(ticker, changed_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_tth_reason
+                    ON ticker_taxonomy_history(reason, changed_at DESC);
             """)
             # Migration: add Direction C columns to fundamentals_snapshots if missing
             # (CREATE TABLE IF NOT EXISTS won't add columns to a pre-existing table).

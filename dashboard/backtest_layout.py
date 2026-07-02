@@ -353,22 +353,10 @@ def _build_strategy_subtab() -> html.Div:
                             {"if": {"column_id": "name"},
                              "textAlign": "left"},
                         ],
-                        style_data_conditional=[
-                            # Δ-weight / Δ-shares colour follows the
-                            # CN/HK convention: position grew = red, shrank = green.
-                            {"if": {"filter_query": "{weight_delta} > 0",
-                                     "column_id": "weight_delta"},
-                             "color": T.PRICE_UP},
-                            {"if": {"filter_query": "{weight_delta} < 0",
-                                     "column_id": "weight_delta"},
-                             "color": T.PRICE_DOWN},
-                            {"if": {"filter_query": "{shares_delta} > 0",
-                                     "column_id": "shares_delta"},
-                             "color": T.PRICE_UP},
-                            {"if": {"filter_query": "{shares_delta} < 0",
-                                     "column_id": "shares_delta"},
-                             "color": T.PRICE_DOWN},
-                        ],
+                        # Δ-weight / Δ-shares colour is set dynamically by
+                        # the `update_bt_final_style` callback so it follows
+                        # the user's active color-convention.
+                        style_data_conditional=[],
                         style_header=T.DATATABLE_HEADER,
                     ),
                 ),
@@ -606,6 +594,7 @@ def _build_verification_subtab() -> html.Div:
                         dbc.Col([
                             html.H6("Long basket (top decile)",
                                       className="mb-2",
+                                      id="bv-long-header",
                                       style={"color": T.PRICE_UP}),
                             dash_table.DataTable(
                                 id="bv-long-table",
@@ -635,6 +624,7 @@ def _build_verification_subtab() -> html.Div:
                         dbc.Col([
                             html.H6("Short basket (bottom decile)",
                                       className="mb-2",
+                                      id="bv-short-header",
                                       style={"color": T.PRICE_DOWN}),
                             dash_table.DataTable(
                                 id="bv-short-table",

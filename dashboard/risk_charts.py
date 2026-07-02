@@ -16,7 +16,8 @@ def _hex_to_rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
-def fan_chart(prices: pd.Series, paths: np.ndarray, ticker: str) -> go.Figure:
+def fan_chart(prices: pd.Series, paths: np.ndarray, ticker: str,
+                convention: str = "cn_hk") -> go.Figure:
     """The centerpiece: historical price line plus the 5/25/50/75/95
     percentile bands of simulated future paths, anchored at the last
     historical price.
@@ -166,7 +167,8 @@ def vol_cone_chart(returns_pct: pd.Series, forecast_annual_pct: np.ndarray,
     return fig
 
 
-def drawdown_histogram(max_drawdowns: np.ndarray, ticker: str) -> go.Figure:
+def drawdown_histogram(max_drawdowns: np.ndarray, ticker: str,
+                             convention: str = "cn_hk") -> go.Figure:
     """Distribution of max drawdown per simulated path (always <= 0)."""
     # Values are negative; convert to absolute percent for readability
     dd_pct = -max_drawdowns * 100  # positive percent of loss
@@ -175,12 +177,12 @@ def drawdown_histogram(max_drawdowns: np.ndarray, ticker: str) -> go.Figure:
     p95 = float(np.quantile(dd_pct, 0.95))
     p99 = float(np.quantile(dd_pct, 0.99))
 
+    _, down_color = T.resolve_price_colors(convention)
     fig = go.Figure(go.Histogram(
         x=dd_pct,
         nbinsx=40,
-        # CN/HK convention: drawdown (price-down) histogram = green.
-        marker_color=_hex_to_rgba(T.PRICE_DOWN, 0.45),
-        marker_line=dict(color=T.PRICE_DOWN, width=0.5),
+        marker_color=_hex_to_rgba(down_color, 0.45),
+        marker_line=dict(color=down_color, width=0.5),
         name="Per-path max drawdown",
         hovertemplate="drawdown %{x:.1f}%<br>%{y} paths<extra></extra>",
     ))
@@ -188,10 +190,10 @@ def drawdown_histogram(max_drawdowns: np.ndarray, ticker: str) -> go.Figure:
                    annotation_text=f"median {p50:.1f}%",
                    annotation_position="top right",
                    annotation_font=dict(color=T.PRIMARY, size=10))
-    fig.add_vline(x=p95, line=dict(color=T.PRICE_DOWN, width=1.5, dash="dash"),
+    fig.add_vline(x=p95, line=dict(color=down_color, width=1.5, dash="dash"),
                    annotation_text=f"p95 {p95:.1f}%",
                    annotation_position="top right",
-                   annotation_font=dict(color=T.PRICE_DOWN, size=10))
+                   annotation_font=dict(color=down_color, size=10))
 
     fig.update_layout(**T.chart_layout(
         title=f"{ticker} — max-drawdown distribution across simulated paths",

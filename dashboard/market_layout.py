@@ -198,8 +198,7 @@ def build_market_tab() -> html.Div:
                                 "market-kpi-ytd-label"),
                       xs=12, sm=6, md=3),
             dbc.Col(_kpi_card("Max drawdown (period)", "market-kpi-maxdd",
-                                "market-kpi-maxdd-label",
-                                color=T.DANGER),
+                                "market-kpi-maxdd-label"),
                       xs=12, sm=6, md=3),
         ], className="g-2 mb-3"),
 

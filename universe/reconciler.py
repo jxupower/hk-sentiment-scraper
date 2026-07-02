@@ -11,6 +11,7 @@ logger = get_logger(__name__)
 
 
 _SUB_SECTORS_PATH = Path(__file__).parent.parent / "config" / "sub_sectors.yaml"
+_US_SIZE_SPLITS_PATH = Path(__file__).parent.parent / "config" / "us_size_splits.yaml"
 
 
 def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
@@ -90,10 +91,13 @@ def reconcile(securities_repo: SecuritiesRepository, hkex_records: list[dict],
     # Sub-sector resolution pass — runs over every active row in securities
     # and writes sub_sector + effective_sector based on the config layered
     # over yfinance's industry classification. Idempotent, ~1s.
-    sub_sector_summary = _reconcile_sub_sectors(securities_repo, watchlist)
+    sub_sector_summary = _reconcile_sub_sectors(securities_repo, watchlist,
+                                                  market_filter="HK")
+    history_count = finalize_history_diff(securities_repo)
 
     summary = {
         "total": securities_repo.count_all(),
+        "history_rows_appended": history_count,
         "watchlist": securities_repo.count_watchlist(),
         "hkex_ingested": len(hkex_records),
         "watchlist_in_yaml": watchlist_count,
@@ -187,7 +191,19 @@ def reconcile_us(securities_repo: SecuritiesRepository, us_records: list[dict],
         securities_repo, watchlist_us,
         promote_section_headings=True,
         load_us_overrides=True,
+        market_filter="US",
     )
+
+    # Final US-only pass: split oversized buckets (Banks, Asset Management,
+    # Biotechnology) into market-cap tiers using shares × latest_close as a
+    # proxy. Skipped silently if Supabase isn't reachable.
+    size_split_summary = _apply_us_size_splits(securities_repo)
+
+    # Single audit-write covering ALL upstream passes (HK pass at run-start
+    # plus this US pass plus the size split). Reads the *settled* DB state
+    # and only records tickers whose state differs from the latest history
+    # row — so transient intermediate flips don't pollute the audit.
+    history_count = finalize_history_diff(securities_repo)
 
     summary = {
         "total_us": securities_repo.count_active_for_market("US"),
@@ -195,7 +211,9 @@ def reconcile_us(securities_repo: SecuritiesRepository, us_records: list[dict],
         "watchlist_us": watchlist_count,
         "missing_from_universe": missing_from_universe,
         "deactivated": deactivated,
+        "history_rows_appended": history_count,
         **sub_sector_summary,
+        **size_split_summary,
     }
     logger.info("US reconcile summary: %s", summary)
     return summary
@@ -206,13 +224,29 @@ def reconcile_us(securities_repo: SecuritiesRepository, us_records: list[dict],
 # ============================================================================
 
 def _load_sub_sectors_config() -> dict:
-    """Load config/sub_sectors.yaml. Returns an empty dict (no overrides,
-    no industry mapping) if the file is missing — keeps the reconciler
-    backwards-compatible with deployments that haven't shipped the config yet."""
+    """Load config/sub_sectors.yaml after Pydantic-validating it via
+    analysis.taxonomy.compile_taxonomy(). Cross-file referential integrity
+    errors (dangling sub-sector refs, missing zh translations, bad ticker
+    overrides) abort here loudly with the offending key, rather than
+    silently producing empty labels at render time.
+
+    Returns an empty dict (no overrides, no industry mapping) if the file
+    is missing — keeps the reconciler backwards-compatible with first-boot
+    deployments that haven't shipped the config yet."""
     if not _SUB_SECTORS_PATH.exists():
         logger.warning("config/sub_sectors.yaml missing — sub-sector "
                        "resolution will leave all rows NULL")
         return {}
+
+    # Trigger validation before we read the raw YAML. compile_taxonomy
+    # raises a ValueError on any drift; we want that to surface here.
+    try:
+        from analysis.taxonomy import compile_taxonomy
+        compile_taxonomy(write_to_db=False)
+    except Exception as e:
+        logger.error("Taxonomy validation FAILED — refusing to reconcile: %s", e)
+        raise
+
     with open(_SUB_SECTORS_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
@@ -321,7 +355,8 @@ def _load_us_sectors_yaml() -> dict:
 def _reconcile_sub_sectors(securities_repo: SecuritiesRepository,
                              watchlist: dict,
                              promote_section_headings: bool = False,
-                             load_us_overrides: bool = False) -> dict:
+                             load_us_overrides: bool = False,
+                             market_filter: Optional[str] = None) -> dict:
     """Walk every active security and write resolved (sub_sector,
     effective_sector). Returns a small counts dict for the summary log.
 
@@ -343,6 +378,8 @@ def _reconcile_sub_sectors(securities_repo: SecuritiesRepository,
     )
 
     active_rows = securities_repo.get_all_active()
+    if market_filter:
+        active_rows = [r for r in active_rows if r.get("market") == market_filter]
     updates: list[tuple] = []
     n_sub_assigned = 0
     n_effective_changed = 0
@@ -372,6 +409,9 @@ def _reconcile_sub_sectors(securities_repo: SecuritiesRepository,
             n_effective_changed += 1
 
     n_updated = securities_repo.bulk_set_sub_sector(updates)
+    # NOTE: history is finalised once at the end of the full reconcile
+    # chain (HK pass + US pass + size split) via finalize_history_diff.
+    # Intermediate writes here would record transient flips that net out.
     logger.info(
         "Sub-sector reconcile: %d active rows · %d sub_sector assigned · "
         "%d effective_sector overridden · %d rows updated",
@@ -382,3 +422,214 @@ def _reconcile_sub_sectors(securities_repo: SecuritiesRepository,
         "effective_sector_overridden": n_effective_changed,
         "sub_sector_rows_updated": n_updated,
     }
+
+
+def _apply_us_size_splits(securities_repo: SecuritiesRepository) -> dict:
+    """US-only post-pass: split oversized sub-sectors (Banks, Asset Management,
+    Biotechnology) into market-cap tiers per config/us_size_splits.yaml.
+
+    Market cap is computed as a proxy:
+        shares_outstanding × latest historical_prices.adj_close
+    both pulled from Supabase (the live yfinance .info cron is disabled to
+    stay under the Supabase free-tier capacity; this proxy gives >99%
+    coverage for the buckets we care about).
+
+    Tickers without computable market cap keep their pre-split sub_sector
+    (fall back to 'Banks' / 'Asset Management' / 'Biotechnology').
+
+    Skipped silently if Supabase isn't reachable — the size splits are a
+    refinement, not a critical correctness step.
+    """
+    if not _US_SIZE_SPLITS_PATH.exists():
+        return {"size_split_updated": 0, "size_split_skipped": "no config"}
+    try:
+        cfg = yaml.safe_load(_US_SIZE_SPLITS_PATH.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        logger.warning("us_size_splits.yaml parse error: %s", e)
+        return {"size_split_updated": 0, "size_split_skipped": f"parse error: {e}"}
+
+    splits = (cfg.get("splits") or {})
+    source_buckets = list(splits.keys())
+    if not source_buckets:
+        return {"size_split_updated": 0, "size_split_skipped": "empty config"}
+
+    # Find candidate US tickers — those currently in one of the source buckets.
+    active_rows = securities_repo.get_all_active()
+    candidates = [
+        r for r in active_rows
+        if r.get("market") == "US" and r.get("sub_sector") in source_buckets
+    ]
+    if not candidates:
+        return {"size_split_updated": 0, "size_split_skipped": "no candidates"}
+
+    candidate_tickers = [r["ticker"] for r in candidates]
+
+    # Pull shares × latest_close from Supabase. Both queries are batched in
+    # one SQL call via ANY(%s) — round-trip is sub-second for ~1000 tickers.
+    try:
+        from storage import cloud_db
+    except ImportError:
+        logger.warning("storage.cloud_db not available — skipping size splits")
+        return {"size_split_updated": 0, "size_split_skipped": "cloud_db import"}
+
+    try:
+        with cloud_db.cursor() as c:
+            c.execute("""
+                SELECT DISTINCT ON (ticker) ticker, shares_outstanding
+                FROM fundamentals_snapshots
+                WHERE ticker = ANY(%s) AND shares_outstanding IS NOT NULL
+                ORDER BY ticker, snapshot_date DESC
+            """, (candidate_tickers,))
+            shares = {t: float(s) for t, s in c.fetchall() if s}
+            c.execute("""
+                SELECT DISTINCT ON (ticker) ticker, adj_close
+                FROM historical_prices
+                WHERE ticker = ANY(%s)
+                ORDER BY ticker, date DESC
+            """, (candidate_tickers,))
+            prices = {t: float(p) for t, p in c.fetchall() if p}
+    except Exception as e:
+        logger.warning("Supabase unreachable; skipping US size splits (%s)", e)
+        return {"size_split_updated": 0, "size_split_skipped": f"cloud unreachable: {e}"}
+
+    # Determine new tier for each candidate.
+    updates: list[tuple] = []
+    mc_by_ticker: dict[str, float] = {}    # for history's market_cap_at_change column
+    skipped_no_mc = 0
+    per_bucket_counts: dict[str, int] = {}
+    for row in candidates:
+        ticker = row["ticker"]
+        so = shares.get(ticker)
+        px = prices.get(ticker)
+        if not so or not px:
+            skipped_no_mc += 1
+            continue
+        mc = so * px
+        source = row["sub_sector"]
+        tier_rules = (splits.get(source) or {}).get("tiers") or []
+        # Pick first tier whose threshold the ticker meets (rules are
+        # already ordered highest-to-lowest threshold).
+        new_sub = None
+        for tier in tier_rules:
+            if mc >= float(tier.get("min_market_cap_usd", 0)):
+                new_sub = tier.get("sub_sector")
+                break
+        if new_sub and new_sub != source:
+            updates.append((ticker, new_sub, row.get("effective_sector")))
+            mc_by_ticker[ticker] = mc
+            per_bucket_counts[new_sub] = per_bucket_counts.get(new_sub, 0) + 1
+
+    n_updated = securities_repo.bulk_set_sub_sector(updates)
+    # Stash MC-per-ticker so finalize_history_diff can attach it to size_split rows.
+    _SIZE_SPLIT_MC_CACHE.update(mc_by_ticker)
+    logger.info(
+        "US size splits: %d candidates · %d reassigned · %d kept (no market cap data) "
+        "· breakdown=%s",
+        len(candidates), n_updated, skipped_no_mc, per_bucket_counts,
+    )
+    return {
+        "size_split_candidates": len(candidates),
+        "size_split_updated": n_updated,
+        "size_split_no_mc": skipped_no_mc,
+        "size_split_breakdown": per_bucket_counts,
+    }
+
+
+# Module-local cache: size-split records its market_cap-per-ticker here so
+# the history finaliser can attach it to the right rows.
+_SIZE_SPLIT_MC_CACHE: dict[str, float] = {}
+
+
+# ============================================================================
+# Reclassification audit — ticker_taxonomy_history
+# ============================================================================
+
+def finalize_history_diff(securities_repo: SecuritiesRepository) -> int:
+    """Write history rows for whatever changed since the previously
+    persisted state. Call ONCE after all reconcile passes complete (HK
+    pass + US pass + size split). Compares the current securities table
+    against the latest history row per ticker — so transient mid-reconcile
+    flips that net out don't pollute the audit.
+
+    Reason field tagging:
+      * 'size_split' if the ticker is in _SIZE_SPLIT_MC_CACHE
+        (and we attach the proxy market cap that triggered the tier flip)
+      * 'reconcile'  otherwise (industry mapping change, override added/removed)
+
+    Returns the number of history rows written. Best-effort: any DB error
+    is logged and swallowed so the reconcile itself never fails on
+    history bookkeeping."""
+    try:
+        with securities_repo.db.get_connection() as conn:
+            current = conn.execute("""
+                SELECT ticker, sub_sector, effective_sector
+                FROM securities WHERE is_active=1
+            """).fetchall()
+            # Latest history row per ticker (whatever exists; tickers
+            # with no history get None and will be skipped — that's
+            # what write_initial_history is for).
+            latest = {
+                t: (sub, eff)
+                for (t, sub, eff) in conn.execute("""
+                    SELECT h1.ticker, h1.sub_sector, h1.effective_sector
+                    FROM ticker_taxonomy_history h1
+                    WHERE h1.changed_at = (
+                        SELECT MAX(h2.changed_at)
+                        FROM ticker_taxonomy_history h2
+                        WHERE h2.ticker = h1.ticker
+                    )
+                """).fetchall()
+            }
+            rows: list[tuple] = []
+            for ticker, sub, eff in current:
+                # Skip if ticker has no history yet (let initial backfill handle).
+                if ticker not in latest:
+                    continue
+                if latest[ticker] == (sub, eff):
+                    continue
+                reason = "size_split" if ticker in _SIZE_SPLIT_MC_CACHE else "reconcile"
+                mc = _SIZE_SPLIT_MC_CACHE.get(ticker)
+                rows.append((ticker, sub, eff, mc, reason))
+            if rows:
+                conn.executemany("""
+                    INSERT INTO ticker_taxonomy_history
+                      (ticker, sub_sector, effective_sector,
+                       market_cap_at_change, reason)
+                    VALUES (?, ?, ?, ?, ?)
+                """, rows)
+        logger.info("Taxonomy history finalised: %d new audit row(s)", len(rows))
+        # Clear the cache so subsequent reconciles start clean.
+        _SIZE_SPLIT_MC_CACHE.clear()
+        return len(rows)
+    except Exception as e:
+        logger.warning("ticker_taxonomy_history finalise failed (%s): %s",
+                       type(e).__name__, e)
+        _SIZE_SPLIT_MC_CACHE.clear()
+        return 0
+
+
+def write_initial_history(securities_repo: SecuritiesRepository) -> int:
+    """One-shot backfill: append an 'initial' row per active ticker with the
+    current sub_sector + effective_sector. Idempotent — skips tickers that
+    already have any history rows. Run once after the first compile."""
+    with securities_repo.db.get_connection() as conn:
+        existing = {r[0] for r in conn.execute(
+            "SELECT DISTINCT ticker FROM ticker_taxonomy_history"
+        ).fetchall()}
+        rows = conn.execute(
+            "SELECT ticker, sub_sector, effective_sector FROM securities "
+            "WHERE is_active=1 AND sub_sector IS NOT NULL"
+        ).fetchall()
+        to_write = [
+            (t, s, e, None, "initial")
+            for (t, s, e) in rows if t not in existing
+        ]
+        if not to_write:
+            return 0
+        conn.executemany("""
+            INSERT INTO ticker_taxonomy_history
+              (ticker, sub_sector, effective_sector, market_cap_at_change, reason)
+            VALUES (?, ?, ?, ?, ?)
+        """, to_write)
+    logger.info("Initial taxonomy history backfill: %d rows", len(to_write))
+    return len(to_write)

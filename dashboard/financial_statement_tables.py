@@ -149,7 +149,8 @@ def build_statement_table(statement_type: str, rows: list[dict]) -> html.Div:
     )
 
 
-def build_earnings_chart(income_rows: list[dict]) -> go.Figure:
+def build_earnings_chart(income_rows: list[dict],
+                              convention: str = "cn_hk") -> go.Figure:
     """Earnings tab: EPS (basic) over periods + YoY change as secondary."""
     if not income_rows:
         return _empty_fig("Earnings", "No income data available")
@@ -162,9 +163,10 @@ def build_earnings_chart(income_rows: list[dict]) -> go.Figure:
     if not any(v is not None for v in eps):
         return _empty_fig("Earnings", "EPS not available in income data")
 
+    up_color, down_color = T.resolve_price_colors(convention)
     fig = go.Figure(go.Bar(
         x=periods, y=eps,
-        marker_color=[T.PRICE_UP if (e or 0) >= 0 else T.PRICE_DOWN for e in eps],
+        marker_color=[up_color if (e or 0) >= 0 else down_color for e in eps],
         marker_line_width=0,
         text=[f"{e:.2f}" if e is not None else "" for e in eps],
         textposition="outside",
@@ -500,19 +502,21 @@ def _fmt_pct_signed(frac, decimals: int = 1) -> str:
         return "—"
 
 
-def _color_for_yoy(frac) -> str:
-    """Standard finance convention: green positive, red negative — NOT the
-    CN/HK PRICE_UP/PRICE_DOWN convention. YoY growth has universal semantics."""
+def _color_for_yoy(frac, convention: str = "cn_hk") -> str:
+    """Direction color for a YoY growth fraction. Resolves against the
+    user's color-convention: "cn_hk" (default) → positive = red;
+    "standard" → positive = green."""
     if frac is None:
         return T.TEXT_FAINT
     try:
         f = float(frac)
     except (TypeError, ValueError):
         return T.TEXT_FAINT
+    up_color, down_color = T.resolve_price_colors(convention)
     if f > 0:
-        return T.SUCCESS
+        return up_color
     if f < 0:
-        return T.DANGER
+        return down_color
     return T.TEXT_MUTED
 
 
@@ -641,7 +645,8 @@ def _fmt_kpi(value, kind: str) -> str:
     return str(value)
 
 
-def build_kpi_strip(statement_type: str, rows: list[dict]) -> html.Div:
+def build_kpi_strip(statement_type: str, rows: list[dict],
+                        convention: str = "cn_hk") -> html.Div:
     """4 KPI cards across the top of the tab. Latest period values + YoY chip
     against the immediately prior period."""
     defs = _KPI_DEFS.get(statement_type, [])
@@ -667,7 +672,7 @@ def build_kpi_strip(statement_type: str, rows: list[dict]) -> html.Div:
               if latest_val is not None and prior_val is not None else None
         yoy_chip = html.Span(
             _fmt_pct_signed(yoy) if yoy is not None else "",
-            style={"color": _color_for_yoy(yoy),
+            style={"color": _color_for_yoy(yoy, convention),
                     "fontSize": "0.72rem", "fontWeight": "600",
                     "marginLeft": "6px"},
         )
@@ -693,7 +698,8 @@ def build_kpi_strip(statement_type: str, rows: list[dict]) -> html.Div:
 
 # ----- Layer 2: compact analyst table -----
 
-def build_analyst_table(statement_type: str, rows: list[dict]) -> html.Div:
+def build_analyst_table(statement_type: str, rows: list[dict],
+                             convention: str = "cn_hk") -> html.Div:
     """Hierarchical compact table — only canonical items, subtotals bold/tinted,
     sub-items indented, common-size column on right, YoY column.
 
@@ -825,7 +831,7 @@ def build_analyst_table(statement_type: str, rows: list[dict]) -> html.Div:
         # YoY cell
         yoy_cell = html.Td(_fmt_pct_signed(yoy),
                               style={**cell_style_base, "textAlign": "right",
-                                      "color": _color_for_yoy(yoy),
+                                      "color": _color_for_yoy(yoy, convention),
                                       "fontFamily": "ui-monospace, monospace"})
 
         # Common-size cell

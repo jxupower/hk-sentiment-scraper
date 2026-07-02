@@ -1,0 +1,46 @@
+# US-only market-cap-based sub-sector splits.
+#
+# Applied by universe.reconciler:_apply_us_size_splits() AFTER all
+# industry/ticker overrides have resolved. Only US tickers whose
+# currently-resolved sub_sector matches a source bucket are subject to
+# the split; everyone else is untouched.
+#
+# Market cap is computed as a proxy:
+#     market_cap_proxy = shares_outstanding × latest historical_prices.adj_close
+# both pulled from Supabase. Tickers without either piece of data keep
+# their original sub_sector (stay in the source bucket as the fallback).
+#
+# Tiers are evaluated highest-to-lowest threshold. First match wins.
+# (e.g. JPM at $880B exceeds the $50B threshold first, so it lands in
+# Money Center Banks regardless of subsequent tier rules.)
+#
+# Thresholds follow standard MSCI/S&P size cut-offs and are easy to tune
+# here without code changes.
+
+splits:
+  Banks:
+    tiers:
+      - sub_sector: "Money Center Banks"
+        min_market_cap_usd: 50_000_000_000
+      - sub_sector: "Large Regional Banks"
+        min_market_cap_usd: 5_000_000_000
+      - sub_sector: "Small Regional & Community Banks"
+        min_market_cap_usd: 0
+
+  Asset Management:
+    tiers:
+      - sub_sector: "Large Asset Managers"
+        min_market_cap_usd: 10_000_000_000
+      - sub_sector: "Mid-Cap Asset Managers"
+        min_market_cap_usd: 1_000_000_000
+      - sub_sector: "Small-Cap Asset Managers"
+        min_market_cap_usd: 0
+
+  Biotechnology:
+    tiers:
+      - sub_sector: "Large-Cap Biotech"
+        min_market_cap_usd: 10_000_000_000
+      - sub_sector: "Mid-Cap Biotech"
+        min_market_cap_usd: 1_000_000_000
+      - sub_sector: "Small-Cap Biotech"
+        min_market_cap_usd: 0

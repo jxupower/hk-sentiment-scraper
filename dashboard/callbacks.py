@@ -107,6 +107,45 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         prevent_initial_call="initial_duplicate",
     )
 
+    # ----- Color-convention toggle (global) -----
+    # Clientside: flips user-color-convention Store + button outline states
+    # on click. Mirrors the language / market pattern. "cn_hk" (red = up)
+    # is the default; "standard" (green = up) is the alternate.
+    app.clientside_callback(
+        """
+        function(cnhk_clicks, std_clicks) {
+            const ctx = window.dash_clientside.callback_context;
+            const trig = ctx.triggered && ctx.triggered.length ? ctx.triggered[0] : null;
+            if (!trig || !trig.prop_id) {
+                return window.dash_clientside.no_update;
+            }
+            const choice = trig.prop_id.indexOf("color-std-btn") === 0 ? "standard" : "cn_hk";
+            return [choice, choice !== "cn_hk", choice !== "standard"];
+        }
+        """,
+        Output("user-color-convention", "data"),
+        Output("color-cnhk-btn", "outline"),
+        Output("color-std-btn", "outline"),
+        Input("color-cnhk-btn", "n_clicks"),
+        Input("color-std-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+
+    # Init-sync: paint the active button from the localStorage-hydrated Store
+    # on first render. Same pattern as the language / market init-sync above.
+    app.clientside_callback(
+        """
+        function(conv) {
+            const c = (conv || "cn_hk").toLowerCase();
+            return [c !== "cn_hk", c !== "standard"];
+        }
+        """,
+        Output("color-cnhk-btn", "outline", allow_duplicate=True),
+        Output("color-std-btn", "outline", allow_duplicate=True),
+        Input("user-color-convention", "data"),
+        prevent_initial_call="initial_duplicate",
+    )
+
     # Server-side: rebuild the tab strip ONLY when market changes.
     # dbc.Tab.label is static at render time so a full children rebuild is
     # the only way to update tab labels — but it also wipes every editable
@@ -269,24 +308,26 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
     @app.callback(Output("sector-cards", "children"),
                   Input("auto-refresh", "n_intervals"),
                   Input("refresh-btn", "n_clicks"),
-                  Input("user-market", "data"))
-    def update_sector_cards(_n, _c, market):
+                  Input("user-market", "data"),
+                  Input("user-color-convention", "data"))
+    def update_sector_cards(_n, _c, market, convention):
         market = (market or "HK").upper()
         signals = sector_signal_repo.get_latest_signals()
         in_market = _market_subsector_set(market)
         signals = [s for s in signals if s.get("sector") in in_market]
-        return sector_direction_cards(signals)
+        return sector_direction_cards(signals, convention=convention or "cn_hk")
 
     @app.callback(Output("sector-heatmap-container", "children"),
                   Input("auto-refresh", "n_intervals"),
                   Input("refresh-btn", "n_clicks"),
-                  Input("user-market", "data"))
-    def update_sector_heatmap(_n, _c, market):
+                  Input("user-market", "data"),
+                  Input("user-color-convention", "data"))
+    def update_sector_heatmap(_n, _c, market, convention):
         market = (market or "HK").upper()
         signals = sector_signal_repo.get_latest_signals()
         in_market = _market_subsector_set(market)
         signals = [s for s in signals if s.get("sector") in in_market]
-        fig = sector_heatmap(signals)
+        fig = sector_heatmap(signals, convention=convention or "cn_hk")
         return dbc.Card([
             dbc.CardHeader("Heatmap", className="fw-bold small"),
             dbc.CardBody(dcc.Graph(figure=fig, config={"displayModeBar": False})),
@@ -334,8 +375,10 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         Input("selected-sector", "data"),
         Input("auto-refresh", "n_intervals"),
         Input("user-market", "data"),
+        Input("user-color-convention", "data"),
     )
-    def update_sector_detail(sector, _, market):
+    def update_sector_detail(sector, _, market, convention):
+        convention = convention or "cn_hk"
         if not sector:
             return (
                 "Sector Detail",
@@ -370,14 +413,18 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         ticker_signals = signal_repo.get_latest_signals()
         sector_ticker_sigs = [s for s in ticker_signals if s.get("sector") == sector]
 
-        gauge = direction_gauge(direction, confidence, avg_sent or 0)
+        gauge = direction_gauge(direction, confidence, avg_sent or 0,
+                                     convention=convention)
         pie = source_breakdown_pie(scores_24h)
-        ts_chart = sector_sentiment_timeseries(sentiment_ts, sector)
-        breakdown = ticker_breakdown_bar(sector_ticker_sigs)
-        ticker_rows = _build_ticker_rows(sector_ticker_sigs)
+        ts_chart = sector_sentiment_timeseries(sentiment_ts, sector,
+                                                    convention=convention)
+        breakdown = ticker_breakdown_bar(sector_ticker_sigs,
+                                              convention=convention)
+        ticker_rows = _build_ticker_rows(sector_ticker_sigs,
+                                              convention=convention)
         ai_analysis = _generate_sector_analysis(sector, scores_24h, sig,
                                                   market=market)
-        feed = _build_article_feed(scores_24h)
+        feed = _build_article_feed(scores_24h, convention=convention)
         badge_color = DIRECTION_BADGE_COLOR.get(direction, "secondary")
         confidence_text = f"Confidence: {confidence:.0%} | Momentum: {momentum:+.2f}%"
         updated_text = f"Signal computed: {computed_at[:16]} UTC" if computed_at else ""
@@ -488,16 +535,17 @@ def _generate_sector_analysis(sector: str, scores: list, sig,
         return html.P(f"Analysis unavailable: {e}", className="text-muted small fst-italic")
 
 
-def _build_ticker_rows(ticker_signals):
+def _build_ticker_rows(ticker_signals, convention: str = "cn_hk"):
     if not ticker_signals:
         return [html.P("No ticker data yet.", className="text-muted small")]
 
+    up_color, down_color = T.resolve_price_colors(convention)
     rows = []
     for s in ticker_signals:
         sent = s.get("avg_sentiment_24h") or 0
         momentum = s.get("price_momentum_5d") or 0
-        color = DIRECTION_COLORS["UP"] if sent >= 0.05 else (
-            DIRECTION_COLORS["DOWN"] if sent <= -0.05 else T.TEXT_FAINT
+        color = up_color if sent >= 0.05 else (
+            down_color if sent <= -0.05 else T.TEXT_FAINT
         )
         rows.append(dbc.Row([
             dbc.Col(html.Strong(s["ticker"], style={"color": T.TEXT, "fontSize": "0.85rem"}),
@@ -505,7 +553,7 @@ def _build_ticker_rows(ticker_signals):
             dbc.Col(html.Span(f"{sent:+.3f}", style={"color": color, "fontWeight": "bold",
                                                       "fontSize": "0.85rem"}), width=3),
             dbc.Col(html.Span(f"{momentum:+.2f}%",
-                              style={"color": T.PRICE_UP if momentum >= 0 else T.PRICE_DOWN,
+                              style={"color": up_color if momentum >= 0 else down_color,
                                      "fontSize": "0.85rem"}), width=3),
             dbc.Col(html.Span(f"{s.get('article_count_24h', 0)} art",
                               className="text-muted", style={"fontSize": "0.75rem"}), width=3),
@@ -525,14 +573,15 @@ def _build_ticker_rows(ticker_signals):
     ]
 
 
-def _build_article_feed(scores):
+def _build_article_feed(scores, convention: str = "cn_hk"):
     if not scores:
         return html.P("No recent articles for this sector.", className="text-muted small")
 
+    up_color, down_color = T.resolve_price_colors(convention)
     rows = []
     for s in scores[:60]:
         score = s.get("final_score", 0) or 0
-        color = T.PRICE_UP if score >= 0.05 else (T.PRICE_DOWN if score <= -0.05 else T.TEXT_FAINT)
+        color = up_color if score >= 0.05 else (down_color if score <= -0.05 else T.TEXT_FAINT)
         source_badge = {"rss": "info", "reddit": "warning", "yahoo": "primary"}.get(
             s.get("source", ""), "secondary")
         pub = s.get("published_at", "") or ""

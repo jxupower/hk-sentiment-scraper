@@ -43,24 +43,46 @@ def _trading_day_rangebreaks(dates: list) -> list:
     return breaks
 
 # Re-export for backward-compat: existing imports `from dashboard.charts import DIRECTION_COLORS`
+# These are the CN/HK defaults. Direction-encoding chart callbacks that want
+# to respect the user's runtime color-convention pass `convention` through
+# to the chart builder, which calls `direction_colors(convention)` /
+# `sentiment_colorscale(convention)` instead of these module constants.
 DIRECTION_COLORS = T.DIRECTION_COLORS
 DIRECTION_ICONS  = {"UP": "▲", "DOWN": "▼", "MIXED": "◆", "NEUTRAL": "●"}
 SENTIMENT_COLORSCALE = [[0, T.PRICE_DOWN], [0.5, T.NEUTRAL], [1, T.PRICE_UP]]
 
 
+def direction_colors(convention: str = "cn_hk") -> dict:
+    """Direction → color mapping resolved against the user's chosen
+    convention. "cn_hk" (default): UP = red, DOWN = green.
+    "standard": UP = green, DOWN = red."""
+    up, down = T.resolve_price_colors(convention)
+    return {"UP": up, "DOWN": down, "MIXED": T.MIXED, "NEUTRAL": T.NEUTRAL}
+
+
+def sentiment_colorscale(convention: str = "cn_hk") -> list:
+    """Plotly-style colorscale for sentiment / percentile heatmaps. The
+    endpoint colors follow the user's convention; the midpoint stays neutral."""
+    up, down = T.resolve_price_colors(convention)
+    return [[0, down], [0.5, T.NEUTRAL], [1, up]]
+
+
 # ============== Sentiment tab — sector direction cards (clickable) ==============
 
-def sector_direction_cards(sector_signals: list[dict]) -> list:
+def sector_direction_cards(sector_signals: list[dict],
+                                convention: str = "cn_hk") -> list:
     from dash import html
     import dash_bootstrap_components as dbc
     if not sector_signals:
         return [html.P("No sector data yet. Run a scrape first.",
                        style={"color": T.TEXT_MUTED})]
 
+    dir_colors = direction_colors(convention)
+    up_color, down_color = T.resolve_price_colors(convention)
     cards = []
     for s in sector_signals:
         direction = s.get("direction", "NEUTRAL")
-        color = DIRECTION_COLORS.get(direction, T.NEUTRAL)
+        color = dir_colors.get(direction, T.NEUTRAL)
         icon = DIRECTION_ICONS.get(direction, "●")
         confidence = s.get("confidence") or 0
         sent = s.get("avg_sentiment_24h") or 0
@@ -114,7 +136,7 @@ def sector_direction_cards(sector_signals: list[dict]) -> list:
                                                  "textTransform": "uppercase",
                                                  "letterSpacing": "0.05em"}),
                                 html.Div(f"{momentum:+.2f}%", style={
-                                    "color": T.PRICE_UP if momentum >= 0 else T.PRICE_DOWN,
+                                    "color": up_color if momentum >= 0 else down_color,
                                     "fontWeight": "600", "fontSize": "0.95rem",
                                 }),
                             ], style={"flex": "1"}),
@@ -158,7 +180,8 @@ def sector_direction_cards(sector_signals: list[dict]) -> list:
 
 # ============== Sentiment / sector charts ==============
 
-def sector_sentiment_timeseries(df: pd.DataFrame, sector: str) -> go.Figure:
+def sector_sentiment_timeseries(df: pd.DataFrame, sector: str,
+                                     convention: str = "cn_hk") -> go.Figure:
     if df.empty:
         fig = go.Figure()
         fig.add_annotation(text="No sentiment data yet for this sector",
@@ -172,20 +195,22 @@ def sector_sentiment_timeseries(df: pd.DataFrame, sector: str) -> go.Figure:
     ts = ts.set_index("scored_at")["final_score"].resample("2h").mean().dropna().reset_index()
     ts.columns = ["time", "score"]
 
-    colors = [T.PRICE_UP if v >= 0 else T.PRICE_DOWN for v in ts["score"]]
+    up_color, down_color = T.resolve_price_colors(convention)
+    colors = [up_color if v >= 0 else down_color for v in ts["score"]]
     fig = go.Figure(go.Bar(x=ts["time"], y=ts["score"], marker_color=colors,
                             marker_line_width=0))
-    fig.add_hline(y=0.15, line_dash="dot", line_color=T.PRICE_UP, opacity=0.5,
-                  annotation_text="Bullish", annotation_font_color=T.PRICE_UP)
-    fig.add_hline(y=-0.15, line_dash="dot", line_color=T.PRICE_DOWN, opacity=0.5,
-                  annotation_text="Bearish", annotation_font_color=T.PRICE_DOWN)
+    fig.add_hline(y=0.15, line_dash="dot", line_color=up_color, opacity=0.5,
+                  annotation_text="Bullish", annotation_font_color=up_color)
+    fig.add_hline(y=-0.15, line_dash="dot", line_color=down_color, opacity=0.5,
+                  annotation_text="Bearish", annotation_font_color=down_color)
     fig.update_layout(T.chart_layout(f"{sector} — Sector Sentiment (2h buckets)"),
                       yaxis_title="Avg Sentiment Score", yaxis=dict(range=[-1.1, 1.1]),
                       showlegend=False)
     return fig
 
 
-def ticker_breakdown_bar(ticker_signals: list[dict]) -> go.Figure:
+def ticker_breakdown_bar(ticker_signals: list[dict],
+                              convention: str = "cn_hk") -> go.Figure:
     if not ticker_signals:
         fig = go.Figure()
         fig.update_layout(T.chart_layout("Ticker Sentiment Breakdown"))
@@ -193,7 +218,8 @@ def ticker_breakdown_bar(ticker_signals: list[dict]) -> go.Figure:
 
     tickers = [s["ticker"] for s in ticker_signals]
     scores = [s.get("avg_sentiment_24h") or 0 for s in ticker_signals]
-    colors = [T.PRICE_UP if v >= 0 else T.PRICE_DOWN for v in scores]
+    up_color, down_color = T.resolve_price_colors(convention)
+    colors = [up_color if v >= 0 else down_color for v in scores]
 
     fig = go.Figure(go.Bar(
         x=scores, y=tickers, orientation="h",
@@ -209,7 +235,8 @@ def ticker_breakdown_bar(ticker_signals: list[dict]) -> go.Figure:
     return fig
 
 
-def sector_heatmap(sector_signals: list[dict]) -> go.Figure:
+def sector_heatmap(sector_signals: list[dict],
+                        convention: str = "cn_hk") -> go.Figure:
     if not sector_signals:
         fig = go.Figure()
         fig.add_annotation(text="No sector data yet", xref="paper", yref="paper",
@@ -222,7 +249,7 @@ def sector_heatmap(sector_signals: list[dict]) -> go.Figure:
     scores = [s.get("avg_sentiment_24h") or 0 for s in sector_signals]
     fig = go.Figure(go.Heatmap(
         z=[[v] for v in scores], y=sectors, x=["Sentiment 24h"],
-        colorscale=SENTIMENT_COLORSCALE, zmin=-1, zmax=1,
+        colorscale=sentiment_colorscale(convention), zmin=-1, zmax=1,
         text=[[f"{v:+.2f}"] for v in scores],
         texttemplate="%{text}",
         textfont=dict(color="white", size=11),
@@ -233,8 +260,11 @@ def sector_heatmap(sector_signals: list[dict]) -> go.Figure:
     return fig
 
 
-def direction_gauge(direction: str, confidence: float, avg_sentiment: float) -> go.Figure:
-    color = DIRECTION_COLORS.get(direction, T.NEUTRAL)
+def direction_gauge(direction: str, confidence: float, avg_sentiment: float,
+                        convention: str = "cn_hk") -> go.Figure:
+    dir_colors = direction_colors(convention)
+    color = dir_colors.get(direction, T.NEUTRAL)
+    up_soft, down_soft = T.resolve_price_soft_colors(convention)
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=avg_sentiment,
@@ -246,9 +276,9 @@ def direction_gauge(direction: str, confidence: float, avg_sentiment: float) -> 
             "borderwidth": 1,
             "bordercolor": T.BORDER,
             "steps": [
-                {"range": [-1, -0.15], "color": T.SUCCESS_SOFT},
+                {"range": [-1, -0.15], "color": down_soft},
                 {"range": [-0.15, 0.15], "color": T.PLOT_BG},
-                {"range": [0.15, 1], "color": T.DANGER_SOFT},
+                {"range": [0.15, 1], "color": up_soft},
             ],
         },
         title={"text": f"<b style='color:{T.TEXT}'>{direction}</b>"
@@ -294,12 +324,14 @@ def _empty_fig(title: str, msg: str, height: int = 220) -> go.Figure:
     return fig
 
 
-def multi_year_eps_chart(history: list) -> go.Figure:
+def multi_year_eps_chart(history: list,
+                              convention: str = "cn_hk") -> go.Figure:
     dates = [h.date for h in history if h.eps_ttm is not None]
     eps = [h.eps_ttm for h in history if h.eps_ttm is not None]
     if not dates:
         return _empty_fig("EPS history", "No EPS history available")
-    colors = [T.PRICE_UP if e >= 0 else T.PRICE_DOWN for e in eps]
+    up_color, down_color = T.resolve_price_colors(convention)
+    colors = [up_color if e >= 0 else down_color for e in eps]
     fig = go.Figure(go.Bar(
         x=dates, y=eps, marker_color=colors, marker_line_width=0,
         text=[f"{e:.2f}" for e in eps], textposition="outside",
@@ -312,12 +344,14 @@ def multi_year_eps_chart(history: list) -> go.Figure:
     return fig
 
 
-def revenue_yoy_chart(history: list) -> go.Figure:
+def revenue_yoy_chart(history: list,
+                          convention: str = "cn_hk") -> go.Figure:
     dates = [h.date for h in history if h.revenue_growth is not None]
     rg = [h.revenue_growth * 100 for h in history if h.revenue_growth is not None]
     if not dates:
         return _empty_fig("Revenue YoY %", "No revenue-growth history")
-    colors = [T.PRICE_UP if r >= 0 else T.PRICE_DOWN for r in rg]
+    up_color, down_color = T.resolve_price_colors(convention)
+    colors = [up_color if r >= 0 else down_color for r in rg]
     fig = go.Figure(go.Bar(
         x=dates, y=rg, marker_color=colors, marker_line_width=0,
         text=[f"{r:+.1f}%" for r in rg], textposition="outside",
@@ -348,9 +382,11 @@ def share_count_chart(history: list) -> go.Figure:
     return fig
 
 
-def price_chart(prices: list, label: str = "Price") -> go.Figure:
+def price_chart(prices: list, label: str = "Price",
+                  convention: str = "cn_hk") -> go.Figure:
     """Daily price line chart with period-return annotation. `prices` is a list
-    of dicts {date, adj_close}, already filtered to the desired window."""
+    of dicts {date, adj_close}, already filtered to the desired window.
+    `convention` picks the color palette (see `direction_colors`)."""
     points = [(p["date"], p["adj_close"]) for p in prices
               if p.get("adj_close") is not None]
     if not points:
@@ -358,10 +394,14 @@ def price_chart(prices: list, label: str = "Price") -> go.Figure:
     dates, closes = zip(*points)
     first, last = closes[0], closes[-1]
     pct = (last / first - 1) * 100 if first else 0
-    # CN/HK convention: price up = red, price down = green.
-    color = T.PRICE_UP if pct >= 0 else T.PRICE_DOWN
-    fill_rgba = ("rgba(220, 38, 38, 0.08)" if pct >= 0
-                 else "rgba(22, 163, 74, 0.08)")
+    up_color, down_color = T.resolve_price_colors(convention)
+    color = up_color if pct >= 0 else down_color
+    # rgba equivalents of SUCCESS (#16a34a) and DANGER (#dc2626) at 8% alpha
+    rgba_up   = "rgba(220, 38, 38, 0.08)"   # red
+    rgba_down = "rgba(22, 163, 74, 0.08)"   # green
+    if convention == "standard":
+        rgba_up, rgba_down = rgba_down, rgba_up
+    fill_rgba = rgba_up if pct >= 0 else rgba_down
     fig = go.Figure(go.Scatter(
         x=list(dates), y=list(closes), mode="lines",
         line=dict(color=color, width=2),
@@ -379,7 +419,8 @@ def price_chart(prices: list, label: str = "Price") -> go.Figure:
     return fig
 
 
-def price_candlestick_chart(prices: list, label: str = "Price") -> go.Figure:
+def price_candlestick_chart(prices: list, label: str = "Price",
+                                convention: str = "cn_hk") -> go.Figure:
     """Daily OHLC candlestick over the supplied window. Falls back to a
     'OHLC data not available' message when open/high/low aren't populated
     (e.g. some indices and synthetic portfolio tickers store only close).
@@ -400,11 +441,11 @@ def price_candlestick_chart(prices: list, label: str = "Price") -> go.Figure:
     first, last = closes[0], closes[-1]
     pct = (last / first - 1) * 100 if first else 0
 
+    up_color, down_color = T.resolve_price_colors(convention)
     fig = go.Figure(go.Candlestick(
         x=dates, open=opens, high=highs, low=lows, close=closes,
-        # CN/HK convention: up day = red, down day = green.
-        increasing=dict(line=dict(color=T.PRICE_UP), fillcolor=T.PRICE_UP),
-        decreasing=dict(line=dict(color=T.PRICE_DOWN), fillcolor=T.PRICE_DOWN),
+        increasing=dict(line=dict(color=up_color), fillcolor=up_color),
+        decreasing=dict(line=dict(color=down_color), fillcolor=down_color),
         whiskerwidth=0.4,
         hoverlabel=dict(font=dict(family="JetBrains Mono, monospace")),
     ))
@@ -469,7 +510,8 @@ def equity_curve_chart(curve: list, benchmark: list,
 
 
 def long_short_spread_chart(long_curve: list, short_curve: list,
-                                spread_curve: list) -> go.Figure:
+                                spread_curve: list,
+                                convention: str = "cn_hk") -> go.Figure:
     """Three-line factor-verification chart: long-leg cum value, short-leg
     cum value (both starting at 100, representing $1 invested in that
     basket), and the spread = long - short, also normalised to start at
@@ -479,19 +521,20 @@ def long_short_spread_chart(long_curve: list, short_curve: list,
     if not long_curve and not short_curve and not spread_curve:
         return _empty_fig("Long / Short / Spread",
                           "No verification data yet — run the test to populate.")
+    up_color, down_color = T.resolve_price_colors(convention)
     fig = go.Figure()
     if long_curve:
         d, v = zip(*long_curve)
         fig.add_trace(go.Scatter(
             x=list(d), y=list(v), mode="lines", name="Long leg",
-            line=dict(color=T.PRICE_UP, width=2.2),
+            line=dict(color=up_color, width=2.2),
             hovertemplate="%{x}<br>%{y:.1f}<extra>Long</extra>",
         ))
     if short_curve:
         d, v = zip(*short_curve)
         fig.add_trace(go.Scatter(
             x=list(d), y=list(v), mode="lines", name="Short leg (as if long)",
-            line=dict(color=T.PRICE_DOWN, width=2.2),
+            line=dict(color=down_color, width=2.2),
             hovertemplate="%{x}<br>%{y:.1f}<extra>Short basket</extra>",
         ))
     if spread_curve:
@@ -518,7 +561,8 @@ def long_short_spread_chart(long_curve: list, short_curve: list,
 
 
 def decile_monotonicity_chart(decile_means: dict,
-                                 decile_counts: dict | None = None
+                                 decile_counts: dict | None = None,
+                                 convention: str = "cn_hk"
                                  ) -> go.Figure:
     """10-bar chart of mean forward period return per composite-pctile
     decile. D1 = lowest composite, D10 = highest. A real factor produces
@@ -530,7 +574,8 @@ def decile_monotonicity_chart(decile_means: dict,
                           "No verification data yet.")
     deciles = sorted(decile_means.keys())
     values = [decile_means[d] * 100.0 for d in deciles]
-    colors = [T.PRICE_UP if v >= 0 else T.PRICE_DOWN for v in values]
+    up_color, down_color = T.resolve_price_colors(convention)
+    colors = [up_color if v >= 0 else down_color for v in values]
     text = [f"{v:+.2f}%" for v in values]
     hover = [(f"D{d}: {v:+.2f}%<br>n_periods={decile_counts.get(d, 0)}"
               if decile_counts else f"D{d}: {v:+.2f}%")
@@ -550,7 +595,8 @@ def decile_monotonicity_chart(decile_means: dict,
     return fig
 
 
-def ic_timeseries_chart(ic_series: list) -> go.Figure:
+def ic_timeseries_chart(ic_series: list,
+                          convention: str = "cn_hk") -> go.Figure:
     """Information Coefficient over time — Spearman ρ at each rebalance
     between composite percentile and forward return. Bars positive →
     factor predicted the cross-section correctly that period; negative →
@@ -560,7 +606,8 @@ def ic_timeseries_chart(ic_series: list) -> go.Figure:
         return _empty_fig("Information Coefficient", "No verification data yet.")
     dates, vals = zip(*ic_series)
     mean_ic = sum(vals) / len(vals)
-    colors = [T.PRICE_UP if v >= 0 else T.PRICE_DOWN for v in vals]
+    up_color, down_color = T.resolve_price_colors(convention)
+    colors = [up_color if v >= 0 else down_color for v in vals]
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=list(dates), y=list(vals), marker_color=colors,
@@ -582,7 +629,8 @@ def ic_timeseries_chart(ic_series: list) -> go.Figure:
     return fig
 
 
-def drawdown_curve_chart(drawdown: list) -> go.Figure:
+def drawdown_curve_chart(drawdown: list,
+                              convention: str = "cn_hk") -> go.Figure:
     """Filled drawdown timeline — 0% at fresh peaks, negative when
     underwater. Companions the equity curve so users see *when* the
     strategy struggled and how long recoveries took."""
@@ -591,12 +639,15 @@ def drawdown_curve_chart(drawdown: list) -> go.Figure:
                           "No drawdown data — run a backtest first.")
     dates, dds = zip(*drawdown)
     dds_pct = [v * 100 for v in dds]
+    _, down_color = T.resolve_price_colors(convention)
+    # Drawdown is by definition a price-down metric — always uses down_color.
+    fill_rgba = ("rgba(22, 163, 74, 0.18)" if convention != "standard"
+                  else "rgba(220, 38, 38, 0.18)")
     fig = go.Figure(go.Scatter(
         x=list(dates), y=dds_pct, mode="lines",
         fill="tozeroy",
-        # CN/HK convention: drawdown (price-down) = green.
-        fillcolor="rgba(22, 163, 74, 0.18)",
-        line=dict(color=T.PRICE_DOWN, width=1.6),
+        fillcolor=fill_rgba,
+        line=dict(color=down_color, width=1.6),
         hovertemplate="%{x}<br>%{y:.1f}%<extra></extra>",
     ))
     worst = min(dds_pct) if dds_pct else 0
@@ -692,7 +743,8 @@ def historical_multiple_chart(history: list, prices: list,
 
 
 def dcf_sensitivity_heatmap(grid_df, current_price: float = None,
-                             x_label: str = "x", y_label: str = "y") -> go.Figure:
+                             x_label: str = "x", y_label: str = "y",
+                             convention: str = "cn_hk") -> go.Figure:
     if grid_df is None or grid_df.empty:
         return _empty_fig("DCF sensitivity", "No sensitivity grid")
 
@@ -701,8 +753,8 @@ def dcf_sensitivity_heatmap(grid_df, current_price: float = None,
         mos_z = [[(v / current_price - 1) * 100 if v else None for v in row] for row in z]
         text = [[f"{v:.1f}<br>({(v/current_price - 1)*100:+.0f}%)" if v else ""
                   for v in row] for row in z]
-        # CN/HK convention: positive MoS / above-current-price = red.
-        colorscale = [[0, T.PRICE_DOWN], [0.5, "#f8f7fc"], [1, T.PRICE_UP]]
+        up_color, down_color = T.resolve_price_colors(convention)
+        colorscale = [[0, down_color], [0.5, "#f8f7fc"], [1, up_color]]
     else:
         mos_z = z
         text = [[f"{v:.1f}" if v else "" for v in row] for row in z]
@@ -721,7 +773,7 @@ def dcf_sensitivity_heatmap(grid_df, current_price: float = None,
     return fig
 
 
-def peer_scorecard_heatmap(scorecard) -> go.Figure:
+def peer_scorecard_heatmap(scorecard, convention: str = "cn_hk") -> go.Figure:
     if scorecard is None or not scorecard.metrics:
         return _empty_fig("Peer comparison", "No peer data", height=180)
 
@@ -734,11 +786,10 @@ def peer_scorecard_heatmap(scorecard) -> go.Figure:
         pct = f"{m.target_percentile:.0f}%" if m.target_percentile is not None else "NA"
         text_cells.append(f"{tv}<br>(pm {pm}, {pct})")
 
+    up_color, down_color = T.resolve_price_colors(convention)
     fig = go.Figure(go.Heatmap(
         z=[pctiles], x=labels, y=[scorecard.target_ticker],
-        # CN/HK convention: high peer percentile (this stock leads its
-        # peers) = red; low percentile (lags) = green.
-        colorscale=[[0, T.PRICE_DOWN], [0.5, "#f8f7fc"], [1, T.PRICE_UP]],
+        colorscale=[[0, down_color], [0.5, "#f8f7fc"], [1, up_color]],
         zmin=0, zmax=100,
         text=[text_cells], texttemplate="%{text}",
         textfont=dict(color=T.TEXT, size=10, family="Inter"),

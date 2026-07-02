@@ -224,19 +224,13 @@ def build_recommendations_tab() -> html.Div:
                          "textDecoration": "underline"},
                     ],
                     style_header=T.DATATABLE_HEADER,
+                    # Direction-encoded composite_pctile styles are set
+                    # dynamically by `_rec_composite_style` in
+                    # recommendations_callbacks so they follow the user's
+                    # active color-convention. The status_badge FLAG / DQ
+                    # backgrounds stay static (they're semantic, not
+                    # direction-of-return).
                     style_data_conditional=[
-                        # CN/HK convention: high composite percentile (this
-                        # stock leads its peers) = red; low = green.
-                        {"if": {"filter_query": "{composite_pctile} >= 90",
-                                "column_id": "composite_pctile"},
-                         "color": T.PRICE_UP, "fontWeight": "700"},
-                        {"if": {"filter_query":
-                                "{composite_pctile} >= 75 && {composite_pctile} < 90",
-                                "column_id": "composite_pctile"},
-                         "color": T.PRICE_UP, "fontWeight": "600"},
-                        {"if": {"filter_query": "{composite_pctile} <= 25",
-                                "column_id": "composite_pctile"},
-                         "color": T.PRICE_DOWN},
                         {"if": {"filter_query": '{status_badge} contains "FLAG"'},
                          "backgroundColor": T.WARNING_SOFT},
                         {"if": {"filter_query": '{status_badge} contains "DQ"'},

@@ -42,18 +42,46 @@ INFO            = "#0ea5e9"      # cyan-ish info
 INFO_SOFT        = "#e0f2fe"
 
 # Stock-price direction (CN/HK convention: red = up, green = down).
-# PRICE_UP and PRICE_DOWN are the canonical names; UP and DOWN are kept as
-# backward-compat aliases that now follow the same convention. Use these
-# everywhere a colour encodes a price / return / sentiment direction.
+# PRICE_UP and PRICE_DOWN are the MODULE-LEVEL DEFAULTS used only when no
+# user convention is available (e.g. compile-time layout construction).
+# The runtime convention is user-selectable — pass the `user-color-convention`
+# store value (either "cn_hk" or "standard") through `resolve_price_colors()`
+# in every callback that produces direction-encoding output.
+#
 # Use SUCCESS / DANGER directly only for non-price semantics: BUY/SELL
 # action labels, save-success messages, SWOT strengths/threats, severity
 # flags, screen-pass indicators.
-PRICE_UP        = DANGER         # red — bullish, prices rising
-PRICE_DOWN      = SUCCESS        # green — bearish, prices falling
+PRICE_UP        = DANGER         # red — bullish, prices rising (default)
+PRICE_DOWN      = SUCCESS        # green — bearish, prices falling (default)
 UP              = PRICE_UP
 DOWN            = PRICE_DOWN
 MIXED           = WARNING
 NEUTRAL         = "#94a3b8"      # slate
+
+
+COLOR_CONVENTIONS = ("cn_hk", "standard")
+DEFAULT_COLOR_CONVENTION = "cn_hk"
+
+
+def resolve_price_colors(convention: str | None = None) -> tuple[str, str]:
+    """Return (up_color, down_color) for the given user convention.
+
+    convention:
+        "cn_hk"    — red = up, green = down (default; CN/HK convention)
+        "standard" — green = up, red = down (US/Europe convention)
+
+    Any unknown value falls back to the default.
+    """
+    if convention == "standard":
+        return SUCCESS, DANGER
+    return DANGER, SUCCESS
+
+
+def resolve_price_soft_colors(convention: str | None = None) -> tuple[str, str]:
+    """Softer tinted-background variants of resolve_price_colors."""
+    if convention == "standard":
+        return SUCCESS_SOFT, DANGER_SOFT
+    return DANGER_SOFT, SUCCESS_SOFT
 
 # Chart accents (multi-series)
 ACCENT_1        = PRIMARY

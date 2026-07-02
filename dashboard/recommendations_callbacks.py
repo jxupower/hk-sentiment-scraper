@@ -23,6 +23,32 @@ def register_recommendations_callbacks(app, db_path: str):
                                          "sector_risk.yaml")
     engine = FactorScoringEngine(db_path, sector_risk_path)
 
+    # ----- Dynamic composite_pctile colouring -----
+    # Kept out of the layout so the same store input flips it uniformly
+    # with every other direction-encoded cell across the dashboard.
+    @app.callback(
+        Output("rec-table", "style_data_conditional"),
+        Input("user-color-convention", "data"),
+    )
+    def _rec_composite_style(convention):
+        up, down = T.resolve_price_colors(convention or "cn_hk")
+        return [
+            {"if": {"filter_query": "{composite_pctile} >= 90",
+                     "column_id": "composite_pctile"},
+             "color": up, "fontWeight": "700"},
+            {"if": {"filter_query":
+                     "{composite_pctile} >= 75 && {composite_pctile} < 90",
+                     "column_id": "composite_pctile"},
+             "color": up, "fontWeight": "600"},
+            {"if": {"filter_query": "{composite_pctile} <= 25",
+                     "column_id": "composite_pctile"},
+             "color": down},
+            {"if": {"filter_query": '{status_badge} contains "FLAG"'},
+             "backgroundColor": T.WARNING_SOFT},
+            {"if": {"filter_query": '{status_badge} contains "DQ"'},
+             "backgroundColor": T.CARD_BG_SOFT, "color": T.TEXT_FAINT},
+        ]
+
     # ----- i18n: flip every translatable element on language change -----
     @app.callback(
         Output("rec-alert-banner", "children"),

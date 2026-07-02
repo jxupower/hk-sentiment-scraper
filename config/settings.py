@@ -190,22 +190,22 @@ def _load_sub_sectors_yaml() -> dict:
 
 
 def get_subsector_label(name: str | None, lang: str = "en") -> str:
-    """Translate a sub-sector display label. Returns the input unchanged
-    when `lang != "zh"`, when `name` is empty/None, or when no Chinese
-    label is registered for that sub-sector (graceful fall-back keeps the
-    English form visible rather than crashing)."""
-    if lang != "zh" or not name:
-        return name or ""
-    cfg = _load_sub_sectors_yaml()
-    return ((cfg.get("sub_sectors_zh") or {}).get(name)) or name
+    """Translate a sub-sector display label. Delegates to the compiled
+    taxonomy singleton (analysis.taxonomy.get_taxonomy) — O(1) dict
+    lookup, no YAML parsing at render time. The function signature is
+    preserved so existing callers don't have to change."""
+    if not name:
+        return ""
+    from analysis.taxonomy import get_taxonomy
+    return get_taxonomy().label(name, lang)
 
 
 def get_sector_label(name: str | None, lang: str = "en") -> str:
     """Same as `get_subsector_label` but for the 11 parent sectors."""
-    if lang != "zh" or not name:
-        return name or ""
-    cfg = _load_sub_sectors_yaml()
-    return ((cfg.get("parent_sectors_zh") or {}).get(name)) or name
+    if not name:
+        return ""
+    from analysis.taxonomy import get_taxonomy
+    return get_taxonomy().label(name, lang)
 
 
 _SECTOR_BROAD_TERMS: dict[str, list[str]] = {

@@ -340,12 +340,15 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-composite-table", "data"),
         Input("sr-load-btn", "n_clicks"),
         Input("cross-tab-nav", "data"),
+        Input("user-color-convention", "data"),
         State("sr-ticker-select", "value"),
         State("sr-ticker-select", "options"),
         State("user-language", "data"),
         prevent_initial_call=True,
     )
-    def render_report(_clicks, nav_data, state_ticker, state_options, lang):
+    def render_report(_clicks, nav_data, convention,
+                        state_ticker, state_options, lang):
+        convention = convention or "cn_hk"
         # Resolve ticker source: cross-tab nav wins when it triggered, else dropdown State
         triggered = dash.callback_context.triggered_id
         if triggered == "cross-tab-nav":
@@ -419,18 +422,20 @@ def register_stock_research_callbacks(app, db_path: str):
             color = "success" if s.passed else "secondary"
             sym = "✓" if s.passed else "✗"
             screen_badges.append(dbc.Badge(f"{sym} {s.name}", color=color, className="me-2"))
-        factor_fig = _factor_bar_chart(r.factor_result)
+        factor_fig = _factor_bar_chart(r.factor_result, convention=convention)
 
         # Section 2: business summary (AI), articles, SWOT
         business_summary = _build_business_summary(r)
         s_swot, w_swot, o_swot, t_swot = _build_default_swot(r)
-        article_feed = _build_article_feed(r.recent_articles)
+        article_feed = _build_article_feed(r.recent_articles,
+                                                convention=convention)
 
         # Section 3: CAGR table, charts, peer heatmap, forensic
         cagr_table = _build_cagr_table(r)
-        eps_fig = multi_year_eps_chart(r.history)
-        rev_fig = revenue_yoy_chart(r.history)
-        peer_fig = peer_scorecard_heatmap(r.peer_scorecard)
+        eps_fig = multi_year_eps_chart(r.history, convention=convention)
+        rev_fig = revenue_yoy_chart(r.history, convention=convention)
+        peer_fig = peer_scorecard_heatmap(r.peer_scorecard,
+                                                convention=convention)
         forensic = _build_forensic_panel(r.red_flags)
 
         # Section 3b (financial statements) is loaded on demand via
@@ -504,14 +509,16 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-fs-balance-math", "children"),
         Output("sr-fs-cashflow-math", "children"),
         Input("sr-fs-load-btn", "n_clicks"),
+        Input("user-color-convention", "data"),
         State("sr-ticker-select", "value"),
         prevent_initial_call=True,
     )
-    def load_financial_statements(_clicks, ticker):
+    def load_financial_statements(_clicks, convention, ticker):
         if not ticker:
             return ({"display": "none"}, "", "", "Pick a ticker first.",
                     {}, {}, {}, {}, "", "", "", "",
                     "", "", "", "", "", "", "", "", "")
+        convention = convention or "cn_hk"
         from analysis.data_loader import get_or_fetch_financial_statements
         from storage.database import Database
         try:
@@ -525,7 +532,8 @@ def register_stock_research_callbacks(app, db_path: str):
         income_chart = fst.build_statement_chart("income", fs["income"])
         balance_chart = fst.build_statement_chart("balance", fs["balance"])
         cashflow_chart = fst.build_statement_chart("cashflow", fs["cashflow"])
-        earnings_chart = fst.build_earnings_chart(fs["income"])
+        earnings_chart = fst.build_earnings_chart(fs["income"],
+                                                        convention=convention)
         income_table = (fst.build_statement_table("income", fs["income"])
                          if fs["income"]
                          else fst.build_unavailable_state("income", ticker=ticker))
@@ -538,12 +546,18 @@ def register_stock_research_callbacks(app, db_path: str):
         earnings_table = fst.build_earnings_table(fs["income"])
         # Analyst-friendly layers — empty html.Div when source data missing
         # so the slot stays in the layout without rendering an empty card.
-        income_kpis = fst.build_kpi_strip("income", fs["income"])
-        balance_kpis = fst.build_kpi_strip("balance", fs["balance"])
-        cashflow_kpis = fst.build_kpi_strip("cashflow", fs["cashflow"])
-        income_analyst = fst.build_analyst_table("income", fs["income"])
-        balance_analyst = fst.build_analyst_table("balance", fs["balance"])
-        cashflow_analyst = fst.build_analyst_table("cashflow", fs["cashflow"])
+        income_kpis = fst.build_kpi_strip("income", fs["income"],
+                                              convention=convention)
+        balance_kpis = fst.build_kpi_strip("balance", fs["balance"],
+                                                convention=convention)
+        cashflow_kpis = fst.build_kpi_strip("cashflow", fs["cashflow"],
+                                                  convention=convention)
+        income_analyst = fst.build_analyst_table("income", fs["income"],
+                                                     convention=convention)
+        balance_analyst = fst.build_analyst_table("balance", fs["balance"],
+                                                       convention=convention)
+        cashflow_analyst = fst.build_analyst_table("cashflow", fs["cashflow"],
+                                                          convention=convention)
         income_math = fst.build_math_walkthrough("income", fs["income"])
         balance_math = fst.build_math_walkthrough("balance", fs["balance"])
         cashflow_math = fst.build_math_walkthrough("cashflow", fs["cashflow"])
@@ -661,11 +675,14 @@ def register_stock_research_callbacks(app, db_path: str):
         Input("sr-period-select", "value"),
         Input("sr-load-btn", "n_clicks"),
         Input("sr-price-chart-style", "value"),
+        Input("user-color-convention", "data"),
         prevent_initial_call=True,
     )
-    def update_period_charts(ticker, period_days, _clicks, chart_style):
+    def update_period_charts(ticker, period_days, _clicks, chart_style,
+                                convention):
         if not ticker:
             return {}, "", {}, "", {}, {}, ""
+        convention = convention or "cn_hk"
 
         history = _load_history(db_path, ticker)
         prices_all = _load_prices(db_path, ticker)
@@ -692,12 +709,15 @@ def register_stock_research_callbacks(app, db_path: str):
         # Charts
         if chart_style == "candle":
             from dashboard.charts import price_candlestick_chart
-            price_fig = price_candlestick_chart(prices_window, label=f"{ticker}")
+            price_fig = price_candlestick_chart(prices_window, label=f"{ticker}",
+                                                     convention=convention)
         else:
-            price_fig = price_chart(prices_window, label=f"{ticker}")
+            price_fig = price_chart(prices_window, label=f"{ticker}",
+                                        convention=convention)
         price_summary = _build_price_summary(prices_window)
         shares_fig = share_count_chart(history_window)
-        strategy_stats = _build_strategy_stats_window(history_window, prices_window)
+        strategy_stats = _build_strategy_stats_window(history_window, prices_window,
+                                                            convention=convention)
         pe_fig = historical_multiple_chart(history, prices_all, "pe",
                                             min_date=cutoff_iso)
         pb_fig = historical_multiple_chart(history, prices_all, "pb",
@@ -722,12 +742,14 @@ def register_stock_research_callbacks(app, db_path: str):
         Input("sr-dcf-g610", "value"),
         Input("sr-dcf-tg", "value"),
         Input("sr-dcf-wacc", "value"),
+        Input("user-color-convention", "data"),
         State("sr-ticker-select", "value"),
         prevent_initial_call=True,
     )
-    def recompute_dcf(g15, g610, tg, wacc, ticker):
+    def recompute_dcf(g15, g610, tg, wacc, convention, ticker):
         if not ticker:
             return "", {}, ""
+        convention = convention or "cn_hk"
         dcf_inputs = _load_dcf_inputs_only(db_path, ticker)
         if dcf_inputs is None:
             return (html.Span("Insufficient per-share data for DCF.",
@@ -768,7 +790,8 @@ def register_stock_research_callbacks(app, db_path: str):
                    className="text-muted small mt-2 mb-0"),
         ])
 
-        walkthrough = _render_dcf_walkthrough(inputs, result, dcf_inputs)
+        walkthrough = _render_dcf_walkthrough(inputs, result, dcf_inputs,
+                                                    convention=convention)
 
         # Sensitivity heatmap: vary growth_y1_5 and wacc
         g_grid = [g15/100 - 0.04, g15/100 - 0.02, g15/100, g15/100 + 0.02, g15/100 + 0.04]
@@ -777,7 +800,8 @@ def register_stock_research_callbacks(app, db_path: str):
         try:
             sens_df = sensitivity_table(inputs, "growth_y1_5", "wacc", g_grid, wacc_grid)
             sens_fig = dcf_sensitivity_heatmap(sens_df, current_price=inputs.current_price,
-                                                 x_label="Growth Y1-5", y_label="WACC")
+                                                 x_label="Growth Y1-5", y_label="WACC",
+                                                 convention=convention)
         except Exception:
             sens_fig = {}
 
@@ -867,9 +891,10 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-factor-breakdown-body", "children"),
         Input("sr-factor-bars", "clickData"),
         State("sr-ticker-select", "value"),
+        State("user-color-convention", "data"),
         prevent_initial_call=True,
     )
-    def open_factor_breakdown_drawer(click, ticker):
+    def open_factor_breakdown_drawer(click, ticker, convention):
         if not click or not ticker:
             raise PreventUpdate
         label = click["points"][0].get("y")
@@ -880,7 +905,8 @@ def register_stock_research_callbacks(app, db_path: str):
         if breakdown is None:
             return True, html.Div(f"{ticker} not found in fundamentals snapshot.",
                                    className="text-muted")
-        return True, _render_factor_breakdown(breakdown)
+        return True, _render_factor_breakdown(breakdown,
+                                                    convention=convention or "cn_hk")
 
 
 # ============== helper functions ==============
@@ -993,14 +1019,14 @@ def _build_composite_dropdown_options(db_path: str, search) -> list[dict]:
     ]
 
 
-def _factor_bar_chart(fr) -> go.Figure:
+def _factor_bar_chart(fr, convention: str = "cn_hk") -> go.Figure:
     if fr is None:
         return {}
     metrics = ["Value", "Quality", "Growth", "Sentiment"]
     values = [fr.value_pctile or 0, fr.quality_pctile or 0,
               fr.growth_pctile or 0, fr.sentiment_pctile or 0]
-    # CN/HK convention: high percentile (this stock leads its peers) = red.
-    colors = [T.PRICE_UP if v >= 70 else (T.WARNING if v < 30 else T.INFO) for v in values]
+    up_color, _ = T.resolve_price_colors(convention)
+    colors = [up_color if v >= 70 else (T.WARNING if v < 30 else T.INFO) for v in values]
     # Hover hint: V/Q/G are click-through to a breakdown drawer; Sentiment is not.
     hover = [
         "<b>Value: %{x:.0f}</b><br>Click for component breakdown<extra></extra>",
@@ -1023,7 +1049,7 @@ def _factor_bar_chart(fr) -> go.Figure:
     return fig
 
 
-def _render_factor_breakdown(b) -> html.Div:
+def _render_factor_breakdown(b, convention: str = "cn_hk") -> html.Div:
     """Render a FactorBreakdown into the slide-in drawer body. Shows the
     sub-sector bucket, ingredient table, peer-signal distribution stats,
     and the target's exact rank position + percentile formula."""
@@ -1043,7 +1069,8 @@ def _render_factor_breakdown(b) -> html.Div:
             body.append(_factor_ingredient_table(b))
         return html.Div(body)
 
-    pct_color = (T.PRICE_UP if b.pctile >= 70 else
+    up_color, _ = T.resolve_price_colors(convention)
+    pct_color = (up_color if b.pctile >= 70 else
                   (T.WARNING if b.pctile < 30 else T.INFO))
     return html.Div([
         # Header — factor name + pctile + bucket
@@ -1320,7 +1347,8 @@ def _provenance_subtitle(prov) -> "html.Span":
     return html.Span(body)
 
 
-def _render_dcf_walkthrough(inputs, result, dcf_inputs) -> html.Div:
+def _render_dcf_walkthrough(inputs, result, dcf_inputs,
+                                convention: str = "cn_hk") -> html.Div:
     """Six-step walkthrough that exposes every intermediate value compute_dcf()
     computes — base FCF, year-by-year projection, terminal, EV, per-share
     intrinsic, MoS. Rendered into sr-dcf-walkthrough by recompute_dcf so it
@@ -1476,10 +1504,9 @@ def _render_dcf_walkthrough(inputs, result, dcf_inputs) -> html.Div:
                               style={"fontSize": "0.8rem"})
     else:
         mos_pct = result.margin_of_safety * 100
-        # CN/HK convention: positive MoS (intrinsic > price = stock has
-        # room to run up) = red; deeply negative = green.
-        mos_color = (T.PRICE_UP if mos_pct > 0
-                      else (T.PRICE_DOWN if mos_pct < -20 else T.WARNING))
+        up_color, down_color = T.resolve_price_colors(convention)
+        mos_color = (up_color if mos_pct > 0
+                      else (down_color if mos_pct < -20 else T.WARNING))
         mos_html = html.Div([
             html.Code(f"MoS = (Intrinsic − Current) / Intrinsic = "
                       f"(${result.intrinsic_value_per_share:.2f} − "
@@ -1586,14 +1613,15 @@ def _build_default_swot(r) -> tuple[str, str, str, str]:
             "\n".join(f"• {x}" for x in t_list) or "(none auto-detected)")
 
 
-def _build_article_feed(articles: list) -> html.Div:
+def _build_article_feed(articles: list, convention: str = "cn_hk") -> html.Div:
     if not articles:
         return html.P("No recent articles for this ticker in last 30 days.",
                       className="text-muted small")
+    up_color, down_color = T.resolve_price_colors(convention)
     rows = []
     for a in articles[:20]:
         score = a.get("final_score", 0) or 0
-        color = T.PRICE_UP if score > 0.05 else (T.PRICE_DOWN if score < -0.05 else T.TEXT_FAINT)
+        color = up_color if score > 0.05 else (down_color if score < -0.05 else T.TEXT_FAINT)
         rows.append(html.Tr([
             html.Td((a.get("published_at") or "")[:10], className="text-muted small"),
             html.Td(dbc.Badge((a.get("source") or "").upper(), color="info",
@@ -1647,7 +1675,8 @@ def _build_forensic_panel(red_flags) -> html.Div:
 
 
 def _build_strategy_stats_window(history_window: list,
-                                  prices_window: list) -> html.Div:
+                                  prices_window: list,
+                                  convention: str = "cn_hk") -> html.Div:
     """Annual-fundamental stats (ROE / earnings vol / D/E) scoped to the
     selected period, plus price return for the same window. Designed to be
     informative even when the window holds zero annual snapshots — common
@@ -1674,7 +1703,8 @@ def _build_strategy_stats_window(history_window: list,
         ret_pct = (last / first - 1) * 100 if first else 0
         hi, lo = max(closes), min(closes)
         ret_str = f"{ret_pct:+.1f}%"
-        ret_color = T.PRICE_UP if ret_pct >= 0 else T.PRICE_DOWN
+        up_color, down_color = T.resolve_price_colors(convention)
+        ret_color = up_color if ret_pct >= 0 else down_color
         price_items = [
             ("Period return", html.Span(ret_str,
                                           style={"color": ret_color, "fontWeight": "700"})),

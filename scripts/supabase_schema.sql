@@ -194,6 +194,65 @@ CREATE INDEX IF NOT EXISTS idx_securities_reference_parent
 CREATE INDEX IF NOT EXISTS idx_securities_reference_sub
     ON securities_reference (sub_sector);
 
+-- ============== sector_taxonomy ==============
+-- Compiled taxonomy: one row per parent sector or sub-sector. Source of
+-- TRUTH stays in config/sub_sectors.yaml + config/us_size_splits.yaml +
+-- watchlist YAMLs; this table is the validated, normalised output that
+-- the runtime reads. Refreshed by `python main.py taxonomy compile`.
+--
+-- ~104 rows total: 11 parent sectors + ~93 sub-sectors. Loaded once into
+-- process memory via analysis/taxonomy.get_taxonomy() and re-checked via
+-- taxonomy_meta.version on a 5-min TTL.
+
+CREATE TABLE IF NOT EXISTS sector_taxonomy (
+    canonical_name   TEXT          PRIMARY KEY,
+    kind             TEXT          NOT NULL,    -- 'parent' | 'sub'
+    parent_name      TEXT,                       -- NULL for parents; canonical_name FK for subs
+    label_en         TEXT          NOT NULL,
+    label_zh         TEXT          NOT NULL,
+    display_order    INTEGER       NOT NULL DEFAULT 999,
+    is_active        BOOLEAN       NOT NULL DEFAULT TRUE,
+    compiled_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CHECK (kind IN ('parent', 'sub'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_sector_taxonomy_parent
+    ON sector_taxonomy (parent_name);
+
+-- ============== taxonomy_meta ==============
+-- Single-row table for the compile version hash. Used by the runtime
+-- singleton (analysis/taxonomy.get_taxonomy) to detect when in-process
+-- caches need to invalidate after a `taxonomy compile` rerun.
+
+CREATE TABLE IF NOT EXISTS taxonomy_meta (
+    key          TEXT          PRIMARY KEY,
+    value        TEXT          NOT NULL,
+    updated_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+
+-- ============== ticker_taxonomy_history ==============
+-- Audit trail for ticker reclassifications. The reconciler appends a row
+-- only when (sub_sector, effective_sector) actually changes vs the latest
+-- existing row for that ticker. Bounded growth: ~10-100 rows/reconcile.
+-- Reasons: 'initial' | 'industry_change' | 'override_added' |
+--          'size_split' | 'override_removed'
+
+CREATE TABLE IF NOT EXISTS ticker_taxonomy_history (
+    id                    BIGSERIAL    PRIMARY KEY,
+    ticker                TEXT         NOT NULL,
+    sub_sector            TEXT,
+    effective_sector      TEXT,
+    market_cap_at_change  NUMERIC,
+    reason                TEXT         NOT NULL,
+    changed_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tth_ticker_time
+    ON ticker_taxonomy_history (ticker, changed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_tth_reason
+    ON ticker_taxonomy_history (reason, changed_at DESC);
+
 -- ============== Smoke-test seed (delete after verifying) ==============
 -- INSERT INTO historical_prices (ticker, date, adj_close)
 --   VALUES ('TEST.HK', CURRENT_DATE, 100.00)

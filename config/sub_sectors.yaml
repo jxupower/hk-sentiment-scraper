@@ -96,17 +96,25 @@ industry_to_subsector:
   # Industrials parent via the ticker_override below.
   Residential Construction:                Engineering & Construction
 
-  # ---- Healthcare (7 sub-sectors covering 10 yf_industry values) ----
+  # ---- Healthcare (9 sub-sectors covering 12 yf_industry values) ----
+  # Medical Devices and Medical Instruments & Supplies were merged in the
+  # original HK-only taxonomy but are now split back out — both halves clear
+  # the 5-name floor easily on the US side (121 Devices / 47 Supplies). HK
+  # split is 9 / 4 — Supplies sits below MIN_SECTOR_SIZE so its 4 HK names
+  # will skip factor-percentile computation until the bucket grows.
+  # Healthcare Plans is a new bucket for managed-care plans (UNH/ELV/HUM/CVS)
+  # — distinct capital model from drug manufacturers and care facilities.
   Biotechnology:                            Biotechnology
   Drug Manufacturers - Specialty & Generic: Drug Manufacturing
   Drug Manufacturers - General:             Drug Manufacturing
   Medical Care Facilities:                  Medical Care Facilities
-  Medical Devices:                          Medical Devices & Instruments
-  Medical Instruments & Supplies:           Medical Devices & Instruments
+  Medical Devices:                          Medical Devices
+  Medical Instruments & Supplies:           Medical Instruments & Supplies
   Pharmaceutical Retailers:                 Pharmacy Retail & Distribution
   Medical Distribution:                     Pharmacy Retail & Distribution
   Health Information Services:              Health Information Services
   Diagnostics & Research:                   Diagnostics & Research
+  Healthcare Plans:                         Healthcare Plans & Managed Care
 
   # ---- Financial Services (6 sub-sectors covering 12 yf_industry values) ----
   # Tiny yfinance buckets folded into adjacent ones (Mortgage Finance → Credit
@@ -121,6 +129,8 @@ industry_to_subsector:
   Asset Management:                        Asset Management
   Insurance - Life:                        Insurance
   Insurance - Property & Casualty:         Insurance
+  Insurance - Specialty:                   Insurance
+  Insurance - Diversified:                 Insurance
   Insurance Brokers:                       Insurance
   Insurance - Reinsurance:                 Insurance
   Financial Conglomerates:                 Financial Conglomerates
@@ -140,6 +150,10 @@ industry_to_subsector:
   Beverages - Non-Alcoholic:               Beverages
   Beverages - Wineries & Distilleries:     Beverages
   Beverages - Brewers:                     Beverages
+  # Discount/warehouse retailers (BJ, OLLI, PSMT, etc.) fold into the Food/
+  # Retail bucket alongside Grocery Stores — COST/DG/DLTR/TGT/WMT already
+  # land here via the watchlist_us section heading.
+  Discount Stores:                         Food Production, Distribution & Retail
 
   # ---- Communication Services (4 sub-sectors covering 7 yf_industry values) ----
   # Note: Tencent/Baidu/NetEase are promoted to Technology via ticker_overrides
@@ -164,7 +178,11 @@ industry_to_subsector:
   Oil & Gas Midstream:                     Oil & Gas
   Oil & Gas Equipment & Services:          Oil & Gas
   Oil & Gas Drilling:                      Oil & Gas
-  Thermal Coal:                            Thermal Coal
+  # Thermal Coal + Coking Coal (was Basic Materials) both fold into a single
+  # 'Coal' bucket under Energy. Coal is conceptually energy regardless of
+  # whether it's burned for power or coked for steel. HK split was 18/6,
+  # US 3/6; combined gives 24 HK + 9 US.
+  Thermal Coal:                            Coal
   Uranium:                                 Clean Energy & Nuclear
 
   # ---- Utilities (5 sub-sectors — 1:1 with yfinance, prefix dropped) ----
@@ -176,15 +194,36 @@ industry_to_subsector:
   Utilities - Regulated Water:             Regulated Water Utilities
   Utilities - Independent Power Producers: Independent Power Producers
   Utilities - Renewable:                   Renewable Utilities
+  # yfinance's "Diversified" utilities (AVA, UTL) are dominantly regulated
+  # electric with small gas/water arms. Fold into Regulated Electric Utilities.
+  # Note: AES + SRE are hand-overridden in config/us_sectors.yaml so this
+  # only catches the long tail without S&P 500 coverage.
+  Utilities - Diversified:                 Regulated Electric Utilities
 
-  # ---- Real Estate (3 sub-sectors covering all 3 yf_industry values) ----
-  # Cleanest 1:1 mapping in the universe — yfinance already gives us a clean
-  # three-bucket split. Just labels are tightened. REITs (Link 0823, Champion
-  # 2778, Yuexiu 0405, etc.) are still missing from the universe — known gap
-  # documented in CLAUDE.md (requires parsing a separate HKEX xlsx sheet).
+  # ---- Real Estate (10 sub-sectors covering 12 yf_industry values) ----
+  # The 3 HK-style buckets (Developers / Property Mgmt / Diversified RE)
+  # cover the HK Real Estate universe — yfinance gives a clean 1:1 mapping.
+  # HK REITs themselves are still missing from the active universe (known gap
+  # in CLAUDE.md — requires parsing a separate HKEX xlsx sheet).
+  #
+  # The 7 REIT sub-sectors below are US-driven: 163 unmapped US REIT tickers
+  # across 9 yfinance `REIT - *` industries get split into 6 specialty buckets
+  # plus one merged Diversified & Specialty bucket (Diversified 14 + Specialty
+  # 19 + Hotel & Motel 7 = 40 names). Note: this is the wholesale yfinance
+  # industry mapping — S&P 500 names use Tier-3 GICS overrides in
+  # config/us_sectors.yaml (regenerated via scripts/build_us_sectors_yaml.py).
   Real Estate - Development:               Real Estate Developers
   Real Estate Services:                    Property Management & Services
   Real Estate - Diversified:               Diversified Real Estate
+  REIT - Mortgage:                         Mortgage REITs
+  REIT - Retail:                           Retail REITs
+  REIT - Residential:                      Residential REITs
+  REIT - Healthcare Facilities:            Healthcare REITs
+  REIT - Office:                           Office REITs
+  REIT - Industrial:                       Industrial REITs
+  REIT - Diversified:                      Diversified & Specialty REITs
+  REIT - Specialty:                        Diversified & Specialty REITs
+  REIT - Hotel & Motel:                    Diversified & Specialty REITs
 
   # ---- Basic Materials (8 sub-sectors covering 13 yf_industry values) ----
   # Mining split into precious vs base (gold tracks USD/rates; base metals
@@ -203,7 +242,7 @@ industry_to_subsector:
   Steel:                                   Steel
   Lumber & Wood Production:                Forest Products & Paper
   Paper & Paper Products:                  Forest Products & Paper
-  Coking Coal:                             Coking Coal
+  Coking Coal:                             Coal
   Agricultural Inputs:                     Agricultural Inputs
 
 # ============================================================================
@@ -291,6 +330,82 @@ ticker_overrides:
   # --------------------------------------------------------------------------
   3708.HK: { parent_sector: Industrials, sub_sector: Engineering & Construction }   # World Digi Econ (yf classifies as Residential Construction)
 
+  # --------------------------------------------------------------------------
+  # US managed-care payors classified as Health Care Services by GICS but
+  # economically integrated payors (Cigna owns Express Scripts; CVS owns Aetna).
+  # Move them out of Medical Care Facilities into Healthcare Plans & Managed Care
+  # to join UNH/ELV/HUM/CNC/HUM peer pool. Tier 2 ticker_override beats the
+  # Tier 3 us_sectors.yaml row that resolves them as Medical Care Facilities.
+  # --------------------------------------------------------------------------
+  CI:  { parent_sector: Healthcare, sub_sector: Healthcare Plans & Managed Care }   # Cigna
+  CVS: { parent_sector: Healthcare, sub_sector: Healthcare Plans & Managed Care }   # CVS Health (incl. Aetna)
+
+  # --------------------------------------------------------------------------
+  # US mega-cap Tech misclassified by yfinance under Comm Services / Consumer
+  # Cyclical. Same cross-parent pattern as the 6 HK internet giants above.
+  # --------------------------------------------------------------------------
+  GOOGL: { parent_sector: Technology, sub_sector: Platforms & Cloud Infrastructure }   # Alphabet (Class A)
+  GOOG:  { parent_sector: Technology, sub_sector: Platforms & Cloud Infrastructure }   # Alphabet (Class C)
+  META:  { parent_sector: Technology, sub_sector: Platforms & Cloud Infrastructure }   # Meta Platforms
+  AMZN:  { parent_sector: Technology, sub_sector: Platforms & Cloud Infrastructure }   # Amazon (yfinance: Internet Retail)
+  TSLA:  { parent_sector: Technology, sub_sector: Auto Tech }                          # Tesla — joins 10 HK Auto Tech peers
+
+  # --------------------------------------------------------------------------
+  # US Solar tickers — same Energy reparenting already applied to HK Solar
+  # (the Solar industry maps to "Clean Energy & Nuclear" sub-sector; default
+  # parent is Technology, override to Energy so all clean-energy peers pool).
+  # --------------------------------------------------------------------------
+  ARRY: { parent_sector: Energy }
+  ASTI: { parent_sector: Energy }
+  BEEM: { parent_sector: Energy }
+  ENPH: { parent_sector: Energy }
+  FTCI: { parent_sector: Energy }
+  NXT:  { parent_sector: Energy }
+  RUN:  { parent_sector: Energy }
+  SEDG: { parent_sector: Energy }
+  SHLS: { parent_sector: Energy }
+  SMXT: { parent_sector: Energy }
+  SPRU: { parent_sector: Energy }
+  SPWR: { parent_sector: Energy }
+  SUNE: { parent_sector: Energy }
+  TYGO: { parent_sector: Energy }
+  ZEO:  { parent_sector: Energy }
+
+  # --------------------------------------------------------------------------
+  # Financial Conglomerates US (4 tickers) — each fits a more specific peer
+  # group than the catch-all conglomerate bucket.
+  # --------------------------------------------------------------------------
+  VOYA: { parent_sector: Financial Services, sub_sector: Insurance }       # Voya Financial — life/retirement
+  TREE: { parent_sector: Financial Services, sub_sector: Credit Services } # LendingTree
+  FRHC: { parent_sector: Financial Services, sub_sector: Capital Markets } # Freedom Holding — brokerage
+  RILY: { parent_sector: Financial Services, sub_sector: Capital Markets } # B. Riley — investment bank
+
+  # --------------------------------------------------------------------------
+  # Single-ticker orphan US buckets fold into nearest peer pool.
+  # --------------------------------------------------------------------------
+  BRK-B: { parent_sector: Industrials, sub_sector: Conglomerates }              # Berkshire → 21 US peers
+  BEEP:  { parent_sector: Real Estate, sub_sector: Real Estate Developers }     # Mobile Infrastructure
+  JOE:   { parent_sector: Real Estate, sub_sector: Real Estate Developers }     # St. Joe — land
+  STRS:  { parent_sector: Real Estate, sub_sector: Real Estate Developers }     # Stratus Properties — land
+
+  # --------------------------------------------------------------------------
+  # Coking Coal tickers — Coal sub-sector lives under Energy parent, but
+  # yfinance puts these under Basic Materials. Force parent to Energy so
+  # all coal tickers (Thermal + Coking) pool together as 24 HK + 9 US.
+  # --------------------------------------------------------------------------
+  0061.HK: { parent_sector: Energy }   # GREEN LEADER
+  0276.HK: { parent_sector: Energy }   # MONGOLIA ENERGY
+  0639.HK: { parent_sector: Energy }   # SHOUGANG RES
+  0975.HK: { parent_sector: Energy }   # MONGOL MINING
+  2798.HK: { parent_sector: Energy }   # PER ENERGY
+  6885.HK: { parent_sector: Energy }   # JINMA ENERGY
+  AMR:     { parent_sector: Energy }   # Alpha Metallurgical Resources
+  AREC:    { parent_sector: Energy }   # American Resources
+  HCC:     { parent_sector: Energy }   # Warrior Met Coal
+  METC:    { parent_sector: Energy }   # Ramaco Resources
+  METCB:   { parent_sector: Energy }   # Ramaco Resources (Class B)
+  SXC:     { parent_sector: Energy }   # SunCoke Energy
+
 
 # ============================================================================
 # sub_sector_to_parent — parent-sector lookup for each sub-sector
@@ -342,18 +457,33 @@ sub_sector_to_parent:
   Textiles & Footwear:                Consumer Cyclical
   Travel & Hospitality:               Consumer Cyclical
 
-  # Healthcare (7)
+  # Healthcare (12; Biotechnology label stays for HK tickers and any US
+  # ticker missing market-cap data; the size-split buckets below are
+  # applied on top for US only.)
   Biotechnology:                      Healthcare
+  Large-Cap Biotech:                  Healthcare
+  Mid-Cap Biotech:                    Healthcare
+  Small-Cap Biotech:                  Healthcare
   Diagnostics & Research:             Healthcare
   Drug Manufacturing:                 Healthcare
   Health Information Services:        Healthcare
+  Healthcare Plans & Managed Care:    Healthcare
   Medical Care Facilities:            Healthcare
-  Medical Devices & Instruments:      Healthcare
+  Medical Devices:                    Healthcare
+  Medical Instruments & Supplies:     Healthcare
   Pharmacy Retail & Distribution:     Healthcare
 
-  # Financial Services (6)
+  # Financial Services (12; Banks + Asset Management labels stay for HK
+  # tickers and any US ticker missing market-cap data; the size-split
+  # buckets below are applied on top for US only.)
   Asset Management:                   Financial Services
+  Large Asset Managers:               Financial Services
+  Mid-Cap Asset Managers:             Financial Services
+  Small-Cap Asset Managers:           Financial Services
   Banks:                              Financial Services
+  Money Center Banks:                 Financial Services
+  Large Regional Banks:               Financial Services
+  Small Regional & Community Banks:   Financial Services
   Capital Markets:                    Financial Services
   Credit Services:                    Financial Services
   Financial Conglomerates:            Financial Services
@@ -372,20 +502,19 @@ sub_sector_to_parent:
   Media & Entertainment:              Communication Services
   Telecom Services:                   Communication Services
 
-  # Basic Materials (8)
+  # Basic Materials (7; Coking Coal moved to Energy/Coal in the merge)
   Agricultural Inputs:                Basic Materials
   Base Metals & Mining:               Basic Materials
   Building Materials & Cement:        Basic Materials
   Chemicals:                          Basic Materials
-  Coking Coal:                        Basic Materials
   Forest Products & Paper:            Basic Materials
   Precious Metals & Mining:           Basic Materials
   Steel:                              Basic Materials
 
-  # Energy (3)
+  # Energy (3; Thermal Coal + Coking Coal merged into single Coal bucket)
   Clean Energy & Nuclear:             Energy
+  Coal:                               Energy
   Oil & Gas:                          Energy
-  Thermal Coal:                       Energy
 
   # Utilities (5)
   Independent Power Producers:        Utilities
@@ -394,10 +523,17 @@ sub_sector_to_parent:
   Regulated Water Utilities:          Utilities
   Renewable Utilities:                Utilities
 
-  # Real Estate (3)
+  # Real Estate (10)
   Diversified Real Estate:            Real Estate
+  Diversified & Specialty REITs:      Real Estate
+  Healthcare REITs:                   Real Estate
+  Industrial REITs:                   Real Estate
+  Mortgage REITs:                     Real Estate
+  Office REITs:                       Real Estate
   Property Management & Services:     Real Estate
   Real Estate Developers:             Real Estate
+  Residential REITs:                  Real Estate
+  Retail REITs:                       Real Estate
 
 
 # ============================================================================
@@ -465,16 +601,27 @@ sub_sectors_zh:
 
   # Healthcare
   "Biotechnology":                     "生物科技"
+  "Large-Cap Biotech":                 "大型生物科技"
+  "Mid-Cap Biotech":                   "中型生物科技"
+  "Small-Cap Biotech":                 "小型生物科技"
   "Diagnostics & Research":            "诊断与研究"
   "Drug Manufacturing":                "制药"
   "Health Information Services":       "健康信息服务"
+  "Healthcare Plans & Managed Care":   "医疗保险与管理式医疗"
   "Medical Care Facilities":           "医疗机构"
-  "Medical Devices & Instruments":     "医疗器械"
+  "Medical Devices":                   "医疗器械"
+  "Medical Instruments & Supplies":    "医疗仪器与耗材"
   "Pharmacy Retail & Distribution":    "药品零售与分销"
 
   # Financial Services
   "Asset Management":                  "资产管理"
+  "Large Asset Managers":              "大型资产管理"
+  "Mid-Cap Asset Managers":            "中型资产管理"
+  "Small-Cap Asset Managers":          "小型资产管理"
   "Banks":                             "银行"
+  "Money Center Banks":                "大型综合银行"
+  "Large Regional Banks":              "大型区域银行"
+  "Small Regional & Community Banks":  "中小型区域与社区银行"
   "Capital Markets":                   "资本市场"
   "Credit Services":                   "信贷服务"
   "Financial Conglomerates":           "金融综合企业"
@@ -498,15 +645,14 @@ sub_sectors_zh:
   "Base Metals & Mining":              "基本金属与采矿"
   "Building Materials & Cement":       "建材与水泥"
   "Chemicals":                         "化工"
-  "Coking Coal":                       "炼焦煤"
   "Forest Products & Paper":           "林产品与造纸"
   "Precious Metals & Mining":          "贵金属与采矿"
   "Steel":                             "钢铁"
 
   # Energy
   "Clean Energy & Nuclear":            "清洁能源与核能"
+  "Coal":                              "煤炭"
   "Oil & Gas":                         "石油与天然气"
-  "Thermal Coal":                      "动力煤"
 
   # Utilities
   "Independent Power Producers":       "独立发电商"
@@ -517,5 +663,12 @@ sub_sectors_zh:
 
   # Real Estate
   "Diversified Real Estate":           "综合性房地产"
+  "Diversified & Specialty REITs":     "多元化与特殊房地产投资信托"
+  "Healthcare REITs":                  "医疗房地产投资信托"
+  "Industrial REITs":                  "工业房地产投资信托"
+  "Mortgage REITs":                    "抵押贷款房地产投资信托"
+  "Office REITs":                      "办公室房地产投资信托"
   "Property Management & Services":    "物业管理与服务"
   "Real Estate Developers":            "房地产开发商"
+  "Residential REITs":                 "住宅房地产投资信托"
+  "Retail REITs":                      "零售房地产投资信托"

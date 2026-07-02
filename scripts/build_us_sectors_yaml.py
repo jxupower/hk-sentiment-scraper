@@ -111,15 +111,20 @@ GICS_SUB = {
     "Transaction & Payment Processing Services": ("Credit Services", None),
 
     # Health Care
+    # Note: Managed Health Care (UNH/ELV/HUM/CI/CVS-style) was previously
+    # routed to Insurance / Financial Services — wrong parent. Now lives in
+    # its own Healthcare Plans & Managed Care bucket under Healthcare.
+    # Medical Devices and Medical Instruments & Supplies are now split back
+    # into two distinct buckets (was merged into Medical Devices & Instruments).
     "Biotechnology":                          ("Biotechnology", None),
     "Health Care Distributors":               ("Pharmacy Retail & Distribution", None),
-    "Health Care Equipment":                  ("Medical Devices & Instruments", None),
+    "Health Care Equipment":                  ("Medical Devices", None),
     "Health Care Facilities":                 ("Medical Care Facilities", None),
     "Health Care Services":                   ("Medical Care Facilities", None),
-    "Health Care Supplies":                   ("Medical Devices & Instruments", None),
+    "Health Care Supplies":                   ("Medical Instruments & Supplies", None),
     "Health Care Technology":                 ("Health Information Services", None),
     "Life Sciences Tools & Services":         ("Diagnostics & Research", None),
-    "Managed Health Care":                    ("Insurance", "Financial Services"),
+    "Managed Health Care":                    ("Healthcare Plans & Managed Care", None),
     "Pharmaceuticals":                        ("Drug Manufacturing", None),
 
     # Industrials
@@ -170,20 +175,23 @@ GICS_SUB = {
     "Specialty Chemicals":                    ("Chemicals", None),
     "Steel":                                  ("Steel", None),
 
-    # Real Estate — REIT subtypes all collapse to Diversified Real Estate
-    "Data Center REITs":                      ("Diversified Real Estate", None),
-    "Health Care REITs":                      ("Diversified Real Estate", None),
-    "Hotel & Resort REITs":                   ("Diversified Real Estate", None),
-    "Industrial REITs":                       ("Diversified Real Estate", None),
-    "Multi-Family Residential REITs":         ("Diversified Real Estate", None),
-    "Office REITs":                           ("Diversified Real Estate", None),
-    "Other Specialized REITs":                ("Diversified Real Estate", None),
+    # Real Estate — REIT subtypes split into 7 fine-grained buckets matching
+    # the yfinance `REIT - *` industries downstream of config/sub_sectors.yaml.
+    # Data Center / Self-Storage / Telecom Tower / Timber don't map cleanly to
+    # any of the 6 specialty buckets, so they fold into Diversified & Specialty.
+    "Data Center REITs":                      ("Diversified & Specialty REITs", None),
+    "Health Care REITs":                      ("Healthcare REITs", None),
+    "Hotel & Resort REITs":                   ("Diversified & Specialty REITs", None),
+    "Industrial REITs":                       ("Industrial REITs", None),
+    "Multi-Family Residential REITs":         ("Residential REITs", None),
+    "Office REITs":                           ("Office REITs", None),
+    "Other Specialized REITs":                ("Diversified & Specialty REITs", None),
     "Real Estate Services":                   ("Property Management & Services", None),
-    "Retail REITs":                           ("Diversified Real Estate", None),
-    "Self-Storage REITs":                     ("Diversified Real Estate", None),
-    "Single-Family Residential REITs":        ("Diversified Real Estate", None),
-    "Telecom Tower REITs":                    ("Diversified Real Estate", None),
-    "Timber REITs":                           ("Diversified Real Estate", None),
+    "Retail REITs":                           ("Retail REITs", None),
+    "Self-Storage REITs":                     ("Diversified & Specialty REITs", None),
+    "Single-Family Residential REITs":        ("Residential REITs", None),
+    "Telecom Tower REITs":                    ("Diversified & Specialty REITs", None),
+    "Timber REITs":                           ("Diversified & Specialty REITs", None),
 
     # Utilities
     "Electric Utilities":                              ("Regulated Electric Utilities", None),
@@ -191,6 +199,65 @@ GICS_SUB = {
     "Independent Power Producers & Energy Traders":    ("Independent Power Producers", None),
     "Multi-Utilities":                                 ("Regulated Electric Utilities", None),
     "Water Utilities":                                 ("Regulated Water Utilities", None),
+}
+
+# Per-ticker corrections applied AFTER GICS_SUB mapping. Use when GICS
+# lumps economically distinct names under one sub-industry (e.g.
+# `Technology Hardware, Storage & Peripherals` covers both consumer
+# devices like AAPL and enterprise infrastructure like HPE/NTAP/SMCI).
+# These overrides win in us_sectors.yaml; downstream Tier-2
+# ticker_overrides in config/sub_sectors.yaml can still override these.
+TICKER_OVERRIDES: dict[str, tuple[str, str | None]] = {
+    # Enterprise IT hardware/storage — wrong peer pool in "Consumer
+    # Electronics & Devices" (AAPL/DELL/HPQ live there).
+    "HPE":   ("Tech Components & Distribution", "Technology"),
+    "NTAP":  ("Tech Components & Distribution", "Technology"),
+    "SMCI":  ("Tech Components & Distribution", "Technology"),
+
+    # Defense-focused IT services — Leidos is ~70% defense/intel.
+    "LDOS":  ("Aerospace & Defense", "Industrials"),
+
+    # Electrical equipment maker — GICS "Industrial Machinery & Supplies
+    # & Components" is too broad; bucket exists for electrical names.
+    "HUBB":  ("Electrical Equipment", "Industrials"),
+
+    # MRO/industrial distributor — not a machinery maker.
+    "GWW":   ("Business & Professional Services", "Industrials"),
+
+    # Diversified industrial holding company — owns measurement, software,
+    # healthcare imaging, etc. Doesn't fit hardware-components bucket.
+    "ROP":   ("Conglomerates", "Industrials"),
+
+    # Auto parts distributor — fits the auto-cycle peer set.
+    "GPC":   ("Auto Parts & Suppliers", "Consumer Cyclical"),
+
+    # ---- Severity-3 refinements (boundary calls) -------------------------
+    # Payroll / HR SaaS — primary business is software not services.
+    "ADP":   ("Application Software", "Technology"),
+    "PAYX":  ("Application Software", "Technology"),
+    # Broadridge — fintech infrastructure SaaS (proxy voting, settlement).
+    "BR":    ("Application Software", "Technology"),
+
+    # Data analytics for financial markets — peer with MSCI/SPGI/MCO.
+    "EFX":   ("Capital Markets", "Financial Services"),
+    "VRSK":  ("Capital Markets", "Financial Services"),
+
+    # Pure cable operator (no content arm like CMCSA's NBCU) — telecom-shaped.
+    "CHTR":  ("Telecom Services", "Communication Services"),
+
+    # Principal — retirement plans business is closer to asset mgmt than
+    # life insurance. Size split downstream will land it in Large/Mid AM.
+    "PFG":   ("Asset Management", "Financial Services"),
+
+    # Applovin — mobile ad-tech platform (yfinance correctly: Advertising).
+    "APP":   ("Advertising Agencies", "Communication Services"),
+    # Palantir — enterprise data platform; fits cloud-infra peers.
+    "PLTR":  ("Platforms & Cloud Infrastructure", "Technology"),
+
+    # Weyerhaeuser — timberland operator structured as a REIT but
+    # economically a forest-products name (correlates with lumber prices,
+    # not real estate cap rates).
+    "WY":    ("Forest Products & Paper", "Basic Materials"),
 }
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -221,6 +288,10 @@ def main():
             continue
         our_sub, override_parent = GICS_SUB[sub]
         parent = override_parent or GICS_SECTOR[sec]
+        # Per-ticker overrides win over the GICS class mapping.
+        if t in TICKER_OVERRIDES:
+            our_sub, override_parent = TICKER_OVERRIDES[t]
+            parent = override_parent or parent
         entries[t] = (our_sub, parent, "S&P 500")
     print(f"  S&P 500: {len(entries)} mapped")
 
@@ -245,6 +316,9 @@ def main():
                         continue
                     our_sub, override_parent = GICS_SUB[sub]
                     parent = override_parent or GICS_SECTOR[sec]
+                    if t in TICKER_OVERRIDES:
+                        our_sub, override_parent = TICKER_OVERRIDES[t]
+                        parent = override_parent or parent
                     entries[t] = (our_sub, parent, "Nasdaq-100")
                     added += 1
                 break

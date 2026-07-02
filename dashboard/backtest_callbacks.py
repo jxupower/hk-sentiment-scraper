@@ -35,6 +35,7 @@ from dashboard.charts import (
     sector_breakdown_chart,
 )
 from dashboard.screener_presets import INVESTOR_PRESETS
+from dashboard import theme as T
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,46 @@ YEARS_TO_DAYS = 365
 def register_backtest_callbacks(app, db_path: str):
     sector_risk_path = os.path.join(os.path.dirname(__file__), "..", "config",
                                      "sector_risk.yaml")
+
+    # ----- Dynamic Δ-weight / Δ-shares colouring -----
+    # The static style_data_conditional was moved out of layout so this
+    # callback owns the direction colours and re-fires on convention flip.
+    @app.callback(
+        Output("bt-final-table", "style_data_conditional"),
+        Input("user-color-convention", "data"),
+    )
+    def _bt_delta_style(convention):
+        up, down = T.resolve_price_colors(convention or "cn_hk")
+        return [
+            {"if": {"filter_query": "{weight_delta} > 0",
+                     "column_id": "weight_delta"}, "color": up},
+            {"if": {"filter_query": "{weight_delta} < 0",
+                     "column_id": "weight_delta"}, "color": down},
+            {"if": {"filter_query": "{shares_delta} > 0",
+                     "column_id": "shares_delta"}, "color": up},
+            {"if": {"filter_query": "{shares_delta} < 0",
+                     "column_id": "shares_delta"}, "color": down},
+        ]
+
+    # ----- Static header colors that also need to flip on convention change -----
+    # Max-DD stat card, excess-return stat card, long-basket / short-basket
+    # headings in the factor-verification sub-tab.
+    @app.callback(
+        Output("bt-stat-maxdd", "style"),
+        Output("bt-stat-excess", "style"),
+        Output("bv-stat-maxdd", "style"),
+        Output("bv-long-header", "style"),
+        Output("bv-short-header", "style"),
+        Input("user-color-convention", "data"),
+    )
+    def _bt_static_direction_styles(convention):
+        up, down = T.resolve_price_colors(convention or "cn_hk")
+        maxdd_style   = {"color": down, "fontSize": "1.4rem"}
+        excess_style  = {"color": up,   "fontSize": "1.4rem"}
+        long_h_style  = {"color": up}
+        short_h_style = {"color": down}
+        return (maxdd_style, excess_style, maxdd_style,
+                  long_h_style, short_h_style)
 
     # ----- i18n: flip every translatable label on language change -----
     @app.callback(
@@ -244,9 +285,12 @@ def register_backtest_callbacks(app, db_path: str):
         State("bt-weight-cap", "value"),
         State("user-language", "data"),
         State("user-market", "data"),
+        State("user-color-convention", "data"),
         prevent_initial_call=True,
     )
-    def run_backtest(_n, preset_id, horizon_years, rebal_freq, weight_cap, lang, market):
+    def run_backtest(_n, preset_id, horizon_years, rebal_freq, weight_cap,
+                        lang, market, convention):
+        convention = convention or "cn_hk"
         from dashboard.i18n import T as I
         lang = lang or "en"
         market = (market or "HK").upper()
@@ -301,7 +345,8 @@ def register_backtest_callbacks(app, db_path: str):
             eq_data, bench_data,
             strategy_label=f"{result.preset_label} top-10",
         )
-        dd_fig = drawdown_curve_chart(result.drawdown_curve)
+        dd_fig = drawdown_curve_chart(result.drawdown_curve,
+                                            convention=convention)
         sec_init_fig = sector_breakdown_chart(
             result.sector_breakdown_initial, title="Sector mix — initial",
         )
@@ -475,10 +520,12 @@ def register_backtest_callbacks(app, db_path: str):
         State("bv-min-names", "value"),
         State("bv-allow-shorts", "value"),
         State("user-market", "data"),
+        State("user-color-convention", "data"),
         prevent_initial_call=True,
     )
     def run_factor_verification(_n, horizon_years, rebal_freq,
-                                  min_names, allow_shorts, market):
+                                  min_names, allow_shorts, market, convention):
+        convention = convention or "cn_hk"
         if not horizon_years or not rebal_freq:
             raise PreventUpdate
         from datetime import date, timedelta
@@ -551,11 +598,13 @@ def register_backtest_callbacks(app, db_path: str):
 
         eq_fig = long_short_spread_chart(
             result.long_curve, result.short_curve, result.spread_curve,
+            convention=convention,
         )
         decile_fig = decile_monotonicity_chart(
             result.decile_returns, result.decile_counts,
+            convention=convention,
         )
-        ic_fig = ic_timeseries_chart(result.ic_series)
+        ic_fig = ic_timeseries_chart(result.ic_series, convention=convention)
 
         # Latest rebalance composition tables
         latest = result.rebalance_log[-1] if result.rebalance_log else None

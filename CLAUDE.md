@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working rules
+
+- **Never add a third-party dependency without explicit user approval in plan mode.** This includes new entries in `requirements.txt`, `pip install <pkg>`, `npm install <pkg>`, or any equivalent. When a task seems to need a new library, enter plan mode, name the exact package + version + rationale, and wait for the user's ExitPlanMode approval before installing. Prefer the standard library or already-installed packages; if neither will work, escalate to plan mode rather than adding the dependency silently. This applies to transitive additions too — if a helper package would pull in a heavy chain, surface it in the plan.
+
 ## Commands
 
 ```bash

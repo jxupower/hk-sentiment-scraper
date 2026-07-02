@@ -72,6 +72,40 @@ _BROWSER_HEADERS = {
 
 _BLACKLIST = {"-", "USD", "", "ZVZZT", "ZWZZT", "ZXZZT", "ZBZZT"}  # last 4 are NASDAQ test symbols
 
+# Derivative / non-equity security filtering.
+# NASDAQ Trader's `Common Stock` substring filter alone leaks rows like
+# "Bed Bath & Beyond, Inc. Warrants to Purchase Common Stock" because the
+# substring matches the conversion target. Two complementary filters:
+#   1. Name-based: drop rows whose Security Name names them as a derivative.
+#   2. Suffix-based: drop tickers ending in standard derivative suffixes —
+#      catches malformed Security Name rows that slip past (1).
+_NON_EQUITY_NAME_PATTERNS = (
+    "Warrant", "Warrants", " Unit", " Units",
+    "Closed-End Fund", "Bond", "Notes due",
+    "Depositary Share", "Preferred",
+    # Edge cases: bonds/CEFs whose Security Name still says "Common Stock"
+    # (NASDAQ's exchange labelling, not their actual security type).
+    "Fund Common Stock",     # CEFs: BTO, CIF, DHF, DHY, DMA, DMB, VBF, ...
+    "Authority Common Stock",  # Agency bonds: TVC (TVA Power Bond)
+    "When Issued",           # Temporary ex-dividend tickers: HONIV, etc.
+)
+
+# Suffix conventions (post-normalisation `-` form):
+#   -W / -WS / -WD : warrants
+#   -U             : SPAC unit (Class A + warrant bundle)
+#   -R / -RT       : rights
+_DERIVATIVE_SUFFIXES = ("-W", "-WS", "-WD", "-U", "-R", "-RT")
+
+
+def _looks_like_non_equity(name: object) -> bool:
+    if not isinstance(name, str):
+        return False
+    return any(p in name for p in _NON_EQUITY_NAME_PATTERNS)
+
+
+def _is_derivative_ticker(t: str) -> bool:
+    return any(t.endswith(suf) for suf in _DERIVATIVE_SUFFIXES)
+
 
 # ---------------------------------------------------------------------------
 # Ticker normalisation
@@ -130,9 +164,10 @@ def parse_nasdaq_trader(cache_dir: Path, force: bool = False) -> list[dict]:
     df_n = df_n[df_n["Test Issue"] == "N"]
     df_n = df_n[df_n["ETF"] == "N"]
     df_n = df_n[df_n["Security Name"].astype(str).str.contains("Common Stock", case=False, na=False)]
+    df_n = df_n[~df_n["Security Name"].apply(_looks_like_non_equity)]
     for r in df_n.to_dict("records"):
         t = _normalize_us_ticker(r.get("Symbol"))
-        if not t or t in seen:
+        if not t or t in seen or _is_derivative_ticker(t):
             continue
         name = str(r.get("Security Name") or t).split(" - ")[0].strip()
         try:
@@ -159,9 +194,10 @@ def parse_nasdaq_trader(cache_dir: Path, force: bool = False) -> list[dict]:
     df_o = df_o[df_o["Test Issue"] == "N"]
     df_o = df_o[df_o["ETF"] == "N"]
     df_o = df_o[df_o["Security Name"].astype(str).str.contains("Common Stock", case=False, na=False)]
+    df_o = df_o[~df_o["Security Name"].apply(_looks_like_non_equity)]
     for r in df_o.to_dict("records"):
         t = _normalize_us_ticker(r.get("ACT Symbol"))
-        if not t or t in seen:
+        if not t or t in seen or _is_derivative_ticker(t):
             continue
         name = str(r.get("Security Name") or t).split(" - ")[0].strip()
         try:

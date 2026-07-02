@@ -162,14 +162,16 @@ def register_risk_callbacks(app, db_path: str):
         Output("risk-drawdown-hist", "figure"),
         Output("risk-diagnostics", "children"),
         Input("risk-load-btn", "n_clicks"),
+        Input("user-color-convention", "data"),
         State("risk-ticker-select", "value"),
         State("risk-history-window", "value"),
         State("risk-horizon", "value"),
         prevent_initial_call=True,
     )
-    def render_risk(_clicks, ticker, history_window, horizon):
+    def render_risk(_clicks, convention, ticker, history_window, horizon):
         if not ticker:
             raise PreventUpdate
+        convention = convention or "cn_hk"
 
         from analysis._garch_cache import get_or_build
         from analysis.data_loader import get_or_fetch_prices
@@ -196,12 +198,14 @@ def register_risk_callbacks(app, db_path: str):
                     f"{bundle.last_price_date} · 5,000 MC paths · "
                     f"horizon = {bundle.metrics.horizon_days}d")
 
-        fan = fan_chart(bundle.prices, bundle.paths, ticker)
+        fan = fan_chart(bundle.prices, bundle.paths, ticker,
+                          convention=convention)
         cone = vol_cone_chart(bundle.returns_pct,
                                 bundle.forecast.annualised_vol_pct, ticker)
-        var_tbl = _build_var_table(bundle.metrics)
-        prob_tbl = _build_prob_table(bundle.metrics)
-        dd_fig = drawdown_histogram(bundle.metrics.max_drawdowns, ticker)
+        var_tbl = _build_var_table(bundle.metrics, convention=convention)
+        prob_tbl = _build_prob_table(bundle.metrics, convention=convention)
+        dd_fig = drawdown_histogram(bundle.metrics.max_drawdowns, ticker,
+                                          convention=convention)
         diag = _build_diagnostics(bundle.fit)
 
         return (
@@ -285,12 +289,12 @@ def _error_state(msg: str):
     )
 
 
-def _build_var_table(m) -> html.Table:
+def _build_var_table(m, convention: str = "cn_hk") -> html.Table:
     """VaR + CVaR at 95/99% over 1d / 5d / horizon."""
+    up_color, down_color = T.resolve_price_colors(convention)
     def fmt(v):
-        # CN/HK convention: loss (negative VaR) = green, positive = red.
         return html.Span(f"{v:+.2%}",
-                          style={"color": T.PRICE_DOWN if v < 0 else T.PRICE_UP,
+                          style={"color": down_color if v < 0 else up_color,
                                  "fontWeight": "600"})
 
     rows = [
@@ -310,12 +314,13 @@ def _build_var_table(m) -> html.Table:
     return html.Table(rows, className="table table-sm w-100 small")
 
 
-def _build_prob_table(m) -> html.Table:
+def _build_prob_table(m, convention: str = "cn_hk") -> html.Table:
     """P(loss > 10%) and P(loss > 20%) over the chosen horizon."""
+    up_color, down_color = T.resolve_price_colors(convention)
     def fmt_pct(p):
-        # P(big loss). In CN/HK convention high probability of large loss
-        # is bullish-bad → green; low probability of loss = red.
-        col = T.PRICE_DOWN if p > 0.10 else (T.WARNING if p > 0.02 else T.PRICE_UP)
+        # High probability of a big loss is a "loss direction" signal —
+        # colour it with the price-down color; low probability is safe = up.
+        col = down_color if p > 0.10 else (T.WARNING if p > 0.02 else up_color)
         return html.Span(f"{p:.1%}", style={"color": col, "fontWeight": "700"})
 
     rows = [
