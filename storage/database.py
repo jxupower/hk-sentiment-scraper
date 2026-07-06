@@ -47,9 +47,11 @@ class Database:
                     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
                     ticker              TEXT NOT NULL,
                     sector              TEXT,
+                    market              TEXT NOT NULL DEFAULT 'HK',
                     avg_sentiment_24h   REAL,
                     avg_sentiment_7d    REAL,
                     article_count_24h   INTEGER,
+                    article_count_7d    INTEGER,
                     price_momentum_5d   REAL,
                     signal              TEXT,
                     confidence          REAL,
@@ -59,9 +61,11 @@ class Database:
                 CREATE TABLE IF NOT EXISTS sector_signals (
                     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
                     sector               TEXT NOT NULL,
+                    market               TEXT NOT NULL DEFAULT 'HK',
                     avg_sentiment_24h    REAL,
                     avg_sentiment_7d     REAL,
                     article_count_24h    INTEGER,
+                    article_count_7d     INTEGER,
                     avg_price_momentum   REAL,
                     direction            TEXT,
                     confidence           REAL,
@@ -357,6 +361,26 @@ class Database:
             ])
             self._add_columns_if_missing(conn, "historical_prices", [
                 ("market", "TEXT NOT NULL DEFAULT 'HK'"),
+            ])
+            # sector_signals + ticker_signals get a `market` column so HK/US
+            # scrapes don't overwrite each other's rows for shared sub-sectors
+            # (Semiconductors & Equipment, Banks, etc.). Existing rows are
+            # tagged 'HK' by the default — they get replaced by the next
+            # scrape cycle anyway (signals are refreshed every 30 min).
+            self._add_columns_if_missing(conn, "sector_signals", [
+                ("market", "TEXT NOT NULL DEFAULT 'HK'"),
+                # 7-day companion metrics: added to power the Sentiment tab
+                # card badge (24h alone is too tight — many sub-sectors get 0
+                # articles per day even when there are dozens per week). The
+                # card reads `article_count_7d`; direction/confidence stay
+                # driven by the fresh 24h aggregate so the signal is not stale.
+                ("article_count_7d", "INTEGER"),
+                # avg_sentiment_7d already existed in the schema but was
+                # always NULL — the job runner now fills it too.
+            ])
+            self._add_columns_if_missing(conn, "ticker_signals", [
+                ("market", "TEXT NOT NULL DEFAULT 'HK'"),
+                ("article_count_7d", "INTEGER"),
             ])
             # Backfill rows where the convention says US but the column was
             # filled with the 'HK' default during the ADD COLUMN. Safe to

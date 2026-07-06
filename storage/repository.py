@@ -179,29 +179,56 @@ class SignalRepository:
     def upsert_signal(self, ticker: str, sector: Optional[str],
                       avg_sentiment_24h: float, avg_sentiment_7d: float,
                       article_count_24h: int, price_momentum_5d: float,
-                      signal: str, confidence: float):
+                      signal: str, confidence: float,
+                      market: str = "HK",
+                      article_count_7d: Optional[int] = None):
         with self.db.get_connection() as conn:
             conn.execute("""
                 INSERT INTO ticker_signals
-                    (ticker, sector, avg_sentiment_24h, avg_sentiment_7d,
-                     article_count_24h, price_momentum_5d, signal, confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (ticker, sector, avg_sentiment_24h, avg_sentiment_7d,
-                  article_count_24h, price_momentum_5d, signal, confidence))
+                    (ticker, sector, market,
+                     avg_sentiment_24h, avg_sentiment_7d,
+                     article_count_24h, article_count_7d,
+                     price_momentum_5d, signal, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ticker, sector, market,
+                  avg_sentiment_24h, avg_sentiment_7d,
+                  article_count_24h, article_count_7d,
+                  price_momentum_5d, signal, confidence))
             conn.commit()
 
-    def get_latest_signals(self) -> list[dict]:
+    def get_latest_signals(self, market: Optional[str] = None) -> list[dict]:
+        """Latest ticker_signals row per (ticker, market). When `market`
+        is passed the result is scoped so the Sentiment tab shows only
+        rows produced by that market's scrape — since the same sub-sector
+        name (e.g. 'Banks') can hold aggregates for HK and US separately.
+        Pass `market=None` for legacy callers that want everything."""
         with self.db.get_connection() as conn:
-            rows = conn.execute("""
-                SELECT ts.*
-                FROM ticker_signals ts
-                INNER JOIN (
-                    SELECT ticker, MAX(computed_at) AS max_at
-                    FROM ticker_signals
-                    GROUP BY ticker
-                ) latest ON ts.ticker = latest.ticker AND ts.computed_at = latest.max_at
-                ORDER BY ts.ticker
-            """).fetchall()
+            if market:
+                rows = conn.execute("""
+                    SELECT ts.*
+                    FROM ticker_signals ts
+                    INNER JOIN (
+                        SELECT ticker, MAX(computed_at) AS max_at
+                        FROM ticker_signals
+                        WHERE market = ?
+                        GROUP BY ticker
+                    ) latest ON ts.ticker = latest.ticker
+                              AND ts.computed_at = latest.max_at
+                    WHERE ts.market = ?
+                    ORDER BY ts.ticker
+                """, (market, market)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT ts.*
+                    FROM ticker_signals ts
+                    INNER JOIN (
+                        SELECT ticker, MAX(computed_at) AS max_at
+                        FROM ticker_signals
+                        GROUP BY ticker
+                    ) latest ON ts.ticker = latest.ticker
+                              AND ts.computed_at = latest.max_at
+                    ORDER BY ts.ticker
+                """).fetchall()
             return [dict(r) for r in rows]
 
     def get_signal_history(self, ticker: str, days: int = 30) -> pd.DataFrame:
@@ -1175,29 +1202,55 @@ class SectorSignalRepository:
 
     def insert_signal(self, sector: str, avg_sentiment_24h: float, avg_sentiment_7d: float,
                       article_count_24h: int, avg_price_momentum: float,
-                      direction: str, confidence: float):
+                      direction: str, confidence: float,
+                      market: str = "HK",
+                      article_count_7d: Optional[int] = None):
         with self.db.get_connection() as conn:
             conn.execute("""
                 INSERT INTO sector_signals
-                    (sector, avg_sentiment_24h, avg_sentiment_7d,
-                     article_count_24h, avg_price_momentum, direction, confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (sector, avg_sentiment_24h, avg_sentiment_7d,
-                  article_count_24h, avg_price_momentum, direction, confidence))
+                    (sector, market,
+                     avg_sentiment_24h, avg_sentiment_7d,
+                     article_count_24h, article_count_7d,
+                     avg_price_momentum, direction, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (sector, market,
+                  avg_sentiment_24h, avg_sentiment_7d,
+                  article_count_24h, article_count_7d,
+                  avg_price_momentum, direction, confidence))
             conn.commit()
 
-    def get_latest_signals(self) -> list[dict]:
+    def get_latest_signals(self, market: Optional[str] = None) -> list[dict]:
+        """Latest sector_signals row per (sector, market). Same rationale
+        as `SignalRepository.get_latest_signals`: sub-sector names like
+        'Banks' hold separate aggregates per market, so the Sentiment tab
+        must scope by market. `market=None` returns everything."""
         with self.db.get_connection() as conn:
-            rows = conn.execute("""
-                SELECT ss.*
-                FROM sector_signals ss
-                INNER JOIN (
-                    SELECT sector, MAX(computed_at) AS max_at
-                    FROM sector_signals
-                    GROUP BY sector
-                ) latest ON ss.sector = latest.sector AND ss.computed_at = latest.max_at
-                ORDER BY ss.sector
-            """).fetchall()
+            if market:
+                rows = conn.execute("""
+                    SELECT ss.*
+                    FROM sector_signals ss
+                    INNER JOIN (
+                        SELECT sector, MAX(computed_at) AS max_at
+                        FROM sector_signals
+                        WHERE market = ?
+                        GROUP BY sector
+                    ) latest ON ss.sector = latest.sector
+                              AND ss.computed_at = latest.max_at
+                    WHERE ss.market = ?
+                    ORDER BY ss.sector
+                """, (market, market)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT ss.*
+                    FROM sector_signals ss
+                    INNER JOIN (
+                        SELECT sector, MAX(computed_at) AS max_at
+                        FROM sector_signals
+                        GROUP BY sector
+                    ) latest ON ss.sector = latest.sector
+                              AND ss.computed_at = latest.max_at
+                    ORDER BY ss.sector
+                """).fetchall()
             return [dict(r) for r in rows]
 
     def get_signal_history(self, sector: str, days: int = 30) -> pd.DataFrame:

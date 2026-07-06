@@ -270,8 +270,13 @@ class JobRunner:
             prices_repo, market_tickers, lookback_days=5, window_days=35)
 
         # -- Bulk read sentiment + article counts from the local DB. --
+        # Two windows: 24h drives direction/confidence (the "fresh signal");
+        # 7d powers the Sentiment tab card badge so sub-sectors with sparse
+        # daily coverage still show a meaningful article count.
         sentiment_by_ticker: dict[str, float | None] = {}
+        sentiment_by_ticker_7d: dict[str, float | None] = {}
         article_count_by_ticker: dict[str, int] = {}
+        article_count_by_ticker_7d: dict[str, int] = {}
         for ticker in market_tickers:
             scores_24h = self._sentiment_repo.get_scores_for_ticker(ticker, hours=24)
             if scores_24h:
@@ -283,6 +288,16 @@ class JobRunner:
             else:
                 sentiment_by_ticker[ticker] = None
                 article_count_by_ticker[ticker] = 0
+            scores_7d = self._sentiment_repo.get_scores_for_ticker(ticker, hours=168)
+            if scores_7d:
+                vals7 = [s.get("final_score") for s in scores_7d
+                            if s.get("final_score") is not None]
+                sentiment_by_ticker_7d[ticker] = (
+                    sum(vals7) / len(vals7) if vals7 else None)
+                article_count_by_ticker_7d[ticker] = len(scores_7d)
+            else:
+                sentiment_by_ticker_7d[ticker] = None
+                article_count_by_ticker_7d[ticker] = 0
 
         # -- Mcap lookup (used for weighting sub-sector aggregates). --
         # Pulled from the latest_prices cache + shares_outstanding from
@@ -338,14 +353,18 @@ class JobRunner:
                     vol = min(n_articles / 20.0, 1.0)
                     confidence = round((mag + vol) / 2.0, 2)
 
+                sent_7d = sentiment_by_ticker_7d.get(ticker)
+                n_articles_7d = article_count_by_ticker_7d.get(ticker, 0)
                 self._signal_repo.upsert_signal(
                     ticker=ticker,
                     sector=ticker_subsector.get(ticker) or "Unclassified",
                     avg_sentiment_24h=round(sent_24h, 4) if sent_24h is not None else None,
-                    avg_sentiment_7d=None,
+                    avg_sentiment_7d=round(sent_7d, 4) if sent_7d is not None else None,
                     article_count_24h=n_articles,
                     price_momentum_5d=round(mom_5d, 4) if mom_5d is not None else None,
                     signal=signal, confidence=confidence,
+                    market=market,
+                    article_count_7d=n_articles_7d,
                 )
             except Exception as e:
                 logger.error("Ticker signal failed [%s]: %s", ticker, e)
@@ -357,6 +376,8 @@ class JobRunner:
             article_count_by_ticker=article_count_by_ticker,
             momentum_by_ticker=momentum_by_ticker,
             mcap_by_ticker=mcap_by_ticker,
+            sentiment_by_ticker_7d=sentiment_by_ticker_7d,
+            article_count_by_ticker_7d=article_count_by_ticker_7d,
         )
         for row in sector_rows:
             try:
@@ -368,6 +389,8 @@ class JobRunner:
                     avg_price_momentum=row["avg_price_momentum"],
                     direction=row["direction"],
                     confidence=row["confidence"],
+                    market=market,
+                    article_count_7d=row.get("article_count_7d"),
                 )
                 logger.info(
                     "Sub-sector [%s]: %s (sentiment=%s, momentum=%s, articles=%d, confidence=%.2f)",

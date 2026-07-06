@@ -3,6 +3,7 @@ import os
 import re
 import yaml
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -354,6 +355,38 @@ def clean_hkex_name(name: str) -> str:
     return cleaned
 
 
+_UNIVERSE_ALIASES_PATH = os.path.join(os.path.dirname(__file__),
+                                          "universe_aliases.yaml")
+_UNIVERSE_ALIASES_CACHE: Optional[dict] = None
+
+
+def load_universe_aliases() -> dict:
+    """Load curated per-ticker aliases for universe (non-watchlist) tickers.
+
+    Returns `{"aliases": {ticker: [alias1, ...]}, "short_allow": [...]}`.
+    Missing file / parse error → empty structure (universe tickers just fall
+    back to their cleaned name as before). Cached process-wide."""
+    global _UNIVERSE_ALIASES_CACHE
+    if _UNIVERSE_ALIASES_CACHE is not None:
+        return _UNIVERSE_ALIASES_CACHE
+    empty = {"aliases": {}, "short_allow": []}
+    if not os.path.exists(_UNIVERSE_ALIASES_PATH):
+        _UNIVERSE_ALIASES_CACHE = empty
+        return empty
+    try:
+        with open(_UNIVERSE_ALIASES_PATH, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (yaml.YAMLError, OSError):
+        _UNIVERSE_ALIASES_CACHE = empty
+        return empty
+    _UNIVERSE_ALIASES_CACHE = {
+        "aliases": {str(k): list(v or []) for k, v in
+                     (data.get("aliases") or {}).items()},
+        "short_allow": [str(x) for x in (data.get("short_allow") or [])],
+    }
+    return _UNIVERSE_ALIASES_CACHE
+
+
 def build_search_terms_from_db(securities_rows: list[dict],
                                watchlist_only: bool = False,
                                market: str = "HK") -> dict[str, list[str]]:
@@ -361,12 +394,15 @@ def build_search_terms_from_db(securities_rows: list[dict],
 
     For watchlist tickers, terms = aliases_json + sector broad terms (sourced
     from the market-appropriate broad-terms dict).
-    For universe tickers, terms = [cleaned_name] (clean_hkex_name strips
-    HKEX suffixes; for US rows the name passes through unchanged).
+    For universe tickers, terms = [cleaned_name] + curated aliases from
+    `config/universe_aliases.yaml` (if any) — the aliases file lets us tag
+    an article naming "China TCM" to 570.HK without wiring the ticker into
+    the watchlist YAML.
     """
     market = (market or "HK").upper()
     broad_terms_map = (_SECTOR_BROAD_TERMS_US if market == "US"
                         else _SECTOR_BROAD_TERMS)
+    universe_aliases = load_universe_aliases().get("aliases", {})
     result: dict[str, list[str]] = {}
     for row in securities_rows:
         ticker = row["ticker"]
@@ -384,8 +420,13 @@ def build_search_terms_from_db(securities_rows: list[dict],
             # clean_hkex_name() is a no-op for US tickers (no .HK suffix /
             # share-class artefact to strip), so the same helper works for both.
             cleaned = clean_hkex_name(row["name"])
+            terms: list[str] = []
             if cleaned:
-                result[ticker] = [cleaned]
+                terms.append(cleaned)
+            # Splice in curated aliases (if any) for this universe ticker.
+            terms.extend(universe_aliases.get(ticker, []))
+            if terms:
+                result[ticker] = terms
     return result
 
 

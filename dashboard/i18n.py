@@ -333,6 +333,22 @@ EN: dict[str, str] = {
     "research.btn.save_notes":        "Save all notes",
     "research.btn.export_md":         "Export as Markdown",
 
+    # Additional Research strings (layout leaks)
+    "research.period.hint":           " — sections 4 & 5 below",
+    "research.section.relval_full":   "Relative valuation (vs sector + historical)",
+    "research.section.dcf_full":      "DCF calculator (2-stage Gordon growth)",
+    "research.header.strategy_notes": "Strategy notes (your own)",
+    "research.header.valuation_notes":"Valuation notes (your own)",
+    "research.stmt.show_advanced":    "Show every line item (advanced)",
+    "research.factor.drawer_title":   "Factor percentile — how it was computed",
+    "research.notes.strategy_ph":     "Notes on management quality, capital allocation, recent strategic moves, competitive positioning, etc.",
+    "research.notes.valuation_ph":    "Your valuation thesis: how you arrived at growth/WACC assumptions, alternative scenarios, etc.",
+    "research.notes.thesis_ph":       "2-3 sentence bottom-line thesis. What's the core reason to own or avoid this stock?",
+    "research.notes.swot_ph":         "(auto-populated; edit freely)",
+    "research.strategy.data_note":    "Note: yfinance/akshare don't provide capex, insider trading, or management compensation. Add manually based on filings.",
+    "research.constituents_hdr":      "Constituents",
+    "research.constituents_hdr.sub":  "— click a ticker to drill into the single-stock view",
+
     # ============================================================
     # Backtest tab
     # ============================================================
@@ -446,6 +462,63 @@ EN: dict[str, str] = {
     "portfolio.header.candidate":     "Candidate marginal value",
     "portfolio.header.trade_list":    "Rebalance trade list (to reach full-optimal)",
     "portfolio.header.diagnostics":   "Estimation diagnostics",
+
+    # Additional Portfolio strings (long/short toggle + compute button + verdicts)
+    "portfolio.long_short.label":     "Short positions allowed",
+    "portfolio.long_short.hint":      "When OFF: long-only, weights in [0, cap]. When ON: weights in [-cap, +cap], Σw=1 (shorts fund longs).",
+    "portfolio.btn.compute_full":     "Compute optimal portfolio",
+    "portfolio.header.holdings":      "Holdings",
+    "portfolio.per_asset_cap":        "Per-asset cap ",
+    "portfolio.verdict.valuable":     "✓ valuable add",
+    "portfolio.verdict.marginal":     "~ marginal",
+    "portfolio.verdict.negligible":   "✗ negligible",
+    "portfolio.col.candidate":        "Candidate",
+    "portfolio.col.dsharpe":          "Δ Sharpe (full - without)",
+    "portfolio.col.opt_weight":       "Optimal weight",
+    "portfolio.col.verdict":          "Verdict",
+    "portfolio.col.strategy":         "Strategy",
+    "portfolio.col.total_ret":        "Total ret",
+    "portfolio.col.ann_ret":          "Ann ret",
+    "portfolio.col.ann_vol":          "Ann vol",
+    "portfolio.col.sharpe":           "Sharpe",
+    "portfolio.col.maxdd":            "Max DD",
+    "portfolio.col.turnover":         "Turnover (/rebal)",
+    "portfolio.col.current_shares":   "Current shares",
+    "portfolio.col.target_shares":    "Target shares",
+    "portfolio.col.delta_shares":     "Δ shares",
+    "portfolio.col.delta_ccy":        "Δ {ccy}",
+    "portfolio.no_candidates":        "No candidates (all rows have shares > 0).",
+    "portfolio.no_holdings_trades":   "No current holdings — can't compute trade list.",
+    "portfolio.zero_value":           "Total portfolio value is zero — can't compute trade list.",
+
+    # ============================================================
+    # Charts (shared) — used by charts.py, portfolio_charts.py, risk_charts.py
+    # ============================================================
+    "chart.portfolio.weights_title":  "Weights — current vs. max-Sharpe optimal",
+    "chart.portfolio.weight_axis":    "Weight (%)",
+    "chart.portfolio.status_quo":     "Current (status quo)",
+    "chart.portfolio.optimal":        "Full-universe optimal",
+    "chart.portfolio.current_only":   "Current-only optimal",
+    "chart.portfolio.min_var":        "Min-variance",
+    "chart.portfolio.frontier_title": "Efficient frontier (annualised, Ledoit-Wolf shrunk Σ)",
+    "chart.portfolio.frontier_vol":   "Annualised volatility (%)",
+    "chart.portfolio.frontier_ret":   "Annualised expected return (%)",
+    "chart.portfolio.walkforward":    "Walk-forward backtest — cumulative return",
+    "chart.portfolio.cumret_axis":    "Cumulative return (%)",
+    "chart.portfolio.status_quo_wf":  "Status quo",
+    "chart.portfolio.optimal_wf":     "Full-universe optimal (walk-forward)",
+    "chart.no_data":                  "No data",
+    "chart.no_eps_history":           "No EPS history available",
+    "chart.run_scrape_first":         "No sector data yet. Run a scrape first.",
+    # Enum labels (direction + signal) — shared by badges, gauges, chart titles
+    "enum.direction.up":              "UP",
+    "enum.direction.down":            "DOWN",
+    "enum.direction.mixed":           "MIXED",
+    "enum.direction.neutral":         "NEUTRAL",
+    "enum.signal.buy":                "BUY",
+    "enum.signal.sell":               "SELL",
+    "enum.signal.hold":               "HOLD",
+    "enum.signal.watch":              "WATCH",
 
     # ============================================================
     # Risk Forecast tab
@@ -813,6 +886,21 @@ ZH: dict[str, str] = {
     "research.btn.save_notes":        "保存所有笔记",
     "research.btn.export_md":         "导出 Markdown",
 
+    "research.period.hint":           " — 下方第 4 & 5 节",
+    "research.section.relval_full":   "相对估值 (对比同业 + 历史)",
+    "research.section.dcf_full":      "DCF 计算器 (两阶段戈登增长模型)",
+    "research.header.strategy_notes": "战略笔记 (自填)",
+    "research.header.valuation_notes":"估值笔记 (自填)",
+    "research.stmt.show_advanced":    "显示所有科目 (高级)",
+    "research.factor.drawer_title":   "因子分位 — 计算逻辑",
+    "research.notes.strategy_ph":     "管理层质量、资本配置、近期战略动作、竞争定位等。",
+    "research.notes.valuation_ph":    "你的估值论点:增长/WACC 假设的依据、其他情境等。",
+    "research.notes.thesis_ph":       "2-3 句底线论点。持有或规避该股票的核心理由是什么?",
+    "research.notes.swot_ph":         "(自动填充;可自由编辑)",
+    "research.strategy.data_note":    "注:yfinance / akshare 不提供资本开支、内部人交易或管理层薪酬数据。请根据公告手动补充。",
+    "research.constituents_hdr":      "成分股",
+    "research.constituents_hdr.sub":  "— 点击代码查看单股视图",
+
     # ============================================================
     # Backtest tab
     # ============================================================
@@ -918,6 +1006,61 @@ ZH: dict[str, str] = {
     "portfolio.header.candidate":     "候选标的边际价值",
     "portfolio.header.trade_list":    "再平衡交易清单(达到全宇宙最优)",
     "portfolio.header.diagnostics":   "估计诊断",
+
+    "portfolio.long_short.label":     "允许卖空",
+    "portfolio.long_short.hint":      "关:仅做多,权重 [0, cap]。开:权重 [-cap, +cap],Σw=1(卖空为做多提供资金)。",
+    "portfolio.btn.compute_full":     "计算最优组合",
+    "portfolio.header.holdings":      "持仓",
+    "portfolio.per_asset_cap":        "单仓位上限 ",
+    "portfolio.verdict.valuable":     "✓ 值得加入",
+    "portfolio.verdict.marginal":     "~ 边际",
+    "portfolio.verdict.negligible":   "✗ 可忽略",
+    "portfolio.col.candidate":        "候选标的",
+    "portfolio.col.dsharpe":          "Δ 夏普 (加入 - 不加入)",
+    "portfolio.col.opt_weight":       "最优权重",
+    "portfolio.col.verdict":          "结论",
+    "portfolio.col.strategy":         "策略",
+    "portfolio.col.total_ret":        "总回报",
+    "portfolio.col.ann_ret":          "年化回报",
+    "portfolio.col.ann_vol":          "年化波动率",
+    "portfolio.col.sharpe":           "夏普",
+    "portfolio.col.maxdd":            "最大回撤",
+    "portfolio.col.turnover":         "换手率 (每次再平衡)",
+    "portfolio.col.current_shares":   "当前股数",
+    "portfolio.col.target_shares":    "目标股数",
+    "portfolio.col.delta_shares":     "Δ 股数",
+    "portfolio.col.delta_ccy":        "Δ {ccy}",
+    "portfolio.no_candidates":        "无候选标的(所有行 shares > 0)。",
+    "portfolio.no_holdings_trades":   "无当前持仓 — 无法计算交易清单。",
+    "portfolio.zero_value":           "投资组合总值为零 — 无法计算交易清单。",
+
+    # ============================================================
+    # Charts (shared) — used by charts.py, portfolio_charts.py, risk_charts.py
+    # ============================================================
+    "chart.portfolio.weights_title":  "权重 — 当前 vs. 最大夏普最优",
+    "chart.portfolio.weight_axis":    "权重 (%)",
+    "chart.portfolio.status_quo":     "当前 (现状)",
+    "chart.portfolio.optimal":        "全宇宙最优",
+    "chart.portfolio.current_only":   "仅当前持仓最优",
+    "chart.portfolio.min_var":        "最小方差",
+    "chart.portfolio.frontier_title": "有效前沿 (年化,Ledoit-Wolf 收缩 Σ)",
+    "chart.portfolio.frontier_vol":   "年化波动率 (%)",
+    "chart.portfolio.frontier_ret":   "年化预期回报 (%)",
+    "chart.portfolio.walkforward":    "滚动回测 — 累计回报",
+    "chart.portfolio.cumret_axis":    "累计回报 (%)",
+    "chart.portfolio.status_quo_wf":  "现状",
+    "chart.portfolio.optimal_wf":     "全宇宙最优 (滚动)",
+    "chart.no_data":                  "暂无数据",
+    "chart.no_eps_history":           "暂无 EPS 历史数据",
+    "chart.run_scrape_first":         "尚无行业数据。请先运行一次抓取。",
+    "enum.direction.up":              "上升",
+    "enum.direction.down":            "下降",
+    "enum.direction.mixed":           "混合",
+    "enum.direction.neutral":         "中性",
+    "enum.signal.buy":                "买入",
+    "enum.signal.sell":               "卖出",
+    "enum.signal.hold":               "持有",
+    "enum.signal.watch":              "观察",
 
     # ============================================================
     # Risk Forecast tab
@@ -1026,3 +1169,14 @@ def T(key: str, lang: str = "en", **fmt) -> str:
         # Bad format args shouldn't crash the dashboard — surface the raw
         # template plus a marker so QA notices.
         return f"{template} [bad-fmt]"
+
+
+def enum_label(kind: str, value: str, lang: str = "en") -> str:
+    """Translate a signal enum value.
+
+    kind is one of {'direction', 'signal'}; value is the uppercase enum
+    string (e.g. 'BUY', 'UP'). Falls back to the raw value on unknown keys.
+    """
+    if not value:
+        return ""
+    return T(f"enum.{kind}.{value.lower()}", lang)

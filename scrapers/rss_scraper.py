@@ -16,7 +16,10 @@ class RssScraper(BaseScraper):
     def fetch(self, search_terms: dict[str, list[str]]) -> list[RawArticle]:
         # Build the matcher once per fetch — compiling 3,000+ terms takes ~10ms
         # and per-article match becomes fast.
-        matcher = TickerMatcher(search_terms, self.watchlist_tickers)
+        from config.settings import load_universe_aliases
+        short_allow = set(load_universe_aliases().get("short_allow") or [])
+        matcher = TickerMatcher(search_terms, self.watchlist_tickers,
+                                     short_term_allowlist=short_allow)
         articles = []
         for feed_cfg in self.feed_configs:
             name = feed_cfg.get("name", feed_cfg["url"])

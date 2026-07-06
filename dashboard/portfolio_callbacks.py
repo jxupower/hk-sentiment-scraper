@@ -52,6 +52,8 @@ def register_portfolio_callbacks(app, db_path: str):
         Output("portfolio-diagnostics-header", "children"),
         Output("portfolio-alert-banner", "children"),
         Output("portfolio-holdings-table", "columns"),
+        Output("portfolio-allow-shorts", "label"),
+        Output("portfolio-allow-shorts-hint", "children"),
         Input("user-language", "data"),
         Input("user-market", "data"),
     )
@@ -101,7 +103,7 @@ def register_portfolio_callbacks(app, db_path: str):
             I("portfolio.btn.delete", lang),
             I("portfolio.ph.name", lang),
             I("portfolio.ph.saved", lang),
-            I("portfolio.holdings_table", lang),
+            I("portfolio.header.holdings", lang),
             (holdings_hint_zh if lang == "zh" else holdings_hint),
             I("portfolio.btn.add_row", lang),
             [html.I(className="me-1"), I("portfolio.btn.save_status_full", lang)],
@@ -111,9 +113,9 @@ def register_portfolio_callbacks(app, db_path: str):
             I("portfolio.params_title", lang),
             I("portfolio.label.lookback", lang),
             I("portfolio.label.rebal", lang),
-            I("portfolio.label.weight_cap", lang) + " ",
+            I("portfolio.per_asset_cap", lang),
             I("portfolio.label.rf", lang),
-            I("portfolio.btn.compute", lang),
+            I("portfolio.btn.compute_full", lang),
             I("portfolio.placeholder_text", lang),
             I("portfolio.hero.status_quo", lang),
             I("portfolio.hero.current_optimum", lang),
@@ -126,6 +128,8 @@ def register_portfolio_callbacks(app, db_path: str):
             I("portfolio.header.diagnostics", lang),
             alert_children,
             cols,
+            I("portfolio.long_short.label", lang),
+            I("portfolio.long_short.hint", lang),
         )
 
 
@@ -543,11 +547,13 @@ def register_portfolio_callbacks(app, db_path: str):
         State("portfolio-rf", "value"),
         State("portfolio-allow-shorts", "value"),
         State("user-color-convention", "data"),
+        Input("user-language", "data"),
         prevent_initial_call=True,
     )
     def compute_portfolio(_n, table_data, lookback, rebalance, cap_pct, rf_pct,
-                            allow_shorts, convention):
+                            allow_shorts, convention, lang):
         convention = convention or "cn_hk"
+        lang = lang or "en"
         if not table_data:
             return _error_state("Add holdings first.")
 
@@ -611,12 +617,13 @@ def register_portfolio_callbacks(app, db_path: str):
 
         # Charts
         weights_fig = weights_bar_chart(bundle.tickers, bundle.w_status_quo,
-                                          bundle.w_full_optimal)
+                                          bundle.w_full_optimal, lang=lang)
         frontier_fig = efficient_frontier_chart(bundle.frontier, bundle.mu_sigma,
                                                   bundle.m_status_quo,
                                                   bundle.m_current_optimal,
-                                                  bundle.m_full_optimal)
-        backtest_fig = backtest_equity_chart(bundle.backtest)
+                                                  bundle.m_full_optimal,
+                                                  lang=lang)
+        backtest_fig = backtest_equity_chart(bundle.backtest, lang=lang)
 
         # Currency for downstream display — sole HK ticker → HKD, sole
         # US ticker → USD (mixed-market portfolios are already rejected

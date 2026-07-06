@@ -44,7 +44,10 @@ class RedditScraper(BaseScraper):
             if terms:
                 company_names.append(terms[0])  # primary name
 
-        matcher = TickerMatcher(search_terms, set(search_terms.keys()))
+        from config.settings import load_universe_aliases
+        short_allow = set(load_universe_aliases().get("short_allow") or [])
+        matcher = TickerMatcher(search_terms, set(search_terms.keys()),
+                                     short_term_allowlist=short_allow)
         articles = []
         reddit = self._get_reddit()
         for sub_name in SUBREDDITS:

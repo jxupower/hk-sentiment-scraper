@@ -154,12 +154,15 @@ def build_stock_research_tab() -> html.Div:
                                              "fontStyle": "italic"})),
                         ], width=5),
                         dbc.Col([
-                            html.Div("Current price", className="stat-label"),
+                            html.Div("Current price", id="sr-label-current-price",
+                                      className="stat-label"),
                             html.Div(id="sr-header-price",
                                       style={"fontSize": "1.6rem", "fontWeight": "700",
                                              "color": T.PRIMARY, "lineHeight": "1.1"}),
                             html.Div([
-                                html.Span("Mkt cap: ", style={"color": T.TEXT_FAINT,
+                                html.Span("Mkt cap: ",
+                                          id="sr-label-mkt-cap",
+                                          style={"color": T.TEXT_FAINT,
                                                                 "fontSize": "0.75rem"}),
                                 html.Span(id="sr-header-mcap",
                                           style={"color": T.TEXT, "fontWeight": "600",
@@ -178,29 +181,37 @@ def build_stock_research_tab() -> html.Div:
             # get the inverse treatment.
             dbc.Card([
                 dbc.CardHeader([
-                    html.Span("Sub-sector composite", className="fw-bold me-2"),
+                    html.Span("Sub-sector composite",
+                              id="sr-composite-title",
+                              className="fw-bold me-2"),
                     html.Span(id="sr-composite-summary",
                                 className="text-muted small"),
                 ]),
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col(_stat_block("Constituents",
-                                              "sr-composite-stat-count"),
+                                              "sr-composite-stat-count",
+                                              label_id="sr-composite-stat-count-label"),
                                 width=2),
                         dbc.Col(_stat_block("Total mkt cap",
-                                              "sr-composite-stat-mcap"),
+                                              "sr-composite-stat-mcap",
+                                              label_id="sr-composite-stat-mcap-label"),
                                 width=2),
                         dbc.Col(_stat_block("Median P/E",
-                                              "sr-composite-stat-pe"),
+                                              "sr-composite-stat-pe",
+                                              label_id="sr-composite-stat-pe-label"),
                                 width=2),
                         dbc.Col(_stat_block("Median P/B",
-                                              "sr-composite-stat-pb"),
+                                              "sr-composite-stat-pb",
+                                              label_id="sr-composite-stat-pb-label"),
                                 width=2),
                         dbc.Col(_stat_block("Median ROE",
-                                              "sr-composite-stat-roe"),
+                                              "sr-composite-stat-roe",
+                                              label_id="sr-composite-stat-roe-label"),
                                 width=2),
                         dbc.Col(_stat_block("Median yield",
-                                              "sr-composite-stat-div"),
+                                              "sr-composite-stat-div",
+                                              label_id="sr-composite-stat-div-label"),
                                 width=2),
                     ], align="center"),
                 ], style={"padding": "12px 16px"}),
@@ -209,8 +220,11 @@ def build_stock_research_tab() -> html.Div:
 
             dbc.Card([
                 dbc.CardHeader([
-                    html.Span("Constituents", className="fw-bold me-2"),
+                    html.Span("Constituents",
+                              id="sr-constituents-title",
+                              className="fw-bold me-2"),
                     html.Span("— click a ticker to drill into the single-stock view",
+                                id="sr-constituents-subtitle",
                                 className="text-muted small"),
                 ]),
                 dbc.CardBody(
@@ -267,22 +281,30 @@ def build_stock_research_tab() -> html.Div:
             _section_card("2. Business Overview", "sr-section-business", [
                 # AI-generated description
                 dbc.Card([
-                    dbc.CardHeader("AI business summary", className="fw-bold small"),
+                    dbc.CardHeader("AI business summary",
+                                   id="sr-business-summary-title",
+                                   className="fw-bold small"),
                     dbc.CardBody(dcc.Loading(html.Div(id="sr-business-summary"),
                                              type="dot", color=T.PRIMARY)),
                 ], style=CARD_STYLE, className="mb-2"),
                 # SWOT 2x2
                 dbc.Row([
-                    dbc.Col(_swot_card("Strengths", "sr-swot-strengths", T.SUCCESS), width=6),
-                    dbc.Col(_swot_card("Weaknesses", "sr-swot-weaknesses", T.WARNING), width=6),
+                    dbc.Col(_swot_card("Strengths", "sr-swot-strengths", T.SUCCESS,
+                                       label_id="sr-swot-strengths-label"), width=6),
+                    dbc.Col(_swot_card("Weaknesses", "sr-swot-weaknesses", T.WARNING,
+                                       label_id="sr-swot-weaknesses-label"), width=6),
                 ], className="mb-2"),
                 dbc.Row([
-                    dbc.Col(_swot_card("Opportunities", "sr-swot-opportunities", T.INFO), width=6),
-                    dbc.Col(_swot_card("Threats", "sr-swot-threats", T.DANGER), width=6),
+                    dbc.Col(_swot_card("Opportunities", "sr-swot-opportunities", T.INFO,
+                                       label_id="sr-swot-opportunities-label"), width=6),
+                    dbc.Col(_swot_card("Threats", "sr-swot-threats", T.DANGER,
+                                       label_id="sr-swot-threats-label"), width=6),
                 ], className="mb-3"),
                 # Article feed
                 dbc.Card([
-                    dbc.CardHeader("Recent articles (30d)", className="fw-bold small"),
+                    dbc.CardHeader("Recent articles (30d)",
+                                   id="sr-articles-title",
+                                   className="fw-bold small"),
                     dbc.CardBody(html.Div(id="sr-article-feed",
                                           style={"maxHeight": "300px", "overflowY": "auto"})),
                 ], style=CARD_STYLE),
@@ -293,6 +315,7 @@ def build_stock_research_tab() -> html.Div:
                 dbc.Row([
                     dbc.Col([
                         html.H6("CAGR (compound annual growth rate)",
+                                id="sr-cagr-title",
                                 style={"color": T.TEXT, "fontWeight": "600",
                                        "fontSize": "0.9rem", "marginBottom": "8px"}),
                         html.Div(id="sr-cagr-table"),
@@ -308,12 +331,14 @@ def build_stock_research_tab() -> html.Div:
                 ], className="mb-3"),
                 dbc.Card([
                     dbc.CardHeader("Peer comparison (vs sector)",
+                                  id="sr-peer-title",
                                   className="fw-bold small"),
                     dbc.CardBody(dcc.Graph(id="sr-peer-heatmap",
                                            config={"displayModeBar": False}, figure={})),
                 ], style=CARD_STYLE, className="mb-2"),
                 dbc.Card([
                     dbc.CardHeader("Forensic red flags",
+                                  id="sr-forensic-title",
                                   className="fw-bold small text-warning"),
                     dbc.CardBody(html.Div(id="sr-forensic-flags")),
                 ], style=CARD_STYLE),
@@ -352,7 +377,8 @@ def build_stock_research_tab() -> html.Div:
                             # analyst table → math walkthrough), with the
                             # original full DataTable preserved under an
                             # "advanced" collapsible at the bottom.
-                            dbc.Tab(label="Income", tab_id="income", children=[
+                            dbc.Tab(label="Income", tab_id="income",
+                                    id="sr-fs-tab-income", children=[
                                 html.Div(id="sr-fs-income-kpis"),
                                 dcc.Graph(id="sr-fs-income-chart",
                                           config={"displayModeBar": False}, figure={}),
@@ -360,13 +386,15 @@ def build_stock_research_tab() -> html.Div:
                                 html.Div(id="sr-fs-income-math"),
                                 html.Details([
                                     html.Summary("Show every line item (advanced)",
+                                                  id="sr-fs-income-advanced-summary",
                                                   style={"color": T.PRIMARY, "cursor": "pointer",
                                                          "fontSize": "0.85rem", "fontWeight": "600",
                                                          "marginBottom": "8px"}),
                                     html.Div(id="sr-fs-income-table"),
                                 ], className="mt-3"),
                             ]),
-                            dbc.Tab(label="Balance Sheet", tab_id="balance", children=[
+                            dbc.Tab(label="Balance Sheet", tab_id="balance",
+                                    id="sr-fs-tab-balance", children=[
                                 html.Div(id="sr-fs-balance-kpis"),
                                 dcc.Graph(id="sr-fs-balance-chart",
                                           config={"displayModeBar": False}, figure={}),
@@ -374,13 +402,15 @@ def build_stock_research_tab() -> html.Div:
                                 html.Div(id="sr-fs-balance-math"),
                                 html.Details([
                                     html.Summary("Show every line item (advanced)",
+                                                  id="sr-fs-balance-advanced-summary",
                                                   style={"color": T.PRIMARY, "cursor": "pointer",
                                                          "fontSize": "0.85rem", "fontWeight": "600",
                                                          "marginBottom": "8px"}),
                                     html.Div(id="sr-fs-balance-table"),
                                 ], className="mt-3"),
                             ]),
-                            dbc.Tab(label="Cash Flow", tab_id="cashflow", children=[
+                            dbc.Tab(label="Cash Flow", tab_id="cashflow",
+                                    id="sr-fs-tab-cashflow", children=[
                                 html.Div(id="sr-fs-cashflow-kpis"),
                                 dcc.Graph(id="sr-fs-cashflow-chart",
                                           config={"displayModeBar": False}, figure={}),
@@ -388,13 +418,15 @@ def build_stock_research_tab() -> html.Div:
                                 html.Div(id="sr-fs-cashflow-math"),
                                 html.Details([
                                     html.Summary("Show every line item (advanced)",
+                                                  id="sr-fs-cashflow-advanced-summary",
                                                   style={"color": T.PRIMARY, "cursor": "pointer",
                                                          "fontSize": "0.85rem", "fontWeight": "600",
                                                          "marginBottom": "8px"}),
                                     html.Div(id="sr-fs-cashflow-table"),
                                 ], className="mt-3"),
                             ]),
-                            dbc.Tab(label="Earnings", tab_id="earnings", children=[
+                            dbc.Tab(label="Earnings", tab_id="earnings",
+                                    id="sr-fs-tab-earnings", children=[
                                 dcc.Graph(id="sr-fs-earnings-chart",
                                           config={"displayModeBar": False}, figure={}),
                                 html.Div(id="sr-fs-earnings-table", className="mt-2"),
@@ -472,12 +504,14 @@ def build_stock_research_tab() -> html.Div:
                     dbc.Row([
                         dbc.Col([
                             html.Span("Time period",
+                                       id="sr-label-period",
                                        style={"color": T.TEXT_MUTED,
                                               "fontSize": "0.75rem",
                                               "fontWeight": "600",
                                               "letterSpacing": "0.05em",
                                               "textTransform": "uppercase"}),
                             html.Span(" — sections 4 & 5 below",
+                                       id="sr-label-period-hint",
                                        style={"color": T.TEXT_FAINT,
                                               "fontSize": "0.75rem"}),
                         ], width="auto", className="d-flex flex-column justify-content-center"),
@@ -510,6 +544,7 @@ def build_stock_research_tab() -> html.Div:
                         dbc.Row([
                             dbc.Col([
                                 html.Span("Price history",
+                                           id="sr-price-history-title",
                                            className="fw-bold small me-2"),
                                 html.Span(id="sr-price-summary",
                                            style={"color": T.TEXT_MUTED,
@@ -547,7 +582,9 @@ def build_stock_research_tab() -> html.Div:
                     dbc.Col(html.Div(id="sr-strategy-stats"), width=6),
                 ], className="mb-3"),
                 dbc.Card([
-                    dbc.CardHeader("Strategy notes (your own)", className="fw-bold small"),
+                    dbc.CardHeader("Strategy notes (your own)",
+                                   id="sr-strategy-notes-title",
+                                   className="fw-bold small"),
                     dbc.CardBody([
                         dbc.Textarea(id="sr-strategy-notes",
                                      placeholder="Notes on management quality, "
@@ -556,6 +593,7 @@ def build_stock_research_tab() -> html.Div:
                                      style=TEXTAREA_STYLE),
                         html.P("Note: yfinance/akshare don't provide capex, insider trading, "
                                "or management compensation. Add manually based on filings.",
+                               id="sr-strategy-data-note",
                                className="text-muted small fst-italic mt-1"),
                     ]),
                 ], style=CARD_STYLE),
@@ -565,6 +603,7 @@ def build_stock_research_tab() -> html.Div:
             _section_card("5. Valuation", "sr-section-valuation", [
                 dbc.Card([
                     dbc.CardHeader("Relative valuation (vs sector + historical)",
+                                  id="sr-relval-title",
                                   className="fw-bold small"),
                     dbc.CardBody([
                         dbc.Row([
@@ -579,11 +618,13 @@ def build_stock_research_tab() -> html.Div:
                 ], style=CARD_STYLE, className="mb-3"),
                 dbc.Card([
                     dbc.CardHeader("DCF calculator (2-stage Gordon growth)",
+                                  id="sr-dcf-title",
                                   className="fw-bold small"),
                     dbc.CardBody([
                         dbc.Row([
                             dbc.Col([
                                 html.Label("Growth Y1-5 (%)",
+                                           id="sr-dcf-label-g15",
                                            className="text-muted small mb-1"),
                                 dcc.Slider(id="sr-dcf-g15", min=-10, max=30, step=1, value=10,
                                            marks={-10: "-10", 0: "0", 15: "15", 30: "30"},
@@ -597,6 +638,7 @@ def build_stock_research_tab() -> html.Div:
                             ], width=3),
                             dbc.Col([
                                 html.Label("Growth Y6-10 (%)",
+                                           id="sr-dcf-label-g610",
                                            className="text-muted small mb-1"),
                                 dcc.Slider(id="sr-dcf-g610", min=0, max=15, step=1, value=5,
                                            marks={0: "0", 5: "5", 10: "10", 15: "15"},
@@ -604,6 +646,7 @@ def build_stock_research_tab() -> html.Div:
                             ], width=3),
                             dbc.Col([
                                 html.Label("Terminal growth (%)",
+                                           id="sr-dcf-label-tg",
                                            className="text-muted small mb-1"),
                                 dcc.Slider(id="sr-dcf-tg", min=0, max=4, step=0.25, value=2.5,
                                            marks={0: "0", 2: "2", 4: "4"},
@@ -611,6 +654,7 @@ def build_stock_research_tab() -> html.Div:
                             ], width=3),
                             dbc.Col([
                                 html.Label("WACC / discount rate (%)",
+                                           id="sr-dcf-label-wacc",
                                            className="text-muted small mb-1"),
                                 dcc.Slider(id="sr-dcf-wacc", min=5, max=15, step=0.5, value=9,
                                            marks={5: "5", 9: "9", 15: "15"},
@@ -626,6 +670,7 @@ def build_stock_research_tab() -> html.Div:
                             dbc.CardHeader(
                                 "DCF walkthrough — every step from your "
                                 "growth rates to the margin of safety",
+                                id="sr-dcf-walkthrough-title",
                                 className="fw-bold small"),
                             dbc.CardBody(
                                 dcc.Loading(
@@ -641,7 +686,9 @@ def build_stock_research_tab() -> html.Div:
                     ]),
                 ], style=CARD_STYLE, className="mb-3"),
                 dbc.Card([
-                    dbc.CardHeader("Valuation notes (your own)", className="fw-bold small"),
+                    dbc.CardHeader("Valuation notes (your own)",
+                                   id="sr-valuation-notes-title",
+                                   className="fw-bold small"),
                     dbc.CardBody([
                         dbc.Textarea(id="sr-valuation-notes",
                                      placeholder="Your valuation thesis: how you arrived at "
@@ -654,7 +701,9 @@ def build_stock_research_tab() -> html.Div:
             # Section 6 — Notes & Review
             _section_card("6. Notes & Review", "sr-section-review", [
                 dbc.Card([
-                    dbc.CardHeader("Investment thesis", className="fw-bold small"),
+                    dbc.CardHeader("Investment thesis",
+                                   id="sr-thesis-title",
+                                   className="fw-bold small"),
                     dbc.CardBody([
                         dbc.Textarea(id="sr-thesis",
                                      placeholder="2-3 sentence bottom-line thesis. "
@@ -664,7 +713,9 @@ def build_stock_research_tab() -> html.Div:
                 ], style=CARD_STYLE, className="mb-2"),
                 dbc.Card([
                     dbc.CardHeader([
-                        html.Span("Devil's-advocate AI", className="fw-bold small me-2"),
+                        html.Span("Devil's-advocate AI",
+                                  id="sr-devil-title",
+                                  className="fw-bold small me-2"),
                         dbc.Button("Generate counter-arguments", id="sr-devil-btn",
                                    color="warning", size="sm"),
                     ]),
@@ -696,11 +747,12 @@ def build_stock_research_tab() -> html.Div:
     ])
 
 
-def _stat_block(label: str, value_id: str) -> html.Div:
+def _stat_block(label: str, value_id: str,
+                label_id: str | None = None) -> html.Div:
     """Hero number with small uppercase label above — used by the
     sub-sector composite aggregate-stats card."""
     return html.Div([
-        html.Div(label, className="stat-label"),
+        html.Div(label, className="stat-label", id=label_id),
         html.Div(id=value_id, className="hero-number",
                   style={"fontSize": "1.3rem"}),
     ])
@@ -716,9 +768,11 @@ def _section_card(title: str, section_id: str, body_components: list) -> dbc.Car
     ], id=section_id, style=CARD_STYLE, className="mb-3")
 
 
-def _swot_card(label: str, ta_id: str, color: str) -> dbc.Card:
+def _swot_card(label: str, ta_id: str, color: str,
+               label_id: str | None = None) -> dbc.Card:
     return dbc.Card([
         dbc.CardHeader(label, className="fw-bold small",
+                       id=label_id,
                        style={"color": color, "borderBottom": f"1px solid {color}"}),
         dbc.CardBody([
             dbc.Textarea(id=ta_id, placeholder="(auto-populated; edit freely)",

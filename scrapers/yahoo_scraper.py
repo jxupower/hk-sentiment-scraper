@@ -16,7 +16,10 @@ class YahooScraper(BaseScraper):
         Per Phase 3, this is called with watchlist-only terms — Yahoo per-ticker news
         does not scale to the full HKEX universe.
         """
-        matcher = TickerMatcher(search_terms, set(search_terms.keys()))
+        from config.settings import load_universe_aliases
+        short_allow = set(load_universe_aliases().get("short_allow") or [])
+        matcher = TickerMatcher(search_terms, set(search_terms.keys()),
+                                     short_term_allowlist=short_allow)
         articles = []
         for ticker in list(search_terms.keys()):
             try:

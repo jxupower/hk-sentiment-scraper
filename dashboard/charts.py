@@ -87,7 +87,10 @@ def sector_direction_cards(sector_signals: list[dict],
         confidence = s.get("confidence") or 0
         sent = s.get("avg_sentiment_24h") or 0
         momentum = s.get("avg_price_momentum") or 0
-        articles = s.get("article_count_24h") or 0
+        # 7d count powers the badge — 24h is too tight; many sub-sectors get
+        # 0 articles per day even when there are dozens per week. Falls back
+        # to 24h for rows written before the schema migration.
+        articles = s.get("article_count_7d") or s.get("article_count_24h") or 0
 
         cards.append(dbc.Col(
             html.Div([
@@ -141,7 +144,7 @@ def sector_direction_cards(sector_signals: list[dict],
                                 }),
                             ], style={"flex": "1"}),
                             html.Div([
-                                html.Div("Articles 24h",
+                                html.Div("Articles 7d",
                                           style={"color": T.TEXT_FAINT, "fontSize": "0.7rem",
                                                  "textTransform": "uppercase",
                                                  "letterSpacing": "0.05em"}),

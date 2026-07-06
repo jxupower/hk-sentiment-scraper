@@ -101,14 +101,24 @@ def aggregate_subsector_signals(
     article_count_by_ticker: dict[str, int],
     momentum_by_ticker: dict[str, Optional[float]],
     mcap_by_ticker: dict[str, Optional[float]],
+    sentiment_by_ticker_7d: Optional[dict[str, Optional[float]]] = None,
+    article_count_by_ticker_7d: Optional[dict[str, int]] = None,
 ) -> list[dict]:
     """Compute one row per sub-sector: mcap-weighted sentiment + momentum,
     article count sum, plus a derived direction / confidence pair so the
     existing `SectorSignalRepository.upsert_signal` shape is honoured.
 
-    Returns `[{sector, avg_sentiment_24h, article_count_24h,
-    avg_price_momentum, direction, confidence}, ...]`.
+    24h inputs drive direction/confidence (the "fresh signal"); optional
+    7d inputs are rolled up in parallel and returned alongside so the
+    Sentiment tab card can show a wider article-count window without
+    diluting the freshness of the direction badge.
+
+    Returns `[{sector, avg_sentiment_24h, avg_sentiment_7d,
+    article_count_24h, article_count_7d, avg_price_momentum, direction,
+    confidence}, ...]`.
     """
+    sentiment_by_ticker_7d = sentiment_by_ticker_7d or {}
+    article_count_by_ticker_7d = article_count_by_ticker_7d or {}
     out: list[dict] = []
     for sub, tickers in subsector_to_tickers.items():
         if not tickers:
@@ -117,11 +127,17 @@ def aggregate_subsector_signals(
             {t: sentiment_by_ticker.get(t) for t in tickers},
             mcap_by_ticker,
         )
+        sent_avg_7d = _mcap_weighted_avg(
+            {t: sentiment_by_ticker_7d.get(t) for t in tickers},
+            mcap_by_ticker,
+        ) if sentiment_by_ticker_7d else None
         mom_avg = _mcap_weighted_avg(
             {t: momentum_by_ticker.get(t) for t in tickers},
             mcap_by_ticker,
         )
         article_sum = sum(article_count_by_ticker.get(t, 0) for t in tickers)
+        article_sum_7d = sum(article_count_by_ticker_7d.get(t, 0)
+                                 for t in tickers)
 
         # Direction + confidence mimic analysis/signals.py:compute_sector_signal
         # so dashboard rendering stays unchanged. Threshold values match.
@@ -143,8 +159,9 @@ def aggregate_subsector_signals(
         out.append({
             "sector":             sub,
             "avg_sentiment_24h":  round(sent_avg, 4) if sent_avg is not None else None,
-            "avg_sentiment_7d":   None,  # 7d not yet computed (caller passes 24h only)
+            "avg_sentiment_7d":   round(sent_avg_7d, 4) if sent_avg_7d is not None else None,
             "article_count_24h":  article_sum,
+            "article_count_7d":   article_sum_7d,
             "avg_price_momentum": round(mom_avg, 4) if mom_avg is not None else None,
             "direction":          direction,
             "confidence":         confidence,

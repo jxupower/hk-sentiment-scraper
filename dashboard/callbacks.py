@@ -292,19 +292,6 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
     def update_timestamp(*_):
         return datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-    def _market_subsector_set(market: str) -> set[str]:
-        """Sub-sectors with at least one active ticker in the given market.
-        Used to filter `sector_signals` (which has no market column of its
-        own; we infer membership through the underlying securities)."""
-        with db.get_connection() as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT sub_sector FROM securities "
-                "WHERE is_active = 1 AND market = ? "
-                "AND sub_sector IS NOT NULL AND sub_sector != ''",
-                (market,),
-            ).fetchall()
-            return {r[0] for r in rows}
-
     @app.callback(Output("sector-cards", "children"),
                   Input("auto-refresh", "n_intervals"),
                   Input("refresh-btn", "n_clicks"),
@@ -312,9 +299,7 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
                   Input("user-color-convention", "data"))
     def update_sector_cards(_n, _c, market, convention):
         market = (market or "HK").upper()
-        signals = sector_signal_repo.get_latest_signals()
-        in_market = _market_subsector_set(market)
-        signals = [s for s in signals if s.get("sector") in in_market]
+        signals = sector_signal_repo.get_latest_signals(market=market)
         return sector_direction_cards(signals, convention=convention or "cn_hk")
 
     @app.callback(Output("sector-heatmap-container", "children"),
@@ -324,9 +309,7 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
                   Input("user-color-convention", "data"))
     def update_sector_heatmap(_n, _c, market, convention):
         market = (market or "HK").upper()
-        signals = sector_signal_repo.get_latest_signals()
-        in_market = _market_subsector_set(market)
-        signals = [s for s in signals if s.get("sector") in in_market]
+        signals = sector_signal_repo.get_latest_signals(market=market)
         fig = sector_heatmap(signals, convention=convention or "cn_hk")
         return dbc.Card([
             dbc.CardHeader("Heatmap", className="fw-bold small"),
@@ -399,10 +382,14 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         tickers = settings.get_tickers_for_subsector(
             sector, watchlist, securities_repo, market=market,
         )
-        scores_24h = sentiment_repo.get_scores_for_sector(tickers, hours=24)
+        # Article feed / source pie widen to 7d to match the card badge —
+        # 24h leaves the panel blank for most sub-sectors even when there
+        # are dozens of articles in the last week. Sentiment gauge / AI
+        # analysis / direction still read from the fresh signal below.
+        scores_24h = sentiment_repo.get_scores_for_sector(tickers, hours=168)
         sentiment_ts = sentiment_repo.get_sector_timeseries(tickers, hours=168)
 
-        sector_signals = sector_signal_repo.get_latest_signals()
+        sector_signals = sector_signal_repo.get_latest_signals(market=market)
         sig = next((s for s in sector_signals if s["sector"] == sector), None)
         direction = sig["direction"] if sig else "NEUTRAL"
         confidence = sig["confidence"] if sig else 0.0
@@ -410,7 +397,7 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         momentum = sig["avg_price_momentum"] if sig else 0.0
         computed_at = sig["computed_at"] if sig else None
 
-        ticker_signals = signal_repo.get_latest_signals()
+        ticker_signals = signal_repo.get_latest_signals(market=market)
         sector_ticker_sigs = [s for s in ticker_signals if s.get("sector") == sector]
 
         gauge = direction_gauge(direction, confidence, avg_sent or 0,

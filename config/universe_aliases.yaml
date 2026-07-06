@@ -1,0 +1,102 @@
+# Curated per-ticker aliases for UNIVERSE-tier tickers (i.e. tickers outside
+# the watchlist that still deserve richer matching than "cleaned HKEX name").
+#
+# Entries listed under `short_allow` are also permitted to bypass the
+# matcher's default MIN_TERM_LENGTH=4 filter. Use sparingly — anything under
+# 4 chars must be a proper ticker/abbreviation with well-bounded
+# false-positive risk (e.g. "GS" for Goldman Sachs, "AMD" for Advanced
+# Micro Devices). "IT" or "CO" would be terrible additions.
+#
+# Grow organically: when a sub-sector still shows 0 articles after the feed
+# expansion, look at whether its top mcap constituents have common press
+# nicknames and add them here.
+
+aliases:
+  # ---- HK biotech / pharma ---------------------------------------------
+  "0570.HK": ["China TCM", "China Traditional Chinese Medicine"]
+  "1093.HK": ["CSPC", "CSPC Pharmaceutical"]
+  "2269.HK": ["WuXi Biologics"]
+  "2359.HK": ["WuXi AppTec"]
+  "1801.HK": ["Innovent Biologics"]
+  "6160.HK": ["BeiGene"]
+  "1177.HK": ["Sino Biopharm"]
+
+  # ---- HK consumer / F&B / retail --------------------------------------
+  "6862.HK": ["Haidilao"]
+  "9868.HK": ["XPeng"]
+  "2020.HK": ["Anta Sports"]
+  "2331.HK": ["Li Ning"]
+  "1929.HK": ["Chow Tai Fook"]
+
+  # ---- HK utilities / infrastructure -----------------------------------
+  "0002.HK": ["CLP", "CLP Holdings"]
+  "0006.HK": ["Power Assets", "HK Electric"]
+  "0003.HK": ["Towngas", "Hong Kong and China Gas"]
+
+  # ---- HK industrials --------------------------------------------------
+  "0669.HK": ["Techtronic", "TTI"]
+  "0388.HK": ["HKEX", "Hong Kong Exchanges"]
+
+  # ---- US software / cloud / AI ----------------------------------------
+  "CRM": ["Salesforce"]
+  "NOW": ["ServiceNow"]
+  "SNOW": ["Snowflake"]
+  "PANW": ["Palo Alto Networks"]
+  "DDOG": ["Datadog"]
+  "MDB": ["MongoDB"]
+
+  # ---- US financials ---------------------------------------------------
+  "GS": ["Goldman"]
+  "MS": ["Morgan Stanley"]
+  "AXP": ["Amex", "American Express"]
+  "COF": ["Capital One"]
+  "PGR": ["Progressive"]
+  "TRV": ["Travelers"]
+  "MET": ["MetLife"]
+  "ALL": ["Allstate"]
+
+  # ---- US healthcare / biotech -----------------------------------------
+  "GILD": ["Gilead"]
+  "VRTX": ["Vertex Pharmaceuticals"]
+  "BIIB": ["Biogen"]
+  "AMGN": ["Amgen"]
+  "ISRG": ["Intuitive Surgical"]
+  "SYK": ["Stryker"]
+  "MDT": ["Medtronic"]
+
+  # ---- US industrials / defense / auto ---------------------------------
+  "F": ["Ford Motor"]
+  "GM": ["General Motors"]
+  "CAT": ["Caterpillar"]
+  "DE": ["John Deere"]
+  "GE": ["General Electric"]
+
+  # ---- US energy / utilities -------------------------------------------
+  "OXY": ["Occidental Petroleum"]
+  "COP": ["ConocoPhillips"]
+  "SLB": ["Schlumberger"]
+  "NEE": ["NextEra"]
+  "SO": ["Southern Company"]
+  "DUK": ["Duke Energy"]
+
+  # ---- US REITs --------------------------------------------------------
+  "AMT": ["American Tower"]
+  "PLD": ["Prologis"]
+  "SPG": ["Simon Property"]
+  "PSA": ["Public Storage"]
+
+# Aliases in this set are permitted to be under 4 characters. Case-insensitive.
+# The matcher rejects any term shorter than MIN_TERM_LENGTH unless it appears
+# here. Keep this tight — every entry is a potential noise source.
+#
+# Deliberately EMPTY for now. Every 2-3 char English-word ticker (GS, MS,
+# F, GM, SO, NOW, ALL, MET, DE, GE, CAT, AI, AMT, COP, OXY) creates massive
+# false-positive tagging on unrelated articles. The safer path is:
+#   1. The watchlist YAML already covers GS ("Goldman"), MS ("Morgan
+#      Stanley"), F ("Ford Motor"), GM ("Chevrolet") etc via full-name
+#      aliases, so short-form tagging is redundant.
+#   2. The 4+ char aliases above (WuXi Biologics, ServiceNow, Palo Alto
+#      Networks, etc.) already give us most of the coverage gain.
+# Add entries here only after confirming the short form has no common
+# false-positive collision (spot-check article samples first).
+short_allow: []

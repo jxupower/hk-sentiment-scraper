@@ -22,3 +22,16 @@ feeds:
     url: https://news.google.com/rss/search?q=%22Stock+Connect%22+OR+%22Northbound%22+OR+%22Southbound%22&hl=en-US&gl=US&ceid=US:en
   - name: Google News - China sectors broad
     url: https://news.google.com/rss/search?q=%22China+tech%22+OR+%22China+bank%22+OR+%22China+property%22+OR+%22China+consumer%22&hl=en-US&gl=US&ceid=US:en
+
+  # Cluster feeds — each targets a specific under-covered HK sub-sector so
+  # the Sentiment tab isn't blank for utilities / property mgmt / consumer
+  # / healthcare. Broad OR-queries; the TickerMatcher still decides which
+  # constituent gets tagged per article.
+  - name: Google News - HK utilities
+    url: https://news.google.com/rss/search?q=%22CLP+Holdings%22+OR+%22HK+Electric%22+OR+%22Towngas%22+OR+%22power+tariff%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - HK property management
+    url: https://news.google.com/rss/search?q=%22property+management%22+OR+%22residential+services%22+%22Hong+Kong%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - HK consumer retail
+    url: https://news.google.com/rss/search?q=%22HK+retailer%22+OR+%22packaged+food%22+OR+%22apparel+manufacturer%22+%22Hong+Kong%22&hl=en-US&gl=US&ceid=US:en
+  - name: Google News - HK healthcare TCM
+    url: https://news.google.com/rss/search?q=%22traditional+Chinese+medicine%22+OR+%22TCM%22+OR+%22biotech%22+%22Hong+Kong%22&hl=en-US&gl=US&ceid=US:en

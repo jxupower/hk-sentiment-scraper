@@ -19,8 +19,16 @@ class TickerMatcher:
     """
 
     def __init__(self, search_terms: dict[str, list[str]],
-                 watchlist_tickers: Optional[set[str]] = None):
+                 watchlist_tickers: Optional[set[str]] = None,
+                 short_term_allowlist: Optional[set[str]] = None):
+        """
+        `short_term_allowlist` — case-insensitive set of aliases that bypass
+        the MIN_TERM_LENGTH filter (e.g. {"GS", "MS", "AMD", "JD"} — proper
+        3-char ticker aliases where the false-positive risk is well-bounded).
+        Managed via config/universe_aliases.yaml.
+        """
         self.watchlist_tickers = watchlist_tickers or set()
+        allow_short = {t.lower() for t in (short_term_allowlist or set())}
 
         # Term → set of tickers that claim this term. One term may belong to multiple tickers
         # (rare, but happens with generic broad terms like "China bank").
@@ -30,7 +38,7 @@ class TickerMatcher:
                 if not term:
                     continue
                 clean = term.strip()
-                if len(clean) < MIN_TERM_LENGTH:
+                if len(clean) < MIN_TERM_LENGTH and clean.lower() not in allow_short:
                     continue
                 term_to_tickers.setdefault(clean.lower(), set()).add(ticker)
 
