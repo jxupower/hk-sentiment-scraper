@@ -85,4 +85,10 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
         > /dev/null || exit 1
 
 ENTRYPOINT ["tini", "--"]
-CMD ["python", "main.py", "dashboard", "--port", "8050"]
+# --host 0.0.0.0 is safe INSIDE the container — the container itself is the
+# isolation boundary. External exposure is controlled by the docker port
+# mapping (see docker-compose.yml, which binds host loopback), which in
+# production sits behind Cloudflare Tunnel + Access (docs/deploy.md).
+# main.py refuses --debug on non-loopback binds so an accidental debug flag
+# here won't hand out a Werkzeug REPL.
+CMD ["python", "main.py", "dashboard", "--host", "0.0.0.0", "--port", "8050"]

@@ -59,20 +59,39 @@ def create_app(db_path: str, settings) -> dash.Dash:
     # the email, audit logging) can read it without re-parsing headers
     # at every call site.
     #
-    # In local dev / CI the header is absent; `flask.g.user_email` stays
-    # None and the app behaves as today (single-tenant). No auth is
-    # enforced here — the gating happens at the Cloudflare edge before
-    # the request ever reaches this process.
+    # SECURITY: `Cf-Access-Authenticated-User-Email` is only non-spoofable
+    # when the request actually came through the Cloudflare edge. Any
+    # client can set it if they can reach the dashboard directly. The
+    # `TRUST_CF_ACCESS_HEADER=true` env var is the deployment operator's
+    # promise that upstream Cloudflare Access is enforced — set it in
+    # production, leave it unset in local dev. Without it, the header is
+    # ignored (`g.user_email` stays None) so any future authz code built
+    # on `g.user_email` fails closed rather than trusting a spoofed value.
+    #
+    # For a fully authenticated design (JWT signature verified against
+    # Cloudflare's JWKS) see `Cf-Access-Jwt-Assertion` — required before
+    # this header is used for any per-user authorization decision, not
+    # just logging.
     #
     # Logged at INFO once per unique email so we have a record of who
     # used the dashboard without spamming on every callback fire.
     import logging
+    import os
     from flask import g, request
+    _trust_cf_header = os.getenv("TRUST_CF_ACCESS_HEADER", "").lower() == "true"
     _seen_emails: set[str] = set()
     _auth_logger = logging.getLogger("dashboard.auth")
+    if not _trust_cf_header:
+        _auth_logger.info(
+            "TRUST_CF_ACCESS_HEADER not set — Cf-Access-Authenticated-User-Email "
+            "will be ignored (safe default for local dev / direct exposure)."
+        )
 
     @app.server.before_request
     def _capture_cf_access_email():
+        if not _trust_cf_header:
+            g.user_email = None
+            return
         email = request.headers.get("Cf-Access-Authenticated-User-Email")
         g.user_email = email
         if email and email not in _seen_emails:

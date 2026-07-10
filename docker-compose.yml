@@ -20,8 +20,11 @@ services:
     # Bind to host loopback only — prevents accidentally exposing the
     # dashboard to a LAN before CF Tunnel + Access are in front of it in
     # production. For purely-local dev, http://localhost:8050 still works.
+    # The `127.0.0.1:` prefix is REQUIRED — a bare `8050:8050` binds
+    # 0.0.0.0 on the host (docker's default), silently defeating the
+    # loopback intent above.
     ports:
-      - "8050:8050"
+      - "127.0.0.1:8050:8050"
     # Secrets live in .env at the repo root (never committed — see
     # .gitignore + .dockerignore). The example template is .env.example.
     env_file:

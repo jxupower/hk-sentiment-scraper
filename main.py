@@ -187,14 +187,38 @@ def scrape(once: bool, market: str):
 
 @cli.command()
 @click.option("--port", default=8050, show_default=True, help="Port for the dashboard.")
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help=("Interface to bind. Loopback by default so a laptop on a "
+                    "coffee-shop / office LAN doesn't expose the dashboard. "
+                    "Production behind Cloudflare Access passes --host 0.0.0.0."))
 @click.option("--debug", is_flag=True, default=False, help="Enable Dash debug mode.")
-def dashboard(port: int, debug: bool):
-    """Launch the web dashboard with background scraping at http://localhost:<port>."""
+def dashboard(port: int, host: str, debug: bool):
+    """Launch the web dashboard with background scraping at http://<host>:<port>.
+
+    The Werkzeug debugger enabled by --debug is a full RCE vector for anyone
+    who can reach the port (PIN-protected but derivable from local identifiers).
+    We refuse --debug on any non-loopback bind so an accidental
+    `--debug --host 0.0.0.0` on the wrong network doesn't hand out a Python
+    REPL to the LAN.
+    """
+    _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+    if debug and host not in _LOOPBACK:
+        raise click.BadParameter(
+            f"--debug is only allowed with --host 127.0.0.1 (got --host {host}). "
+            "The Werkzeug debugger exposes RCE to anyone who can reach this port.",
+            param_hint="--debug",
+        )
+
     components = _build_components()
     runner = components["runner"]
     runner.start()
 
-    console.print(f"[bold cyan]Dashboard starting at http://localhost:{port}[/bold cyan]")
+    display_host = "localhost" if host in _LOOPBACK else host
+    console.print(f"[bold cyan]Dashboard starting at http://{display_host}:{port}[/bold cyan]")
+    if host not in _LOOPBACK:
+        console.print(f"[yellow]Binding {host}:{port} — reachable from other hosts. "
+                      "Ensure an upstream auth layer (Cloudflare Access / VPN / "
+                      "firewall) is enforced before exposing publicly.[/yellow]")
     console.print("[dim]Press Ctrl+C to stop.[/dim]")
 
     try:
@@ -261,7 +285,7 @@ def dashboard(port: int, debug: bool):
             threading.Thread(target=_warm, args=("HK",), daemon=True).start()
             threading.Thread(target=_warm, args=("US",), daemon=True).start()
 
-        app.run(host="0.0.0.0", port=port, debug=debug)
+        app.run(host=host, port=port, debug=debug)
     except KeyboardInterrupt:
         runner.stop()
         console.print("\n[yellow]Dashboard stopped.[/yellow]")

@@ -77,14 +77,24 @@ Paste:
 
 ```
 USE_CLOUD_DB=true
-SUPABASE_DB_URL=postgresql://postgres.<project>:<password>@<pooler>.supabase.com:6543/postgres
+# Use the app_backend role, not `postgres` — see
+# docs/supabase_rls_migration.md. `postgres` is superuser + bypasses RLS.
+SUPABASE_DB_URL=postgresql://app_backend.<project>:<password>@<pooler>.supabase.com:5432/postgres
 CLAUDE_API_KEY=sk-ant-...
 REDDIT_CLIENT_ID=...
 REDDIT_CLIENT_SECRET=...
 REDDIT_USER_AGENT=SentimentScraper/1.0 (production)
+
+# Trust the Cf-Access header — only safe with the Cloudflare Access
+# application configured in Step 3 below (upstream verification enforced).
+# Leave it unset on any deployment that isn't behind CF Access.
+TRUST_CF_ACCESS_HEADER=true
 ```
 
-`chmod 600` the file. Never commit this to git.
+`chmod 600` the file. Never commit this to git. If you suspect a leak
+(pasted in chat, printed to a shared terminal, staged accidentally), rotate
+the affected credential in the upstream console before doing anything else —
+the file's presence on disk is the audit trail, not the fix.
 
 ---
 
