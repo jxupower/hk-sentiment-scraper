@@ -17,5 +17,9 @@ data/
 .vscode/
 .idea/
 
-# Claude internals
-.claude/
+# Claude internals — except committed skills (minus their runtime artifacts)
+.claude/*
+!.claude/skills/
+.claude/skills/*/.driver.pid
+.claude/skills/*/.driver.log
+.claude/skills/*/shot.png
