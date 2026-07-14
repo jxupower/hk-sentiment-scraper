@@ -1,5 +1,7 @@
 import math
 import os
+import time
+from threading import Lock
 
 import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
@@ -12,6 +14,73 @@ from dashboard import theme as T
 from dashboard.screener_callbacks import _fetch_one_price
 
 FLAG_COLORS = {"high": T.DANGER, "medium": T.WARNING, "low": T.INFO}
+
+
+# --------------------------------------------------------------------------
+# Discovery-tab compute cache
+# --------------------------------------------------------------------------
+# `FactorScoringEngine.compute()` scans ~2,769 tickers × 4 factors and takes
+# 2-4 s cold on this dataset. The Discovery callback previously re-ran it
+# on every language toggle (because `user-language` is an Input), which is
+# pure waste — the compute output is language-independent; only the row
+# labels differ. This cache keys on the inputs that DO affect compute
+# output: (market, weights, window). Language flip → cache hit, we skip
+# straight to row formatting (~50 ms).
+#
+# Not sharing analysis/_research_cache.py — that cache is built with
+# default weights + default window for the Stock Research tab. Discovery
+# passes user-tunable weights + window, so the cache key shape is different.
+_COMPUTE_CACHE_LOCK = Lock()
+_COMPUTE_CACHE: dict = {}
+_COMPUTE_CACHE_TTL_S = 900   # 15 min, matches _research_cache / _portfolio_cache
+
+
+def _compute_cache_key(market, weights, window_days) -> tuple:
+    return (
+        (market or "HK").upper(),
+        tuple(sorted(weights.items())),
+        int(window_days or 7),
+    )
+
+
+def _cached_engine_compute(engine, *, weights, window_days, market):
+    """Memoized wrapper around FactorScoringEngine.compute() for the
+    Discovery tab. Returns the same (results, diagnostics) tuple compute()
+    returns; on a hit, no engine work is done.
+
+    Concurrent misses on the same key coalesce: the first thread's compute
+    is reused by the others. On a miss for a NEW key we still let the
+    compute run outside the lock so we don't serialise unrelated Discovery
+    tab loads for different markets.
+    """
+    key = _compute_cache_key(market, weights, window_days)
+    now = time.monotonic()
+    with _COMPUTE_CACHE_LOCK:
+        hit = _COMPUTE_CACHE.get(key)
+        if hit is not None and (now - hit[0]) < _COMPUTE_CACHE_TTL_S:
+            return hit[1], hit[2]
+    # Miss — compute outside the lock so parallel misses for different
+    # (market, weights, window) keys don't queue behind each other.
+    results, diag = engine.compute(
+        weights=weights, sentiment_window_days=window_days, market=market,
+    )
+    with _COMPUTE_CACHE_LOCK:
+        _COMPUTE_CACHE[key] = (time.monotonic(), results, diag)
+        # Cheap size cap — Discovery has ~a dozen realistic weight combos
+        # per market, so 32 entries is plenty (2 markets × ~12 combos).
+        # LRU-lite: drop the oldest entry when we exceed the cap.
+        if len(_COMPUTE_CACHE) > 32:
+            oldest = min(_COMPUTE_CACHE.items(), key=lambda kv: kv[1][0])[0]
+            _COMPUTE_CACHE.pop(oldest, None)
+    return results, diag
+
+
+def _invalidate_compute_cache() -> None:
+    """Wipe the Discovery compute cache. Used by manual-refresh handlers
+    and by the shared perf-cache eviction path so a scrape-driven data
+    change is reflected before the 15-min TTL."""
+    with _COMPUTE_CACHE_LOCK:
+        _COMPUTE_CACHE.clear()
 
 
 def register_recommendations_callbacks(app, db_path: str):
@@ -182,8 +251,10 @@ def register_recommendations_callbacks(app, db_path: str):
         min_composite = min_composite if min_composite is not None else 0
         show_filter = show_filter or []
 
-        results, diag = engine.compute(
-            weights=weights, sentiment_window_days=window_days, market=market,
+        # Memoised: on a language-only toggle (same weights/window/market)
+        # this returns in ~50 μs instead of re-scoring 2,769 tickers.
+        results, diag = _cached_engine_compute(
+            engine, weights=weights, window_days=window_days, market=market,
         )
 
         # Apply filters
