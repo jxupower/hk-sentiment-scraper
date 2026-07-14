@@ -56,8 +56,11 @@ UPDATE historical_prices
 CREATE INDEX IF NOT EXISTS idx_hp_ticker_date
     ON historical_prices (ticker, date DESC);
 
-CREATE INDEX IF NOT EXISTS idx_hp_market_ticker_date
-    ON historical_prices (market, ticker, date DESC);
+-- REMOVED (perf P1.6, 2026-07-14): `idx_hp_market_ticker_date` duplicated
+-- the leading-column shape of `idx_hp_ticker_date`. Queries always land on
+-- a specific ticker first (market is 99% HK/US low-cardinality and never
+-- appears as a leading filter), so the second index was 766 MB of dead
+-- weight + write amplification. See scripts/supabase_drop_duplicate_hp_index.sql.
 
 -- ============== fundamentals_snapshots ==============
 
