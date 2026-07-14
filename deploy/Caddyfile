@@ -1,0 +1,57 @@
+# Caddy config for blue/green in-place deploys of the HK Sentiment
+# Scraper dashboard (perf P2.11).
+#
+# The reverse proxy listens on the docker network's `dashboard` port
+# (mapped to the host's 127.0.0.1:8050 in the compose file) and forwards
+# to whichever of `app-blue` / `app-green` is currently marked live.
+#
+# Live-swap via the {$UPSTREAM} env var: bring up the new-image instance,
+# wait for its /_dash-layout to return 200, then `docker compose exec caddy
+# caddy reload -c /etc/caddy/Caddyfile` after re-exporting UPSTREAM. Caddy's
+# reload is graceful — in-flight requests drain against the old upstream,
+# new requests hit the new one, no dropped connections.
+#
+# Falls back to blue on cold start so `docker compose up -d` from scratch
+# still Just Works with only the blue container present.
+
+{
+    # Admin API off — we reload by file replacement + SIGUSR1, not via HTTP.
+    admin off
+    # No auto-HTTPS because Cloudflare Tunnel terminates TLS at the edge;
+    # the container speaks plain HTTP to cloudflared.
+    auto_https off
+}
+
+:8050 {
+    # Health endpoint for docker-compose / uptime probes. Cheap.
+    handle /caddy-health {
+        respond "ok" 200
+    }
+
+    # Everything else: proxy to the live upstream (defaults to blue).
+    reverse_proxy {$UPSTREAM:app-blue:8050} {
+        # Long timeouts for the Dash callback POSTs (some Portfolio /
+        # Backtest calls take 5-10 s).
+        transport http {
+            dial_timeout   5s
+            response_header_timeout 30s
+            read_timeout   60s
+        }
+
+        # Health-gated: if a peer starts returning 5xx or connection
+        # errors we fail the request rather than sending it into a broken
+        # upstream. Combined with the deploy script's wait-for-healthy
+        # loop below this makes bad deploys fail closed, not visible.
+        health_uri  /_dash-layout
+        health_interval 10s
+        health_timeout  5s
+        health_status   2xx
+    }
+
+    # Access log to stdout so `docker compose logs caddy` shows request
+    # patterns during an incident.
+    log {
+        output stdout
+        format console
+    }
+}

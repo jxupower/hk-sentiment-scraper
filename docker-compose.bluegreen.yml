@@ -1,0 +1,110 @@
+# Blue/green production compose (perf P2.11). Opt-in alternative to the
+# default single-instance docker-compose.yml at /srv/dashboard/.
+#
+# Deploy shape:
+#   caddy (127.0.0.1:8050 on host)  ─┐
+#                                    ├─► app-blue  :8050  ┐
+#                                    └─► app-green :8050  │  (share ./data mount
+#                                                            and .env with each
+#                                                            other + scheduler)
+#   scheduler (singleton; not blue/green — see comment below)
+#
+# Roll-forward flow (script in docs/bluegreen_deploy.md):
+#   1. `docker compose pull` to fetch the new image
+#   2. If current live is BLUE: recreate `app-green` with the new image,
+#      wait for its /_dash-layout to 200 → export UPSTREAM=app-green:8050
+#      → `docker compose exec caddy caddy reload -c /etc/caddy/Caddyfile`
+#      → stop `app-blue`.
+#   3. Next deploy flips back (green → blue). Odd/even deploy count.
+#
+# Scheduler stays a SINGLETON: two APScheduler instances writing to the
+# same SQLite file would race + double-scrape + waste API quota. Since
+# the scheduler has no user-facing latency (it's a background worker),
+# 5-15 s of downtime during a scheduler restart is acceptable.
+
+services:
+  # ---- Reverse proxy — the only externally-reachable service ---------
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: hk-sentiment-caddy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8050:8050"
+    environment:
+      # Which upstream is live. Deploy script exports this before `caddy
+      # reload`. Defaults to blue so cold-start with only app-blue
+      # running works.
+      UPSTREAM: "${UPSTREAM:-app-blue:8050}"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app-blue
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8050/caddy-health"]
+      interval: 30s
+      timeout: 5s
+
+  # ---- BLUE app instance --------------------------------------------
+  app-blue:
+    image: ghcr.io/jxupower/hk-sentiment-scraper:latest
+    container_name: hk-sentiment-app-blue
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DISABLE_INPROCESS_SCHEDULER: "true"
+    volumes:
+      - ./data:/app/data
+    # No `ports:` — Caddy is the only public entry. Container-to-container
+    # traffic uses the compose network by service name.
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent",
+              "http://localhost:8050/_dash-layout"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  # ---- GREEN app instance (idle-ready) ------------------------------
+  # Runs the same image + config. During a deploy the script pulls the
+  # new image and recreates whichever of blue/green is currently OFFLINE.
+  app-green:
+    image: ghcr.io/jxupower/hk-sentiment-scraper:latest
+    container_name: hk-sentiment-app-green
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DISABLE_INPROCESS_SCHEDULER: "true"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent",
+              "http://localhost:8050/_dash-layout"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    # Between deploys this service is either stopped (via `docker compose
+    # stop app-green`) or matches app-blue. Leaving it running idle costs
+    # ~200 MB RAM but is fine on the 24 GB Oracle VM.
+
+  # ---- Scheduler (singleton) ----------------------------------------
+  scheduler:
+    image: ghcr.io/jxupower/hk-sentiment-scraper:latest
+    container_name: hk-sentiment-scheduler
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    command: ["python", "main.py", "scrape"]
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "main.py scrape"]
+      interval: 60s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  caddy_data:
+  caddy_config:
