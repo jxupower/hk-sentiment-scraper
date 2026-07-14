@@ -146,28 +146,18 @@ def register_callbacks(app, db_path: str, settings, watchlist: dict, yahoo_scrap
         prevent_initial_call="initial_duplicate",
     )
 
-    # Server-side: rebuild the tab strip ONLY when market changes.
-    # dbc.Tab.label is static at render time so a full children rebuild is
-    # the only way to update tab labels — but it also wipes every editable
-    # input inside the tabs (Portfolio holdings, Stock Research notes,
-    # Screener filters, etc.). For market changes that's intentional (we
-    # want a clean slate per market). For language changes it's destructive
-    # — the per-tab i18n callbacks already update every in-tab label, so
-    # we deliberately do NOT rebuild on language change. Trade-off: the
-    # tab strip labels (e.g. "Screener" / "筛选器") stay in the language
-    # they were rendered at until the user refreshes the page. Acceptable
-    # because tab strip labels are static + short; everything else inside
-    # the tabs translates in-place.
-    @app.callback(
-        Output("main-tabs", "children"),
-        Input("user-market", "data"),
-        State("user-language", "data"),
-        State("sentiment-sectors-store", "data"),
-        prevent_initial_call=True,
-    )
-    def rebuild_tabs_on_market(market, lang, sectors):
-        from dashboard.layout import build_tabs
-        return build_tabs(lang or "en", sectors or [])
+    # Perf P1.2 (2026-07-14): removed the market-change tab-tree rebuild.
+    # Previous callback (`rebuild_tabs_on_market`) called build_tabs() on every
+    # HK↔US toggle, which wiped the DOM of every tab and triggered ~20
+    # callbacks to re-fire against a freshly-rebuilt component tree. The
+    # tab labels are market-independent (TAB_DEFS is static), the per-tab
+    # callbacks all listen on Input("user-market", "data") for data refresh,
+    # and tab-level guardrails (e.g. reset_holdings_on_market_change in
+    # portfolio_callbacks.py) already handle the "clear stale HK state on
+    # US switch" concern surgically. So the rebuild was 100% destructive
+    # work — deleting it drops the market toggle cost from ~2-6 s (full
+    # callback storm) to whatever the visible tab's own market-refresh
+    # callback costs (~100-500 ms warm).
 
     # Update each tab's `label` prop on language change WITHOUT rebuilding
     # the tab children. Keeps in-tab editable state (Portfolio holdings,
