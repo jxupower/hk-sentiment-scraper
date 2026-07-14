@@ -88,6 +88,59 @@ class SentimentRepository:
             """, (ticker, since)).fetchall()
             return [dict(r) for r in rows]
 
+    def get_bulk_aggregates(self, tickers: list[str],
+                              hours_short: int = 24,
+                              hours_long: int = 168) -> dict[str, dict]:
+        """One-query bulk aggregate of avg(final_score) + count(*) per ticker
+        for two windows. Replaces the O(N-tickers) `get_scores_for_ticker`
+        loop that used to run inside the scrape cycle
+        (`scheduler/job_runner.py`), which cost ~13 k round-trips per market
+        (2 × ~2.7-3.9 k tickers) and blocked the APScheduler thread.
+
+        Returns a dict keyed by ticker with the shape
+            {ticker: {"avg_short", "n_short", "avg_long", "n_long"}}
+        where the averages may be None when the window has no rows. Tickers
+        with zero rows in the long window are NOT in the result dict — the
+        caller substitutes zeros/None as needed.
+
+        Uses `WHERE ticker IN (...)` to bound the scan to the caller's
+        universe. SQLite 3.32+ (bundled with Python 3.9+) supports up to
+        32 k parameters; the largest market (US, ~4 k tickers) fits comfortably.
+        """
+        if not tickers:
+            return {}
+        now = datetime.utcnow()
+        since_short = (now - timedelta(hours=hours_short)).isoformat()
+        since_long = (now - timedelta(hours=hours_long)).isoformat()
+        placeholders = ",".join("?" * len(tickers))
+        # One aggregation over the (broader) long window; the short window
+        # is computed with conditional aggregates so the whole thing lands
+        # in a single index scan.
+        sql = f"""
+            SELECT
+                ticker,
+                AVG(CASE WHEN scored_at >= ? THEN final_score END) AS avg_short,
+                COUNT(CASE WHEN scored_at >= ? THEN 1 END)         AS n_short,
+                AVG(final_score)                                   AS avg_long,
+                COUNT(*)                                           AS n_long
+            FROM sentiment_scores
+            WHERE ticker IN ({placeholders})
+              AND scored_at >= ?
+            GROUP BY ticker
+        """
+        params = (since_short, since_short, *tickers, since_long)
+        with self.db.get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return {
+            r["ticker"]: {
+                "avg_short": r["avg_short"],
+                "n_short": r["n_short"] or 0,
+                "avg_long": r["avg_long"],
+                "n_long": r["n_long"] or 0,
+            }
+            for r in rows
+        }
+
     def get_timeseries(self, ticker: str, hours: int = 168) -> pd.DataFrame:
         since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
         with self.db.get_connection() as conn:

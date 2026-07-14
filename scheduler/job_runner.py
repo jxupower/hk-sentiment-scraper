@@ -273,31 +273,29 @@ class JobRunner:
         # Two windows: 24h drives direction/confidence (the "fresh signal");
         # 7d powers the Sentiment tab card badge so sub-sectors with sparse
         # daily coverage still show a meaningful article count.
+        #
+        # ONE aggregate SQL replaces the previous O(N-tickers) loop
+        # (get_scores_for_ticker called 2× per ticker × ~2.7-3.9 k tickers).
+        # See SentimentScoreRepository.get_bulk_aggregates for the shape.
+        aggs = self._sentiment_repo.get_bulk_aggregates(
+            list(market_tickers), hours_short=24, hours_long=168,
+        )
         sentiment_by_ticker: dict[str, float | None] = {}
         sentiment_by_ticker_7d: dict[str, float | None] = {}
         article_count_by_ticker: dict[str, int] = {}
         article_count_by_ticker_7d: dict[str, int] = {}
         for ticker in market_tickers:
-            scores_24h = self._sentiment_repo.get_scores_for_ticker(ticker, hours=24)
-            if scores_24h:
-                vals = [s.get("final_score") for s in scores_24h
-                          if s.get("final_score") is not None]
-                sentiment_by_ticker[ticker] = (
-                    sum(vals) / len(vals) if vals else None)
-                article_count_by_ticker[ticker] = len(scores_24h)
-            else:
+            row = aggs.get(ticker)
+            if row is None:
                 sentiment_by_ticker[ticker] = None
-                article_count_by_ticker[ticker] = 0
-            scores_7d = self._sentiment_repo.get_scores_for_ticker(ticker, hours=168)
-            if scores_7d:
-                vals7 = [s.get("final_score") for s in scores_7d
-                            if s.get("final_score") is not None]
-                sentiment_by_ticker_7d[ticker] = (
-                    sum(vals7) / len(vals7) if vals7 else None)
-                article_count_by_ticker_7d[ticker] = len(scores_7d)
-            else:
                 sentiment_by_ticker_7d[ticker] = None
+                article_count_by_ticker[ticker] = 0
                 article_count_by_ticker_7d[ticker] = 0
+            else:
+                sentiment_by_ticker[ticker] = row["avg_short"]
+                sentiment_by_ticker_7d[ticker] = row["avg_long"]
+                article_count_by_ticker[ticker] = row["n_short"]
+                article_count_by_ticker_7d[ticker] = row["n_long"]
 
         # -- Mcap lookup (used for weighting sub-sector aggregates). --
         # Pulled from the latest_prices cache + shares_outstanding from
