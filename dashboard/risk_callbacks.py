@@ -174,12 +174,16 @@ def register_risk_callbacks(app, db_path: str):
         convention = convention or "cn_hk"
 
         from analysis._garch_cache import get_or_build
-        from analysis.data_loader import get_or_fetch_prices
+        from analysis.index_prices import get_index_prices
         from storage.database import Database
 
         db = Database(db_path)
         try:
-            prices = get_or_fetch_prices(ticker, db)
+            # Routes through the shared in-process cache so a Market-tab
+            # cold-fetch of the same ticker (e.g. ^HSI) wins the race and
+            # this call is a warm hit. No effect on non-index tickers
+            # beyond the ~1 μs lock check.
+            prices = get_index_prices(ticker, db)
         except Exception as e:
             return _error_state(f"Price fetch failed for {ticker}: {e}")
         if not prices:

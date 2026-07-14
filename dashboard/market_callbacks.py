@@ -40,44 +40,19 @@ from dashboard.market_layout import (
 
 
 # ---- In-process OHLC price cache ----------------------------------------
-# Keyed by ticker (NOT by chart style — both Line and Candle read from the
-# same OHLC payload; Line just consumes the adj_close column). Slicing to
-# the user-selected period happens client-side after the cache hit, so
-# period flips never re-touch the DB.
+# The Market tab, Risk tab, and dashboard pre-warm thread all fetch the
+# same index tickers on cold start. Consolidated in `analysis/index_prices.py`
+# behind a single shared cache + per-ticker lock, so the first cold caller
+# wins the yfinance/akshare round-trip and everyone else hits warm cache.
 #
 # TTL = 15 min, aligned with PRICE_STALE_DAYS in analysis/data_loader.py.
-# The Screener's "Refresh prices now" button calls _flush_perf_caches
-# which we extend to also clear this cache so an explicit refresh is never
-# fooled.
-_INDEX_PRICE_CACHE: dict[str, tuple[list[dict], float]] = {}
-_INDEX_PRICE_TTL_SECONDS = 15 * 60
-
-
-def _get_ohlc_cached(ticker: str, db) -> list[dict]:
-    """Return the full OHLC series for `ticker`, hitting the in-process
-    cache first. On miss: prime via get_or_fetch_prices (handles cold
-    yfinance/akshare round-trip + Supabase upsert), then SELECT the OHLC
-    columns from the repo and cache the result."""
-    now = time.time()
-    cached = _INDEX_PRICE_CACHE.get(ticker)
-    if cached is not None and cached[1] > now:
-        return cached[0]
-    from analysis.data_loader import get_or_fetch_prices
-    from storage.factory import get_prices_repo
-    # Primer call handles cold-cache fetch (akshare/yfinance) + upsert into
-    # historical_prices. Return value is the date+adj_close subset we don't
-    # use directly; we want the full OHLC, which the next call selects.
-    get_or_fetch_prices(ticker, db)
-    rows = get_prices_repo(db).get_full_ohlc_series(ticker) or []
-    _INDEX_PRICE_CACHE[ticker] = (rows, now + _INDEX_PRICE_TTL_SECONDS)
-    return rows
-
-
-def _flush_index_price_cache() -> None:
-    """Hook for the Screener's manual 'Refresh prices now' button so an
-    operator-initiated refresh is reflected immediately on the Market tab,
-    not after the 15-min TTL expiry."""
-    _INDEX_PRICE_CACHE.clear()
+# The Screener's "Refresh prices now" button calls `_flush_perf_caches`
+# which in turn calls `analysis.index_prices.invalidate()` so an explicit
+# operator refresh is never fooled by the local cache.
+from analysis.index_prices import (
+    get_index_ohlc as _get_ohlc_cached,
+    invalidate as _flush_index_price_cache,
+)
 
 
 def _localised_index_options(market: str, lang: str) -> list[dict]:

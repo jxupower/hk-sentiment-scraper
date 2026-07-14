@@ -255,7 +255,11 @@ def dashboard(port: int, host: str, debug: bool):
                 # round-trip + 3-10ms for the names lookup; running both here
                 # in the background daemon takes them off the critical path.
                 try:
-                    from analysis.data_loader import get_or_fetch_prices
+                    # Route through the shared cache so the Market/Risk
+                    # tabs' first render hits warm cache instead of racing
+                    # this pre-warm thread for the same yfinance/akshare
+                    # round-trip.
+                    from analysis.index_prices import get_index_prices
                     from config.index_constituents import constituents_for
                     from storage.database import Database as _Db
                     from storage.repository import SecuritiesReferenceRepository
@@ -264,7 +268,7 @@ def dashboard(port: int, host: str, debug: bool):
                     db = _Db(components["settings"].DB_PATH)
 
                     t1 = time.time()
-                    price_rows = get_or_fetch_prices(default_index, db) or []
+                    price_rows = get_index_prices(default_index, db) or []
                     console.print(f"[dim]Market index {default_index} pre-warmed: "
                                   f"{len(price_rows):,} rows · {time.time()-t1:.1f}s[/dim]")
 
