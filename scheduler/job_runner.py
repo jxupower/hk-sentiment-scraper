@@ -30,14 +30,36 @@ class JobRunner:
         self._scheduler = BackgroundScheduler(timezone="UTC")
 
     def start(self):
+        # Two recurring scrape jobs — one per market. Previously only HK
+        # was registered (US had to be triggered via run_once("US"/"ALL")),
+        # which meant US sentiment silently went stale between manual
+        # invocations. Fix per perf redesign plan P2.12.
+        #
+        # Staggered by half an interval so the two markets don't hit
+        # Supabase at the same tick (bulk sentiment aggregation + mcap
+        # lookup + ticker signal upserts all compete for the pool).
+        # HK fires immediately on boot (preserves the "first Sentiment
+        # tab load has data" UX); US fires half-interval later.
+        half = max(1, self._interval // 2)
         self._scheduler.add_job(
             func=self._scrape_and_analyze,
             trigger="interval",
             minutes=self._interval,
-            id="main_scrape",
+            kwargs={"market": "HK"},
+            id="main_scrape_hk",
             max_instances=1,
             coalesce=True,
             next_run_time=datetime.utcnow(),
+        )
+        self._scheduler.add_job(
+            func=self._scrape_and_analyze,
+            trigger="interval",
+            minutes=self._interval,
+            kwargs={"market": "US"},
+            id="main_scrape_us",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.utcnow() + timedelta(minutes=half),
         )
         self._scheduler.add_job(
             func=self._prune_old_data,
