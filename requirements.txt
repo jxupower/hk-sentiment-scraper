@@ -29,6 +29,12 @@ numpy>=1.26
 openpyxl>=3.1
 requests>=2.31
 akshare>=1.13
+# Parquet engine for the historical_prices retention archive tool
+# (scripts/archive_historical_prices.py, perf P2.10). Optional at runtime —
+# the dashboard + scraper + all P1/P2 changes work without pyarrow.
+# Explicitly approved via the perf redesign plan P2.10 + retention-destination
+# question (2026-07-14).
+pyarrow>=17.0
 
 # Risk modelling
 arch>=5.0       # GARCH; pulls scipy + statsmodels as transitives
