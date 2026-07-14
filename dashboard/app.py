@@ -10,6 +10,7 @@ from dashboard.backtest_callbacks import register_backtest_callbacks
 from dashboard.stock_research_callbacks import register_stock_research_callbacks
 from dashboard.risk_callbacks import register_risk_callbacks
 from dashboard.portfolio_callbacks import register_portfolio_callbacks
+from dashboard.lazy_tabs import register_lazy_tab_callbacks
 from dashboard import theme as T
 
 
@@ -330,5 +331,10 @@ def create_app(db_path: str, settings) -> dash.Dash:
     register_stock_research_callbacks(app, db_path)
     register_risk_callbacks(app, db_path)
     register_portfolio_callbacks(app, db_path)
+    # Must be LAST so all tab-internal callbacks are registered before
+    # their Output components (dcc.Loading placeholders) get filled by
+    # the lazy loader — Dash otherwise refuses to attach late callbacks
+    # to already-mounted components in some edge cases.
+    register_lazy_tab_callbacks(app, sectors)
 
     return app

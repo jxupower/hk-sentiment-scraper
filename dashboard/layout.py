@@ -33,21 +33,44 @@ TAB_DEFS = [
 ]
 
 
-def build_tabs(lang: str, sectors: list[str]) -> list:
-    """Construct the dbc.Tab list with labels translated per `lang`. Re-run
-    by the language-toggle callback so every tab label flips on click."""
+def build_tabs(lang: str, sectors: list[str],
+                *, active_tab_id: str = "tab-market") -> list:
+    """Construct the dbc.Tab list with labels translated per `lang`.
+
+    Perf P2.8 (2026-07-14): tab children are now LAZY — every tab except
+    `active_tab_id` starts with an empty `dcc.Loading` placeholder.
+    `register_lazy_tab_callbacks` (dashboard.lazy_tabs) populates each
+    placeholder when the user clicks its tab. Cuts cold `/` callback
+    count from ~30 (all 7 tabs' worth) to ~5 (Market only).
+
+    The default active tab (Market) is materialised eagerly so the first
+    paint has real content, not a spinner. Every other tab shows a
+    briefly-spinning placeholder on its first activation of the session,
+    then behaves normally on subsequent visits (content is retained).
+
+    Re-run by the language-toggle callback so every tab label flips on
+    click. `id=tab_id` (in addition to `tab_id=tab_id`) is required so
+    `update_tab_labels` can target this Tab's `label` prop directly on
+    language change without touching the children.
+    """
     tabs = []
     for key, tab_id, builder in TAB_DEFS:
-        if builder is None:
-            children = _sentiment_tab(sectors)
+        content_id = f"{tab_id}-content"
+        if tab_id == active_tab_id:
+            # Eager-materialise the default landing tab so first paint has
+            # real content, not a spinner.
+            if builder is None:
+                inner = _sentiment_tab(sectors)
+            else:
+                inner = builder()
         else:
-            children = builder()
-        # `id=tab_id` (in addition to `tab_id=tab_id`) is required so the
-        # `update_tab_labels` callback in dashboard.callbacks can target
-        # this Tab's `label` prop directly on language change without
-        # rebuilding the children (which would wipe in-tab editable state).
-        tabs.append(dbc.Tab(label=i18n_T(key, lang), id=tab_id,
-                              tab_id=tab_id, children=children))
+            # Lazy: empty placeholder; register_lazy_tab_callbacks fills
+            # it on first activation.
+            inner = []
+        tabs.append(dbc.Tab(
+            label=i18n_T(key, lang), id=tab_id, tab_id=tab_id,
+            children=dcc.Loading(id=content_id, type="dot", children=inner),
+        ))
     return tabs
 
 
