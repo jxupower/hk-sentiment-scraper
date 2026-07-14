@@ -62,6 +62,18 @@ The script:
 
 - Installs Docker + docker-compose plugin (apt + Docker's official repo)
 - Creates `/srv/dashboard/` with the production `docker-compose.yml` (pointing at ghcr.io)
+
+  **Important, post perf P2.9 (2026-07-14):** the production compose file
+  must now declare **two services** sharing the same image — `app` (Dash
+  web server, `DISABLE_INPROCESS_SCHEDULER=true`) and `scheduler` (long-
+  running `python main.py scrape`). Both mount the same `/srv/dashboard/data`
+  volume so they share `data/sentiment.db` (WAL mode supports concurrent
+  readers; the scheduler is the only writer). Copy the shape from the
+  repo-root `docker-compose.yml` and swap `build: .` for
+  `image: ghcr.io/jxupower/hk-sentiment-scraper:latest` on both services.
+  A single-service prod compose will still boot but will silently miss
+  every scheduled job.
+
 - Creates a `deploy` system user with the SSH key from `~/ubuntu/.ssh/authorized_keys` (re-used so the CD step uses the same key)
 - Installs `cloudflared` from Cloudflare's apt repo and enables the systemd unit
 - Configures `ufw`: deny all inbound, allow 22 (from your IP), allow Cloudflare's IP ranges for the tunnel

@@ -11,6 +11,13 @@
 # it once the image is pulled).
 
 services:
+  # -------------------------------------------------------------------
+  # `app` — the Dash web server. Perf P2.9: no longer runs the
+  # APScheduler in-process; the sibling `scheduler` service below does
+  # that instead. Splitting them stops CPU-bound scrape work (VADER over
+  # ~10k articles, MPT solves, GARCH Monte Carlo, monthly walk-forward
+  # reoptimize) from holding the GIL and freezing dashboard callbacks.
+  # -------------------------------------------------------------------
   app:
     build:
       context: .
@@ -29,12 +36,20 @@ services:
     # .gitignore + .dockerignore). The example template is .env.example.
     env_file:
       - .env
+    environment:
+      # Tell the dashboard NOT to start its in-process APScheduler; the
+      # `scheduler` service below does it. Two would double-scrape and
+      # race on the SQLite writer lock.
+      DISABLE_INPROCESS_SCHEDULER: "true"
     # SQLite + HKEX xlsx cache survive container recreation via this
-    # bind mount. Inside the container the path is /app/data, matching
-    # the VOLUME declaration in the Dockerfile.
+    # bind mount. Both `app` and `scheduler` mount the same directory
+    # so they share `data/sentiment.db` (WAL mode supports concurrent
+    # readers; the scheduler is the only writer).
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    depends_on:
+      - scheduler
     # The image-level HEALTHCHECK is already correct; restating it here
     # so `docker compose ps` shows the health column consistently.
     healthcheck:
@@ -47,4 +62,36 @@ services:
       interval: 30s
       timeout: 10s
       start_period: 60s
+      retries: 3
+
+  # -------------------------------------------------------------------
+  # `scheduler` — APScheduler + scrapers, out-of-process from the
+  # dashboard. Runs `main.py scrape` (no --once) in long-running mode.
+  # Same image as `app` (one Dockerfile is the source of truth); just
+  # a different CMD.
+  # -------------------------------------------------------------------
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hk-sentiment-scraper:local
+    container_name: hk-sentiment-scheduler
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    # Override the image CMD (which starts the dashboard) — same venv,
+    # same code, different entrypoint. PYTHONIOENCODING=utf-8 avoids
+    # the cp1252 encoding trap on Chinese log lines.
+    command: ["python", "main.py", "scrape"]
+    healthcheck:
+      # No HTTP endpoint on the scheduler; the healthiest signal we
+      # have is that the Python process is alive. tini-managed process
+      # tree means a crash kills PID 1 → container marked unhealthy →
+      # restart: unless-stopped kicks in.
+      test: ["CMD", "pgrep", "-f", "main.py scrape"]
+      interval: 60s
+      timeout: 5s
+      start_period: 30s
       retries: 3

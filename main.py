@@ -211,7 +211,19 @@ def dashboard(port: int, host: str, debug: bool):
 
     components = _build_components()
     runner = components["runner"]
-    runner.start()
+
+    # Perf P2.9: in production the scheduler runs in a separate container
+    # (see docker-compose.yml `scheduler` service), so the dashboard
+    # process must NOT also start it — two instances would double-scrape,
+    # double-upsert, and race on the SQLite writer lock. Local dev keeps
+    # the in-process scheduler (no env var set) so a `python main.py
+    # dashboard` from the venv still behaves as before.
+    skip_scheduler = os.getenv("DISABLE_INPROCESS_SCHEDULER", "").lower() == "true"
+    if skip_scheduler:
+        console.print("[dim]DISABLE_INPROCESS_SCHEDULER=true — scheduler assumed "
+                      "to run in a sibling process/container.[/dim]")
+    else:
+        runner.start()
 
     display_host = "localhost" if host in _LOOPBACK else host
     console.print(f"[bold cyan]Dashboard starting at http://{display_host}:{port}[/bold cyan]")
@@ -291,7 +303,8 @@ def dashboard(port: int, host: str, debug: bool):
 
         app.run(host=host, port=port, debug=debug)
     except KeyboardInterrupt:
-        runner.stop()
+        if not skip_scheduler:
+            runner.stop()
         console.print("\n[yellow]Dashboard stopped.[/yellow]")
 
 
