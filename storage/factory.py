@@ -50,9 +50,55 @@ def _cloud_ok() -> bool:
         return False
 
 
+_warned_parquet_missing = False
+
+
+def _use_parquet_prices() -> bool:
+    """Perf P3.16 routing check. Returns True iff the local Parquet
+    store has been populated (≥100 ticker dirs) AND the operator hasn't
+    forced cloud fallback via `USE_PARQUET_PRICES=false`.
+
+    Cheap — only scans the top-level directory of `data/prices/`. Not
+    cached across calls because the store gets populated by an operator-
+    triggered migration, and we want the flip to be picked up on the
+    very next call.
+    """
+    global _warned_parquet_missing
+    import os
+    override = os.getenv("USE_PARQUET_PRICES", "").lower()
+    if override == "false":
+        return False
+    try:
+        from storage.parquet_prices import store_populated
+        ok = store_populated()
+        if not ok and override == "true" and not _warned_parquet_missing:
+            log.warning("USE_PARQUET_PRICES=true but data/prices/ is empty — "
+                          "falling back to Supabase for historical_prices.")
+            _warned_parquet_missing = True
+        return ok
+    except Exception as e:
+        if not _warned_parquet_missing:
+            log.warning("Parquet prices routing check failed (%s) — using "
+                          "Supabase fallback.", e)
+            _warned_parquet_missing = True
+        return False
+
+
 def get_prices_repo(db: Database):
-    """Returns HistoricalPricesRepository (SQLite) or CloudHistoricalPricesRepository.
-    Pass the local `Database` instance — it's used for the SQLite fallback path."""
+    """Returns the highest-tier available historical-prices repo:
+
+      1. `ParquetHistoricalPricesRepository` (local Parquet, perf P3.16)
+         when `data/prices/` is populated
+      2. `CloudHistoricalPricesRepository` (Supabase) when USE_CLOUD_DB is
+         on and the Supabase pool is reachable
+      3. SQLite `HistoricalPricesRepository` as ultimate fallback
+
+    All three implement the same public interface, so callers don't need
+    to know which one they got.
+    """
+    if _use_parquet_prices():
+        from storage.parquet_prices import ParquetHistoricalPricesRepository
+        return ParquetHistoricalPricesRepository()
     if _cloud_ok():
         from storage.cloud_repository import CloudHistoricalPricesRepository
         return CloudHistoricalPricesRepository()
