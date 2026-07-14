@@ -1,12 +1,21 @@
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import yfinance as yf
 import pandas as pd
 from utils.helpers import clean_text, normalize_datetime
 from utils.logger import get_logger
+from utils.rate_limiter import get_shared_limiter
 from utils.ticker_matcher import TickerMatcher
 from scrapers.base_scraper import BaseScraper, RawArticle
 
 logger = get_logger(__name__)
+
+# Per-ticker Yahoo fetches are I/O-bound (network wait releases the GIL),
+# so 8 workers give a ~8× wall-clock reduction. The `HostRateLimiter`
+# enforces the same 0.5 s minimum-interval-per-host as the old sync
+# code, so Yahoo's rate limits remain respected — we just stop wasting
+# time sleeping when a *different* host could be answering.
+_YAHOO_WORKERS = 8
+_YAHOO_HOST = "yfinance.yahoo.com"
 
 
 class YahooScraper(BaseScraper):
@@ -20,15 +29,35 @@ class YahooScraper(BaseScraper):
         short_allow = set(load_universe_aliases().get("short_allow") or [])
         matcher = TickerMatcher(search_terms, set(search_terms.keys()),
                                      short_term_allowlist=short_allow)
+        limiter = get_shared_limiter()
+        tickers = list(search_terms.keys())
         articles = []
-        for ticker in list(search_terms.keys()):
+
+        def _fetch_one(ticker: str):
             try:
-                news_items = self._get_news(ticker, matcher)
-                articles.extend(news_items)
-                logger.info("Yahoo [%s]: %d articles", ticker, len(news_items))
+                # Per-host throttle. All workers targeting Yahoo serialise
+                # on the SAME lock (0.5 s between successive calls). Two
+                # workers pointed at different hosts don't block each
+                # other — but here every call is Yahoo, so the effective
+                # ceiling is 1 fetch per 0.5 s wall-clock (2/s), and the
+                # 8-worker parallelism absorbs the per-call ~0.3-0.8 s
+                # network latency without adding throttle wait time.
+                limiter.wait(_YAHOO_HOST)
+                items = self._get_news(ticker, matcher)
+                return ticker, items, None
             except Exception as e:
-                logger.warning("Yahoo news error [%s]: %s", ticker, e)
-            time.sleep(0.5)
+                return ticker, [], e
+
+        with ThreadPoolExecutor(max_workers=_YAHOO_WORKERS,
+                                  thread_name_prefix="yahoo") as pool:
+            futures = [pool.submit(_fetch_one, t) for t in tickers]
+            for fut in as_completed(futures):
+                ticker, items, err = fut.result()
+                if err is not None:
+                    logger.warning("Yahoo news error [%s]: %s", ticker, err)
+                else:
+                    articles.extend(items)
+                    logger.info("Yahoo [%s]: %d articles", ticker, len(items))
         return articles
 
     def _get_news(self, ticker: str, matcher: TickerMatcher) -> list[RawArticle]:

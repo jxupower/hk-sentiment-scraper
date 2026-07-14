@@ -66,74 +66,117 @@ def fetch_many(tickers: list[str], prices_repo,
     against yfinance. Tickers from a wholly-failed batch are NOT recorded —
     that's a transient error, not a confirmed delisting.
     """
+    # Perf P3.17: parallelise batches. yfinance itself is thread-unsafe
+    # (issue #2557 — `threads=False` inside yf.download is REQUIRED), but
+    # separate `yf.download` INVOCATIONS are safe as long as we throttle
+    # per-host to stay polite. Conservative worker count (4, not 8) for
+    # yfinance because each batch is heavier than a single akshare call.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from threading import Lock
+    from utils.rate_limiter import get_shared_limiter
+
+    limiter = get_shared_limiter()
+    limiter._min_interval = float(throttle_seconds)
+    _WORKERS = 4
+    _HOST = "query1.finance.yahoo.com"
+
+    counts_lock = Lock()
     attempted = 0
     tickers_with_data = 0
     total_rows = 0
     failed = 0
     newly_delisted: list[str] = []
 
-    for i in range(0, len(tickers), batch_size):
-        batch = tickers[i:i + batch_size]
-        attempted += len(batch)
+    batches = [tickers[i:i + batch_size]
+                for i in range(0, len(tickers), batch_size)]
+
+    def _work_batch(batch_idx: int, batch: list[str]):
+        limiter.wait(_HOST)
         try:
-            # group_by="ticker" makes the result easy to slice per-ticker
             df = yf.download(tickers=batch, period=period, group_by="ticker",
                              auto_adjust=False, threads=False, progress=False)
         except Exception as e:
-            logger.warning("yf.download batch failed (%d tickers): %s", len(batch), e)
-            failed += len(batch)
-            time.sleep(throttle_seconds)
-            continue
-
+            logger.warning("yf.download batch failed (%d tickers): %s",
+                            len(batch), e)
+            return batch_idx, batch, None, "download_failed"
         if df is None or df.empty:
-            failed += len(batch)
-            time.sleep(throttle_seconds)
-            continue
+            return batch_idx, batch, None, "empty"
+        return batch_idx, batch, df, "ok"
 
-        # When batch has >1 ticker, columns are MultiIndex (ticker, price_field).
-        # When batch has 1 ticker, columns are flat.
-        for idx, ticker in enumerate(batch, start=1):
-            try:
-                if len(batch) == 1:
-                    ticker_df = df
-                else:
-                    ticker_df = df[ticker] if ticker in df.columns.get_level_values(0) else None
-                if ticker_df is None or ticker_df.empty:
-                    if verbose:
-                        logger.info("  [%d/%d] %s: no data", idx, len(batch), ticker)
-                    newly_delisted.append(ticker)
-                    continue
-                rows = []
-                for ts, row in ticker_df.dropna(how="all").iterrows():
-                    rows.append({
-                        "date": ts.strftime("%Y-%m-%d"),
-                        "open": _fnum(row.get("Open")),
-                        "high": _fnum(row.get("High")),
-                        "low":  _fnum(row.get("Low")),
-                        "close": _fnum(row.get("Close")),
-                        "adj_close": _fnum(row.get("Adj Close") or row.get("Close")),
-                        "volume": _inum(row.get("Volume")),
-                    })
-                if rows:
-                    n = prices_repo.upsert_rows(ticker, rows)
-                    tickers_with_data += 1
-                    total_rows += n
-                    if verbose:
-                        logger.info("  [%d/%d] %s: %d rows", idx, len(batch), ticker, n)
-                else:
-                    # ticker_df was non-empty but every row was all-NaN — treat
-                    # the same as "no data" for skip purposes.
-                    newly_delisted.append(ticker)
-                    if verbose:
-                        logger.info("  [%d/%d] %s: empty after dropna", idx, len(batch), ticker)
-            except Exception as e:
-                logger.warning("price persist failed [%s]: %s", ticker, e)
-                failed += 1
+    with ThreadPoolExecutor(max_workers=_WORKERS,
+                              thread_name_prefix="yf-batch") as pool:
+        futures = [pool.submit(_work_batch, i, b)
+                    for i, b in enumerate(batches)]
+        completed = 0
+        for fut in as_completed(futures):
+            batch_idx, batch, df, status = fut.result()
+            with counts_lock:
+                attempted += len(batch)
+                completed += 1
 
-        logger.info("price-history progress: %d/%d batches (rows=%d, ok=%d, failed=%d)",
-                    (i // batch_size) + 1, (len(tickers) + batch_size - 1) // batch_size,
-                    total_rows, tickers_with_data, failed)
-        time.sleep(throttle_seconds)
+            if status != "ok":
+                with counts_lock:
+                    failed += len(batch)
+                continue
+
+            # Per-ticker slice + upsert. Repo upserts are thread-safe
+            # (WAL SQLite: single-writer, our upserts are per-ticker;
+            # Supabase psycopg2: pooled). Doing them inside the future
+            # keeps the pool saturated on I/O.
+            local_newly_delisted: list[str] = []
+            local_with_data = 0
+            local_rows = 0
+            local_failed = 0
+            for idx, ticker in enumerate(batch, start=1):
+                try:
+                    if len(batch) == 1:
+                        ticker_df = df
+                    else:
+                        ticker_df = (df[ticker]
+                                       if ticker in df.columns.get_level_values(0)
+                                       else None)
+                    if ticker_df is None or ticker_df.empty:
+                        if verbose:
+                            logger.info("  [%d/%d] %s: no data",
+                                          idx, len(batch), ticker)
+                        local_newly_delisted.append(ticker)
+                        continue
+                    rows = []
+                    for ts, row in ticker_df.dropna(how="all").iterrows():
+                        rows.append({
+                            "date": ts.strftime("%Y-%m-%d"),
+                            "open": _fnum(row.get("Open")),
+                            "high": _fnum(row.get("High")),
+                            "low":  _fnum(row.get("Low")),
+                            "close": _fnum(row.get("Close")),
+                            "adj_close": _fnum(row.get("Adj Close") or row.get("Close")),
+                            "volume": _inum(row.get("Volume")),
+                        })
+                    if rows:
+                        n = prices_repo.upsert_rows(ticker, rows)
+                        local_with_data += 1
+                        local_rows += n
+                        if verbose:
+                            logger.info("  [%d/%d] %s: %d rows",
+                                          idx, len(batch), ticker, n)
+                    else:
+                        local_newly_delisted.append(ticker)
+                        if verbose:
+                            logger.info("  [%d/%d] %s: empty after dropna",
+                                          idx, len(batch), ticker)
+                except Exception as e:
+                    logger.warning("price persist failed [%s]: %s", ticker, e)
+                    local_failed += 1
+
+            with counts_lock:
+                tickers_with_data += local_with_data
+                total_rows += local_rows
+                failed += local_failed
+                newly_delisted.extend(local_newly_delisted)
+                logger.info("price-history progress: %d/%d batches "
+                            "(rows=%d, ok=%d, failed=%d)",
+                            completed, len(batches), total_rows,
+                            tickers_with_data, failed)
 
     # Persist the confirmed-delisted set so future runs skip them.
     if delisted_log_path and newly_delisted:
