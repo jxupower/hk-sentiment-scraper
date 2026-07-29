@@ -26,7 +26,7 @@ pyyaml>=6.0
 # Data processing
 pandas>=2.1
 numpy>=1.26
-openpyxl>=3.1
+openpyxl>=3.1.5
 requests>=2.31
 akshare>=1.13
 # Parquet engine for the historical_prices retention archive tool
