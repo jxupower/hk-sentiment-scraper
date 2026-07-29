@@ -64,7 +64,7 @@ jobs:
       # QEMU only needed because the GHA runner is amd64 but the Oracle
       # target is arm64. Native arm64 runners exist (`ubuntu-latest-arm`)
       # but they cost; QEMU emulation is free and the build is only ~8min.
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 

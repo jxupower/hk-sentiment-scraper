@@ -157,7 +157,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         with:
           # arm64 emulation on the amd64 runner — slow but free, and only
           # used here to verify the image builds. The real arm64 build
