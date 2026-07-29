@@ -52,7 +52,7 @@ jobs:
     outputs:
       image_tag: ${{ steps.meta.outputs.sha_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: meta
         name: Compute image tags
