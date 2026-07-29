@@ -4,7 +4,7 @@ praw>=7.7
 yfinance>=0.2
 
 # Sentiment analysis
-vaderSentiment>=3.3
+vaderSentiment>=3.3.2
 anthropic>=0.25
 
 # Scheduling
