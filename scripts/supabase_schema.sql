@@ -189,7 +189,25 @@ CREATE TABLE IF NOT EXISTS securities_reference (
     chinese_name   TEXT,
     parent_sector  TEXT,
     sub_sector     TEXT,
-    updated_at     TIMESTAMPTZ DEFAULT NOW()
+    updated_at     TIMESTAMPTZ DEFAULT NOW(),
+    -- AI-generated statement cache for the Stock Research tab. Four
+    -- (text, timestamp) pairs, one per Claude-powered section. Written
+    -- on button click, read on report load. See
+    -- scripts/supabase_add_ai_columns.sql for the migration applied to
+    -- pre-existing databases.
+    -- CRITICAL: the reconciler's upsert_many enumerates ONLY the 5
+    -- reference columns (english_name, chinese_name, parent_sector,
+    -- sub_sector, updated_at) in its ON CONFLICT DO UPDATE — do not
+    -- change that shape without also excluding the ai_* columns, or
+    -- every reconciler run will erase the cache.
+    ai_business_summary    TEXT,
+    ai_business_summary_at TIMESTAMPTZ,
+    ai_forensic_review     TEXT,
+    ai_forensic_review_at  TIMESTAMPTZ,
+    ai_bull_bear           TEXT,
+    ai_bull_bear_at        TIMESTAMPTZ,
+    ai_devil_advocate      TEXT,
+    ai_devil_advocate_at   TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_securities_reference_parent

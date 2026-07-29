@@ -266,52 +266,54 @@ def register_stock_research_callbacks(app, db_path: str):
     factor_engine = FactorScoringEngine(db_path, sector_risk_path)
 
     # ----- Autocomplete dropdown options -----
-    # Critical: must always include the currently-selected `value` in the
-    # returned options list, otherwise Dash silently clears the selection when
-    # the user picks a non-watchlist ticker (the options list refreshes to
-    # "watchlist only" when search_value clears, dropping the selected ticker).
+    # Preload the ENTIRE active-market ticker universe (~2.8 k HK, ~4.1 k US)
+    # into the dropdown once per market flip, then let react-select handle
+    # search filtering client-side. Server-side filtering on `search_value`
+    # was the previous approach; it caused the dropdown to lose focus after
+    # every keystroke because rewriting `options` re-mounts react-select,
+    # which drops the input's focus. With options preloaded, typing filters
+    # locally in the browser — zero server round-trips, zero re-mounts,
+    # focus is preserved.
+    #
+    # Composites (`&NAME` sub-sector entries) are also preloaded (≤75 items).
+    #
+    # The callback fires on market toggle (HK↔US) so the option set swaps
+    # to the new market's tickers, plus on tab activation via the
+    # SR-composite-list Store (populated by lazy_tabs when the tab first
+    # opens; the market Input handles subsequent toggles).
     @app.callback(
         Output("sr-ticker-select", "options", allow_duplicate=True),
-        Input("sr-ticker-select", "search_value"),
         Input("user-market", "data"),
         State("sr-ticker-select", "value"),
-        prevent_initial_call=True,
+        prevent_initial_call="initial_duplicate",
     )
-    def populate_ticker_options(search, market, current_value):
+    def populate_ticker_options(market, current_value):
         market = (market or "HK").upper()
-        # Build composite options (≤75 entries; filtered by search if given).
-        # These render above the equity matches with a distinct prefix marker.
-        composite_options = _build_composite_dropdown_options(db_path, search)
+        # Composites (≤75 entries) — preloaded unfiltered.
+        composite_options = _build_composite_dropdown_options(db_path, None)
 
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
-            if search:
-                rows = conn.execute("""
-                    SELECT ticker, name FROM securities
-                    WHERE is_active = 1 AND market = ? AND (
-                        UPPER(ticker) LIKE UPPER(?) OR UPPER(name) LIKE UPPER(?)
-                    )
-                    ORDER BY (is_watchlist = 1) DESC, ticker
-                    LIMIT 30
-                """, (market, f"{search}%", f"%{search}%")).fetchall()
-            else:
-                # Default to watchlist (of the active market) when no search
-                rows = conn.execute("""
-                    SELECT ticker, name FROM securities
-                    WHERE is_active = 1 AND market = ? AND is_watchlist = 1
-                    ORDER BY ticker LIMIT 30
-                """, (market,)).fetchall()
+            # Full active-market universe. Watchlist tickers surface first
+            # so they show at the top when the user just clicks the
+            # dropdown open (no typing yet); react-select preserves the
+            # order we return.
+            rows = conn.execute("""
+                SELECT ticker, name FROM securities
+                WHERE is_active = 1 AND market = ?
+                ORDER BY (is_watchlist = 1) DESC, ticker
+            """, (market,)).fetchall()
             equity_options = [{"label": f"{r['ticker']} — {r['name']}",
                                 "value": r["ticker"]}
                                for r in rows]
 
             options = composite_options + equity_options
 
-            # Always include the current selection so Dash doesn't clear it
+            # Preserve the current selection when the market flips and the
+            # selected ticker belongs to the OTHER market (or is a
+            # composite / free-typed value not in this market's roster).
             if current_value and current_value not in [o["value"] for o in options]:
                 if current_value.startswith("&"):
-                    # Preserve a composite even if it didn't match the
-                    # search filter
                     options.insert(0, {"label": current_value, "value": current_value})
                 else:
                     cur_row = conn.execute(
@@ -324,7 +326,6 @@ def register_stock_research_callbacks(app, db_path: str):
                             "value": cur_row["ticker"],
                         })
                     else:
-                        # Ticker not in DB; preserve it anyway so the value persists
                         options.insert(0, {"label": current_value,
                                             "value": current_value})
         return options
@@ -424,7 +425,7 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-header-badges", "children"),
         Output("sr-screen-passes", "children"),
         Output("sr-factor-bars", "figure"),
-        Output("sr-business-summary", "children"),
+        Output("sr-business-summary", "children", allow_duplicate=True),
         Output("sr-swot-strengths", "value"),
         Output("sr-swot-weaknesses", "value"),
         Output("sr-swot-opportunities", "value"),
@@ -473,6 +474,23 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-composite-stat-roe", "children"),
         Output("sr-composite-stat-div", "children"),
         Output("sr-composite-table", "data"),
+        # ----- AI cache hydration (from securities_reference.ai_*) -----
+        # 3 output divs (business summary already handled above via cache)
+        # + 4 "-generated-at" spans, one per AI section. Duplicate-safe
+        # because the four button callbacks (ai_forensic_review,
+        # bull_bear_stress_test, devil_advocate, business_summary) also
+        # write to these outputs when the user clicks Generate.
+        Output("sr-forensic-ai-output", "children", allow_duplicate=True),
+        Output("sr-bullbear-output",    "children", allow_duplicate=True),
+        Output("sr-devil-output",       "children", allow_duplicate=True),
+        Output("sr-business-summary-generated-at", "children",
+               allow_duplicate=True),
+        Output("sr-forensic-ai-generated-at",      "children",
+               allow_duplicate=True),
+        Output("sr-bullbear-generated-at",         "children",
+               allow_duplicate=True),
+        Output("sr-devil-generated-at",            "children",
+               allow_duplicate=True),
         Input("sr-load-btn", "n_clicks"),
         Input("cross-tab-nav", "data"),
         Input("user-color-convention", "data"),
@@ -521,6 +539,9 @@ def register_stock_research_callbacks(app, db_path: str):
                 10, 5, 2.5, 9, "",
                 ticker, opts,  # mirror selection back to dropdown
                 *single_visible,
+                # AI cache hydration slots — blank on the no-data path
+                "", "", "",
+                "", "", "", "",
             )
 
         # Composite branch — sub-sector dashboard view.
@@ -559,8 +580,19 @@ def register_stock_research_callbacks(app, db_path: str):
             screen_badges.append(dbc.Badge(f"{sym} {s.name}", color=color, className="me-2"))
         factor_fig = _factor_bar_chart(r.factor_result, convention=convention)
 
-        # Section 2: business summary (AI), articles, SWOT
-        business_summary = _build_business_summary(r)
+        # Section 2: AI outputs — all four sections hydrate from
+        # securities_reference cache. If no cached statement exists,
+        # the section shows an empty placeholder; the user clicks
+        # Generate to produce and persist a fresh one.
+        ai_cache = _load_ai_cache(ticker, db_path)
+        business_summary = ai_cache["business_summary"][0]
+        forensic_out    = ai_cache["forensic_review"][0]
+        bullbear_out    = ai_cache["bull_bear"][0]
+        devil_out       = ai_cache["devil_advocate"][0]
+        business_summary_at = ai_cache["business_summary"][1]
+        forensic_at        = ai_cache["forensic_review"][1]
+        bullbear_at        = ai_cache["bull_bear"][1]
+        devil_at           = ai_cache["devil_advocate"][1]
         s_swot, w_swot, o_swot, t_swot = _build_default_swot(r)
         article_feed = _build_article_feed(r.recent_articles,
                                                 convention=convention)
@@ -613,6 +645,10 @@ def register_stock_research_callbacks(app, db_path: str):
             g15, g610, tg, wacc, g15_provenance,
             ticker, opts,  # mirror selection back to dropdown
             *single_visible,
+            # AI cache hydration outputs (order matches decorator):
+            # 3 output divs, then 4 timestamp spans.
+            forensic_out, bullbear_out, devil_out,
+            business_summary_at, forensic_at, bullbear_at, devil_at,
         )
 
     # ----- Section 3b: lazy financial statements load -----
@@ -710,33 +746,49 @@ def register_stock_research_callbacks(app, db_path: str):
     # is hand-coded heuristics in analysis/forensic.py, this is an LLM pass
     # that can pick up patterns the static rules miss.
     @app.callback(
-        Output("sr-forensic-ai-output", "children"),
+        Output("sr-forensic-ai-output", "children", allow_duplicate=True),
+        Output("sr-forensic-ai-generated-at", "children", allow_duplicate=True),
         Input("sr-forensic-ai-btn", "n_clicks"),
         State("sr-ticker-select", "value"),
         prevent_initial_call=True,
     )
     def ai_forensic_review(_clicks, ticker):
         if not ticker:
-            return ""
+            return "", ""
         from config.settings import CLAUDE_API_KEY
         if not CLAUDE_API_KEY:
             return html.P("Add CLAUDE_API_KEY to .env to use AI Forensic Review.",
-                          className="text-muted small fst-italic")
+                          className="text-muted small fst-italic"), ""
         from analysis.data_loader import get_or_fetch_financial_statements
         from storage.database import Database
         try:
             fs = get_or_fetch_financial_statements(ticker, Database(db_path))
         except Exception as e:
             return html.P(f"Could not load statements: {e}",
-                          className="text-muted small")
+                          className="text-muted small"), ""
         if not (fs and any(fs.get(k) for k in ("income", "balance", "cashflow"))):
             return html.P("No financial statements available for this ticker. "
                           "Click 'Load Financial Statements' above first.",
-                          className="text-muted small fst-italic")
+                          className="text-muted small fst-italic"), ""
         r = build_research_report(ticker, db_path, sector_risk_path,
                                     skip_financial_statements=True)
-        return _generate_forensic_review(fs, ticker,
-                                           r.name if r else ticker)
+        text = _generate_forensic_review_text(
+            fs, ticker, r.name if r else ticker)
+        if not text:
+            return html.P("Forensic review unavailable (Claude API error).",
+                          className="text-muted small fst-italic"), ""
+        # Persist to securities_reference so future report loads render
+        # from cache without another Claude call.
+        try:
+            from storage.factory import get_securities_reference_repo
+            get_securities_reference_repo(
+                Database(db_path)).upsert_ai_statement(
+                    ticker, "forensic_review", text)
+        except Exception:
+            pass  # display still works even if the cache write failed
+        from datetime import datetime, timezone
+        return (_render_ai_output("forensic_review", text),
+                _format_generated_at(datetime.now(timezone.utc)))
 
     # ----- AI Bull / Bear Stress Test (Section 3b) -----
     # Uses the full research-report context (factor scores, screens, risk +
@@ -745,25 +797,40 @@ def register_stock_research_callbacks(app, db_path: str):
     # side at maximum conviction without balancing, then surface 3-5 KPIs to
     # watch over the next 12 months.
     @app.callback(
-        Output("sr-bullbear-output", "children"),
+        Output("sr-bullbear-output", "children", allow_duplicate=True),
+        Output("sr-bullbear-generated-at", "children", allow_duplicate=True),
         Input("sr-bullbear-btn", "n_clicks"),
         State("sr-ticker-select", "value"),
         prevent_initial_call=True,
     )
     def bull_bear_stress_test(_clicks, ticker):
         if not ticker:
-            return ""
+            return "", ""
         from config.settings import CLAUDE_API_KEY
         if not CLAUDE_API_KEY:
             return html.P("Add CLAUDE_API_KEY to .env to use AI Bull / Bear "
                           "Stress Test.",
-                          className="text-muted small fst-italic")
+                          className="text-muted small fst-italic"), ""
         r = build_research_report(ticker, db_path, sector_risk_path,
                                     skip_financial_statements=True)
         if r is None:
             return html.P("No data for this ticker.",
-                          className="text-muted small")
-        return _generate_bull_bear_stress_test(r)
+                          className="text-muted small"), ""
+        text = _generate_bull_bear_stress_test_text(r)
+        if not text:
+            return html.P("Bull/Bear stress test unavailable (Claude API error).",
+                          className="text-muted small fst-italic"), ""
+        try:
+            from storage.factory import get_securities_reference_repo
+            from storage.database import Database
+            get_securities_reference_repo(
+                Database(db_path)).upsert_ai_statement(
+                    ticker, "bull_bear", text)
+        except Exception:
+            pass
+        from datetime import datetime, timezone
+        return (_render_ai_output("bull_bear", text),
+                _format_generated_at(datetime.now(timezone.utc)))
 
     # Reset Section 3b when the user picks a different ticker so stale
     # statements from the prior ticker don't bleed through until they click
@@ -787,12 +854,25 @@ def register_stock_research_callbacks(app, db_path: str):
         Output("sr-fs-income-math", "children", allow_duplicate=True),
         Output("sr-fs-balance-math", "children", allow_duplicate=True),
         Output("sr-fs-cashflow-math", "children", allow_duplicate=True),
+        # Also clear the 4 AI timestamp spans + devil output on ticker
+        # change so a previous ticker's cached statement doesn't sit
+        # visible while the user picks a new one.
+        Output("sr-devil-output", "children", allow_duplicate=True),
+        Output("sr-business-summary-generated-at", "children",
+               allow_duplicate=True),
+        Output("sr-forensic-ai-generated-at", "children",
+               allow_duplicate=True),
+        Output("sr-bullbear-generated-at", "children",
+               allow_duplicate=True),
+        Output("sr-devil-generated-at", "children",
+               allow_duplicate=True),
         Input("sr-ticker-select", "value"),
         prevent_initial_call=True,
     )
     def reset_fs_section_on_ticker_change(_ticker):
         return ({"display": "none"}, "", "", "", "", "",
-                "", "", "", "", "", "", "", "", "")
+                "", "", "", "", "", "", "", "", "",
+                "", "", "", "", "")
 
     # ----- Period-driven charts (Sections 4 + 5) -----
     # Fires on ticker change AND period selector change. Does NOT call
@@ -975,23 +1055,81 @@ def register_stock_research_callbacks(app, db_path: str):
 
     # ----- Devil's-advocate AI -----
     @app.callback(
-        Output("sr-devil-output", "children"),
+        Output("sr-devil-output", "children", allow_duplicate=True),
+        Output("sr-devil-generated-at", "children", allow_duplicate=True),
         Input("sr-devil-btn", "n_clicks"),
         State("sr-ticker-select", "value"),
         prevent_initial_call=True,
     )
     def devil_advocate(_clicks, ticker):
         if not ticker:
-            return ""
+            return "", ""
         from config.settings import CLAUDE_API_KEY
         if not CLAUDE_API_KEY:
             return html.P("Add CLAUDE_API_KEY to .env to use AI Devil's-Advocate.",
-                          className="text-muted small fst-italic")
+                          className="text-muted small fst-italic"), ""
         r = build_research_report(ticker, db_path, sector_risk_path,
                                     skip_financial_statements=True)
         if r is None:
-            return html.P("No data.", className="text-muted small")
-        return _generate_devil_advocate(r)
+            return html.P("No data.", className="text-muted small"), ""
+        text = _generate_devil_advocate_text(r)
+        if not text:
+            return html.P("Devil's advocate unavailable (Claude API error).",
+                          className="text-muted small fst-italic"), ""
+        try:
+            from storage.factory import get_securities_reference_repo
+            from storage.database import Database
+            get_securities_reference_repo(
+                Database(db_path)).upsert_ai_statement(
+                    ticker, "devil_advocate", text)
+        except Exception:
+            pass
+        from datetime import datetime, timezone
+        return (_render_ai_output("devil_advocate", text),
+                _format_generated_at(datetime.now(timezone.utc)))
+
+    # ----- Business summary AI (Section 2) — button-triggered like the -----
+    # other three so the report load only pays for a Claude call on first
+    # generation. Cache hydration happens inside render_report.
+    @app.callback(
+        Output("sr-business-summary", "children", allow_duplicate=True),
+        Output("sr-business-summary-generated-at", "children",
+               allow_duplicate=True),
+        Input("sr-business-summary-btn", "n_clicks"),
+        State("sr-ticker-select", "value"),
+        prevent_initial_call=True,
+    )
+    def business_summary(_clicks, ticker):
+        if not ticker:
+            return "", ""
+        from config.settings import CLAUDE_API_KEY
+        if not CLAUDE_API_KEY:
+            return html.P("Add CLAUDE_API_KEY to .env to enable AI business summaries.",
+                          className="text-muted small fst-italic"), ""
+        r = build_research_report(ticker, db_path, sector_risk_path,
+                                    skip_financial_statements=True)
+        if r is None:
+            return html.P("No data.", className="text-muted small"), ""
+        if not r.recent_articles:
+            return html.P("No recent articles to summarize. (Most universe "
+                          "tickers don't have broad news coverage; try a "
+                          "watchlist name.)",
+                          className="text-muted small"), ""
+        text = _generate_business_summary_text(r)
+        if not text:
+            return html.P("Business summary unavailable (Claude API error).",
+                          className="text-muted small fst-italic"), ""
+        try:
+            from storage.factory import get_securities_reference_repo
+            from storage.database import Database
+            get_securities_reference_repo(
+                Database(db_path)).upsert_ai_statement(
+                    ticker, "business_summary", text)
+        except Exception:
+            pass
+        from datetime import datetime, timezone
+        return (_render_ai_output("business_summary", text),
+                _format_generated_at(datetime.now(timezone.utc)))
 
     # ----- Export as Markdown -----
     @app.callback(
@@ -1128,6 +1266,9 @@ def _render_composite(r, ticker: str, opts: list,
         10, 5, 2.5, 9, "",                           # dcf
         ticker, opts,
         *composite_section_outputs,
+        # AI cache slots — hidden in composite view but must fill Outputs
+        "", "", "",
+        "", "", "", "",
     )
 
 
@@ -1670,15 +1811,14 @@ def _render_dcf_walkthrough(inputs, result, dcf_inputs,
     return html.Div([step1, step2, step3, step4, step5, step6])
 
 
-def _build_business_summary(r) -> html.Div:
+def _generate_business_summary_text(r) -> Optional[str]:
+    """Call Claude for the business summary; return the raw text or None
+    on any failure. Preconditions (no API key, no articles) are checked
+    by the caller so the caller can surface a specific error message
+    instead of persisting None to cache."""
     from config.settings import CLAUDE_API_KEY
-    if not CLAUDE_API_KEY:
-        return html.P("Add CLAUDE_API_KEY to .env to enable AI business summaries.",
-                      className="text-muted small fst-italic")
-    if not r.recent_articles:
-        return html.P("No recent articles to summarize. (Most universe tickers don't have "
-                      "broad news coverage; try a watchlist name.)",
-                      className="text-muted small")
+    if not CLAUDE_API_KEY or not r.recent_articles:
+        return None
     try:
         import anthropic
         article_text = "\n".join(
@@ -1708,13 +1848,9 @@ def _build_business_summary(r) -> html.Div:
             model="claude-haiku-4-5-20251001", max_tokens=500,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = resp.content[0].text.strip()
-        return html.Div([html.P(p, style={"color": T.TEXT, "fontSize": "0.85rem",
-                                          "marginBottom": "0.5rem"})
-                          for p in text.split("\n") if p.strip()])
-    except Exception as e:
-        return html.P(f"AI summary unavailable: {e}",
-                      className="text-muted small fst-italic")
+        return resp.content[0].text.strip()
+    except Exception:
+        return None
 
 
 def _build_default_swot(r) -> tuple[str, str, str, str]:
@@ -2120,8 +2256,92 @@ def _serialize_statement_for_ai(statement_type: str,
     return "\n".join(lines)
 
 
-def _generate_forensic_review(fs: dict, ticker: str, name: str) -> html.Div:
-    """Claude-powered forensic red-flag scan over cached financial statements.
+# ============ Stock-Research AI cache (compliance §5 P1.7 sibling plan) ============
+# Shared render + cache helpers for the four Claude-powered sections.
+# The four "_generate_..._text" functions below each return the RAW
+# Claude text as a string (or None on error / missing API key) so it can
+# be persisted to securities_reference.ai_<kind> and re-rendered later
+# from cache without another API call. `_render_ai_output` handles the
+# two visual treatments (dcc.Markdown for bull_bear, plain <p>-split
+# for the other three).
+
+_AI_PLACEHOLDER_TEXT = {
+    "business_summary": "No AI business summary yet. Click Generate business summary.",
+    "forensic_review":  "No AI forensic review yet. Click AI Forensic Review below.",
+    "bull_bear":        "No AI Bull/Bear stress test yet. Click Bull/Bear Stress Test below.",
+    "devil_advocate":   "No AI devil's-advocate yet. Click Devil's Advocate below.",
+}
+
+
+def _ai_empty_placeholder(kind: str) -> html.P:
+    """Grey italic hint shown when an AI section has no cached text."""
+    return html.P(_AI_PLACEHOLDER_TEXT.get(kind, ""),
+                    className="text-muted small fst-italic")
+
+
+def _render_ai_output(kind: str, text) -> "html.Div | html.P":
+    """Wrap raw AI text into the section's display component.
+    `text` is either the string Claude returned, or None (→ placeholder).
+    bull_bear uses dcc.Markdown (its prompt asks for markdown); the
+    other three split on newlines into styled <p> tags."""
+    if not text:
+        return _ai_empty_placeholder(kind)
+    if kind == "bull_bear":
+        return dcc.Markdown(text,
+                              style={"color": T.TEXT, "fontSize": "0.88rem",
+                                      "lineHeight": "1.55"},
+                              className="bullbear-md")
+    style = {"color": T.TEXT, "fontSize": "0.85rem", "marginBottom": "0.5rem"}
+    if kind == "forensic_review":
+        style["whiteSpace"] = "pre-wrap"
+    return html.Div([html.P(p, style=style)
+                      for p in text.split("\n") if p.strip()])
+
+
+def _format_generated_at(ts) -> str:
+    """UTC-formatted stamp for the '-generated-at' span next to each AI
+    section. Accepts an ISO string (cloud repo), a datetime (post-write),
+    or None (empty span). Returns '' when ts is None so the span
+    collapses invisibly."""
+    if ts is None:
+        return ""
+    from datetime import datetime, timezone
+    if hasattr(ts, "strftime"):
+        dt = ts
+    else:
+        s = str(ts).replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return f"Generated {s}"
+    # Coerce to UTC for display consistency regardless of the source
+    # (Supabase returns tz-aware; SQLite returns naive server-local).
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return f"Generated {dt.strftime('%Y-%m-%d %H:%M UTC')}"
+
+
+def _load_ai_cache(ticker: str, db_path: str) -> dict:
+    """Read all 4 AI statements + timestamps for a ticker.
+    Returns {kind: (rendered_component, generated_at_display_str)} —
+    rendered_component is either the html.Div containing the cached
+    text or the empty-placeholder P. Cheap: one DB round-trip."""
+    from storage.database import Database
+    from storage.factory import get_securities_reference_repo
+    repo = get_securities_reference_repo(Database(db_path))
+    try:
+        raw = repo.get_ai_statements(ticker)
+    except Exception:
+        raw = {k: (None, None) for k in _AI_PLACEHOLDER_TEXT}
+    return {
+        kind: (_render_ai_output(kind, text),
+                _format_generated_at(ts))
+        for kind, (text, ts) in raw.items()
+    }
+
+
+def _generate_forensic_review_text(fs: dict, ticker: str, name: str) -> Optional[str]:
+    """Claude-powered forensic red-flag scan; returns raw text or None.
 
     Feeds 5 most recent periods of Income / Balance / Cash Flow as plain
     CSV-ish text and asks Claude to identify warning signs across the
@@ -2130,6 +2350,8 @@ def _generate_forensic_review(fs: dict, ticker: str, name: str) -> html.Div:
     flag absences rather than fabricate findings on areas 5-7.
     """
     from config.settings import CLAUDE_API_KEY
+    if not CLAUDE_API_KEY:
+        return None
     try:
         import anthropic
         income_txt = _serialize_statement_for_ai("income", fs.get("income", []))
@@ -2184,18 +2406,12 @@ def _generate_forensic_review(fs: dict, ticker: str, name: str) -> html.Div:
             model="claude-haiku-4-5-20251001", max_tokens=900,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = resp.content[0].text.strip()
-        return html.Div([html.P(p, style={"color": T.TEXT,
-                                            "fontSize": "0.85rem",
-                                            "marginBottom": "0.5rem",
-                                            "whiteSpace": "pre-wrap"})
-                          for p in text.split("\n") if p.strip()])
-    except Exception as e:
-        return html.P(f"Forensic review unavailable: {e}",
-                      className="text-muted small fst-italic")
+        return resp.content[0].text.strip()
+    except Exception:
+        return None
 
 
-def _generate_bull_bear_stress_test(r) -> html.Div:
+def _generate_bull_bear_stress_test_text(r) -> Optional[str]:
     """Claude-powered paired Bull / Bear case + 12-month monitoring KPIs.
 
     Uses the full research-report context (factor scores, screens, risk +
@@ -2208,6 +2424,8 @@ def _generate_bull_bear_stress_test(r) -> html.Div:
     bulleted KPIs renders cleanly.
     """
     from config.settings import CLAUDE_API_KEY
+    if not CLAUDE_API_KEY:
+        return None
     try:
         import anthropic
         fr = r.factor_result
@@ -2280,19 +2498,16 @@ def _generate_bull_bear_stress_test(r) -> html.Div:
             model="claude-haiku-4-5-20251001", max_tokens=1600,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = resp.content[0].text.strip()
-        return dcc.Markdown(text,
-                              style={"color": T.TEXT, "fontSize": "0.88rem",
-                                      "lineHeight": "1.55"},
-                              className="bullbear-md")
-    except Exception as e:
-        return html.P(f"Bull/Bear stress test unavailable: {e}",
-                      className="text-muted small fst-italic")
+        return resp.content[0].text.strip()
+    except Exception:
+        return None
 
 
-def _generate_devil_advocate(r) -> html.Div:
-    """Claude prompt for bear-case arguments."""
+def _generate_devil_advocate_text(r) -> Optional[str]:
+    """Claude prompt for bear-case arguments; returns raw text or None."""
     from config.settings import CLAUDE_API_KEY
+    if not CLAUDE_API_KEY:
+        return None
     try:
         import anthropic
         # Build a context dump
@@ -2326,13 +2541,9 @@ def _generate_devil_advocate(r) -> html.Div:
             model="claude-haiku-4-5-20251001", max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = resp.content[0].text.strip()
-        return html.Div([html.P(p, style={"color": T.TEXT, "fontSize": "0.85rem",
-                                          "marginBottom": "0.5rem"})
-                          for p in text.split("\n") if p.strip()])
-    except Exception as e:
-        return html.P(f"Devil's advocate unavailable: {e}",
-                      className="text-muted small fst-italic")
+        return resp.content[0].text.strip()
+    except Exception:
+        return None
 
 
 def _report_to_markdown(r, swot_s, swot_w, swot_o, swot_t,

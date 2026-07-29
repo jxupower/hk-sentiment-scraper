@@ -702,6 +702,57 @@ class SecuritiesReferenceRepository:
             ).fetchone()[0]
 
     # ------------------------------------------------------------------
+    # Stock-Research AI cache — SQLite mirror of the cloud methods on
+    # CloudSecuritiesReferenceRepository. The KIND→column mapping lives
+    # in storage.cloud_repository.AI_KIND_COLUMNS; keep the two repos in
+    # lockstep or the factory swap breaks. `upsert_many` above enumerates
+    # only the 5 reference columns so ai_* survives its writes.
+    # ------------------------------------------------------------------
+
+    def get_ai_statements(self, ticker: str) -> dict:
+        """Return {kind: (text, generated_at_iso)} for all 4 AI kinds.
+        Missing rows / NULL columns yield (None, None). Never raises."""
+        from storage.cloud_repository import AI_KIND_COLUMNS
+        empty = {kind: (None, None) for kind in AI_KIND_COLUMNS}
+        try:
+            cols = ", ".join(
+                f"{t}, {ts}" for (t, ts) in AI_KIND_COLUMNS.values()
+            )
+            with self.db.get_connection() as conn:
+                row = conn.execute(
+                    f"SELECT {cols} FROM securities_reference "
+                    f"WHERE ticker = ?",
+                    (ticker,),
+                ).fetchone()
+        except Exception:
+            return empty
+        if not row:
+            return empty
+        out = {}
+        for kind, (text_col, ts_col) in AI_KIND_COLUMNS.items():
+            out[kind] = (row[text_col], row[ts_col])
+        return out
+
+    def upsert_ai_statement(self, ticker: str, kind: str, text: str) -> None:
+        """Store one AI statement + stamp its generated_at =
+        CURRENT_TIMESTAMP. Other AI columns AND the reconciler-owned
+        columns are left untouched."""
+        from storage.cloud_repository import AI_KIND_COLUMNS
+        if kind not in AI_KIND_COLUMNS:
+            raise KeyError(f"Unknown AI kind: {kind}")
+        text_col, ts_col = AI_KIND_COLUMNS[kind]
+        sql = f"""
+            INSERT INTO securities_reference (ticker, {text_col}, {ts_col})
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(ticker) DO UPDATE SET
+                {text_col} = excluded.{text_col},
+                {ts_col}   = CURRENT_TIMESTAMP
+        """
+        with self.db.get_connection() as conn:
+            conn.execute(sql, (ticker, text))
+            conn.commit()
+
+    # ------------------------------------------------------------------
     # Drop-in helpers — same shape as the legacy StockNamesRepository so
     # dashboard call sites swap class names without further changes.
     # ------------------------------------------------------------------

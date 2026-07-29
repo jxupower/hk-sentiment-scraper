@@ -281,9 +281,20 @@ def build_stock_research_tab() -> html.Div:
             _section_card("2. Business Overview", "sr-section-business", [
                 # AI-generated description
                 dbc.Card([
-                    dbc.CardHeader("AI business summary",
-                                   id="sr-business-summary-title",
-                                   className="fw-bold small"),
+                    dbc.CardHeader([
+                        html.Span("AI business summary",
+                                    id="sr-business-summary-title",
+                                    className="fw-bold small"),
+                        # Generate button + last-generated timestamp share
+                        # the header row. Button is right-aligned via
+                        # ms-auto so the timestamp sits between the title
+                        # and the button.
+                        html.Span(id="sr-business-summary-generated-at",
+                                    className="text-muted small ms-3"),
+                        dbc.Button("Generate", id="sr-business-summary-btn",
+                                    color="primary", size="sm",
+                                    className="ms-auto"),
+                    ], className="d-flex align-items-center"),
                     dbc.CardBody(dcc.Loading(html.Div(id="sr-business-summary"),
                                              type="dot", color=T.PRIMARY)),
                 ], style=CARD_STYLE, className="mb-2"),
@@ -458,6 +469,13 @@ def build_stock_research_tab() -> html.Div:
                                             "fontSize": "0.75rem",
                                             "fontStyle": "italic"}),
                             ),
+                            # Last-generated UTC stamp; empty when no
+                            # cached statement exists (span collapses).
+                            dbc.Col(
+                                html.Span(id="sr-forensic-ai-generated-at",
+                                            className="text-muted small"),
+                                className="text-end",
+                            ),
                         ], align="center", className="g-2 mb-2"),
                         dcc.Loading(type="dot", color=T.PRIMARY, children=[
                             html.Div(id="sr-forensic-ai-output",
@@ -488,6 +506,11 @@ def build_stock_research_tab() -> html.Div:
                                     style={"color": T.TEXT_MUTED,
                                             "fontSize": "0.75rem",
                                             "fontStyle": "italic"}),
+                            ),
+                            dbc.Col(
+                                html.Span(id="sr-bullbear-generated-at",
+                                            className="text-muted small"),
+                                className="text-end",
                             ),
                         ], align="center", className="g-2 mb-2"),
                         dcc.Loading(type="dot", color=T.PRIMARY, children=[
@@ -716,9 +739,14 @@ def build_stock_research_tab() -> html.Div:
                         html.Span("Devil's-advocate AI",
                                   id="sr-devil-title",
                                   className="fw-bold small me-2"),
+                        # Last-generated UTC stamp; empty when no cached
+                        # statement exists so the span collapses.
+                        html.Span(id="sr-devil-generated-at",
+                                    className="text-muted small ms-2"),
                         dbc.Button("Generate counter-arguments", id="sr-devil-btn",
-                                   color="warning", size="sm"),
-                    ]),
+                                   color="warning", size="sm",
+                                   className="ms-auto"),
+                    ], className="d-flex align-items-center"),
                     dbc.CardBody(dcc.Loading(html.Div(id="sr-devil-output"),
                                              type="dot", color=T.WARNING)),
                 ], style=CARD_STYLE, className="mb-2"),

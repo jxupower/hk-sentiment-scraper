@@ -30,6 +30,19 @@ _FUNDAMENTALS_COLS = [
 ]
 
 
+# Stock-Research AI cache: KIND → (text column, timestamp column).
+# Used by both CloudSecuritiesReferenceRepository and the SQLite mirror in
+# storage/repository.py; keep the two in lockstep. The four keys are
+# hardcoded here rather than derived from the layout so a typo in a
+# callback surfaces as a KeyError, not a silent no-op write.
+AI_KIND_COLUMNS = {
+    "business_summary": ("ai_business_summary", "ai_business_summary_at"),
+    "forensic_review":  ("ai_forensic_review",  "ai_forensic_review_at"),
+    "bull_bear":        ("ai_bull_bear",        "ai_bull_bear_at"),
+    "devil_advocate":   ("ai_devil_advocate",   "ai_devil_advocate_at"),
+}
+
+
 class CloudFundamentalsRepository:
     def upsert_snapshot(self, ticker: str, snapshot_date: str,
                          fields: dict, source: str = "yfinance_daily"):
@@ -556,3 +569,63 @@ class CloudSecuritiesReferenceRepository:
         with cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM securities_reference")
             return int(cur.fetchone()[0])
+
+    # ------------------------------------------------------------------
+    # Stock-Research AI cache — 4 (text, timestamp) pairs stored inline on
+    # the same per-ticker row. IMPORTANT: upsert_many above must NEVER
+    # touch these columns — it enumerates only the 5 reference columns in
+    # its DO UPDATE SET clause, so the ai_* columns pass through
+    # untouched during reconciler runs. If that shape ever changes to
+    # `DO UPDATE SET (col1, ...) = ROW(EXCLUDED.*)` or `SET ai_x = NULL`,
+    # this cache silently wipes on every reconciler run.
+    # ------------------------------------------------------------------
+
+    def get_ai_statements(self, ticker: str) -> dict:
+        """Return {kind: (text, generated_at_iso)} for all 4 AI kinds.
+        Missing rows / NULL columns yield (None, None). Never raises;
+        a connection failure returns all-NULL so the caller can degrade
+        to the placeholder UI rather than crash the render."""
+        empty = {kind: (None, None) for kind in AI_KIND_COLUMNS}
+        try:
+            cols = ", ".join(
+                f"{t}, {ts}" for (t, ts) in AI_KIND_COLUMNS.values()
+            )
+            with cursor(dict_rows=True) as cur:
+                cur.execute(
+                    f"SELECT {cols} FROM securities_reference "
+                    f"WHERE ticker = %s",
+                    (ticker,),
+                )
+                row = cur.fetchone()
+        except Exception:
+            return empty
+        if not row:
+            return empty
+        out = {}
+        for kind, (text_col, ts_col) in AI_KIND_COLUMNS.items():
+            ts = row.get(ts_col)
+            out[kind] = (
+                row.get(text_col),
+                ts.isoformat() if ts is not None and hasattr(ts, "isoformat") else ts,
+            )
+        return out
+
+    def upsert_ai_statement(self, ticker: str, kind: str, text: str) -> None:
+        """Store one AI statement + stamp its generated_at = NOW().
+        Uses INSERT ON CONFLICT so a ticker that isn't in the
+        reference table yet still gets a row (with only the AI columns
+        + ticker populated; the reconciler will fill the rest on its
+        next run). Other AI columns AND the reconciler-owned columns
+        are left untouched."""
+        if kind not in AI_KIND_COLUMNS:
+            raise KeyError(f"Unknown AI kind: {kind}")
+        text_col, ts_col = AI_KIND_COLUMNS[kind]
+        sql = f"""
+            INSERT INTO securities_reference (ticker, {text_col}, {ts_col})
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (ticker) DO UPDATE SET
+                {text_col} = EXCLUDED.{text_col},
+                {ts_col}   = NOW()
+        """
+        with cursor() as cur:
+            cur.execute(sql, (ticker, text))

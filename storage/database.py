@@ -155,7 +155,20 @@ class Database:
                     chinese_name   TEXT,
                     parent_sector  TEXT,
                     sub_sector     TEXT,
-                    updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+                    updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    -- Stock Research tab AI-generated statement cache.
+                    -- Written on button click, read on report load.
+                    -- Mirrors scripts/supabase_schema.sql. Reconciler
+                    -- upsert_many enumerates only the 5 reference columns
+                    -- so the ai_* columns survive its writes.
+                    ai_business_summary    TEXT,
+                    ai_business_summary_at DATETIME,
+                    ai_forensic_review     TEXT,
+                    ai_forensic_review_at  DATETIME,
+                    ai_bull_bear           TEXT,
+                    ai_bull_bear_at        DATETIME,
+                    ai_devil_advocate      TEXT,
+                    ai_devil_advocate_at   DATETIME
                 );
                 CREATE INDEX IF NOT EXISTS idx_securities_reference_parent
                     ON securities_reference (parent_sector);
@@ -439,8 +452,36 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_articles_market_published "
                 "ON articles(market, published_at)"
             )
+            # Idempotent add of the AI-cache columns on securities_reference
+            # so pre-existing local databases pick them up without a rebuild.
+            # SQLite doesn't support ADD COLUMN IF NOT EXISTS natively; we
+            # gate on PRAGMA table_info instead. Cheap — runs once per boot
+            # on a table with 8 columns to check.
+            self._add_ai_cache_columns_if_missing(conn)
             conn.commit()
         logger.info("Database initialized at %s", self.db_path)
+
+    def _add_ai_cache_columns_if_missing(self, conn):
+        """Idempotent ALTER TABLE ADD COLUMN for the 8 Stock-Research AI
+        cache columns. Uses PRAGMA table_info to check for existence —
+        SQLite doesn't offer ADD COLUMN IF NOT EXISTS."""
+        cur = conn.execute("PRAGMA table_info(securities_reference)")
+        existing = {row[1] for row in cur.fetchall()}
+        ai_columns = [
+            ("ai_business_summary",    "TEXT"),
+            ("ai_business_summary_at", "DATETIME"),
+            ("ai_forensic_review",     "TEXT"),
+            ("ai_forensic_review_at",  "DATETIME"),
+            ("ai_bull_bear",           "TEXT"),
+            ("ai_bull_bear_at",        "DATETIME"),
+            ("ai_devil_advocate",      "TEXT"),
+            ("ai_devil_advocate_at",   "DATETIME"),
+        ]
+        for name, dtype in ai_columns:
+            if name not in existing:
+                conn.execute(
+                    f"ALTER TABLE securities_reference ADD COLUMN {name} {dtype}"
+                )
 
     def _backfill_market_by_ticker(self, conn):
         """For rows where `market` is the default 'HK' but the ticker
