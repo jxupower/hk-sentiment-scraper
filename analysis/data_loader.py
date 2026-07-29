@@ -29,7 +29,14 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 PRICE_STALE_DAYS = 7
-FUNDAMENTALS_STALE_DAYS = 365
+# Was 365 — refetch cadence was so lax that a snapshot from 2026-05-27 for
+# 6181.HK was still considered "fresh" on 2026-07-28 even though the stock
+# had dropped -39 % in the interim. 30 days keeps yfinance-sourced snapshots
+# (which include a live `trailingPE`) reasonably current; the akshare-sourced
+# HK snapshots that have no `eps_ttm` still rely on `analysis.live_pricing`
+# to recompute against the latest price at display time — see
+# research_orchestrator + peer_comparison patches.
+FUNDAMENTALS_STALE_DAYS = 30
 
 
 # ============== Prices ==============

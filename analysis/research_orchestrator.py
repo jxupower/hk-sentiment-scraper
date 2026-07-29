@@ -283,6 +283,16 @@ def build_research_report(ticker: str, db_path: str,
                           if price_rows and price_rows[-1].get("adj_close") is not None
                           else latest.get("last_price"))
 
+        # Recompute price-dependent ratios (P/E, P/B) against the live
+        # price rather than the frozen `snapshot.last_price` — otherwise
+        # a volatile ticker like 6181.HK will show a P/E derived from the
+        # price 2 months ago even though the live price has since halved.
+        # `patch_row_with_live_ratios` preserves the stored value when
+        # a live recompute isn't derivable, so this never regresses to
+        # NULL on a ticker whose snapshot is missing eps_ttm / bps.
+        from analysis.live_pricing import patch_row_with_live_ratios
+        patch_row_with_live_ratios(latest, current_price)
+
         # Saved notes (if any)
         notes_row = conn.execute(
             "SELECT * FROM research_notes WHERE ticker = ?", (ticker,)

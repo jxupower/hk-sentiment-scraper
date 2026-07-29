@@ -101,6 +101,23 @@ def build_peer_scorecard(ticker: str, db_path: str,
     peer_rows = [r for r in universe
                   if r.get("sub_sector") == sector and r["ticker"] != ticker]
 
+    # Recompute price-dependent ratios (P/E, P/B) on the target + every
+    # peer against their latest cached price rather than the frozen
+    # snapshot.last_price. Without this, a peer scorecard shows P/Es
+    # that were computed against prices from weeks ago — sometimes half
+    # or double the correct value. Bounded to peer_count+1 tickers per
+    # render (typically 10-50), so per-ticker price lookups are cheap.
+    from analysis.live_pricing import patch_row_with_live_ratios
+    from storage.factory import get_prices_repo
+    prices_repo = get_prices_repo(Database(db_path))
+    for r in [target_row, *peer_rows]:
+        try:
+            latest_price = prices_repo.latest_price(r["ticker"])
+        except Exception:
+            latest_price = None
+        if latest_price is not None:
+            patch_row_with_live_ratios(r, latest_price)
+
     scorecard = PeerScorecard(
         target_ticker=ticker,
         target_name=target_row.get("name", ticker),
