@@ -100,6 +100,64 @@ def create_app(db_path: str, settings) -> dash.Dash:
             _auth_logger.info("Cf-Access login: %s", email)
     # ---------------------------------------------------------------------
 
+    # --- Security response headers --------------------------------------
+    # Compliance §5 P1.7 — CSP, HSTS, X-Frame-Options, Referrer-Policy,
+    # Permissions-Policy, X-Content-Type-Options. Gated by
+    # SECURITY_HEADERS_ENABLED (default "true") so an operator can disable
+    # in seconds if a CSP tightening breaks Plotly rendering after a
+    # Dash/Plotly upgrade.
+    #
+    # CSP notes — the values below are the strictest set Dash 4.x +
+    # Plotly.js can currently ship without breaking chart rendering:
+    #   * 'unsafe-inline' + 'unsafe-eval' in script-src: load-bearing.
+    #     Dash injects inline component-init scripts; Plotly.js uses
+    #     Function() for some chart types. Tightening these requires a
+    #     Dash-level nonce-injection refactor (separate future plan).
+    #   * fonts.googleapis.com + fonts.gstatic.com: whitelisted because
+    #     app.index_string above loads the Inter font from Google Fonts.
+    #   * frame-ancestors 'none' + X-Frame-Options 'DENY': doubled up
+    #     (modern-browser CSP + legacy header) — cheap, defensive.
+    #   * HSTS at 6 months (15768000 s), no preload: deliberately
+    #     reversible for the first 30 days of live use. Tighten to
+    #     1 y + preload only after prod is proven stable.
+    # cdn.jsdelivr.net whitelisted in style-src because
+    # `dbc.themes.FLATLY` resolves to
+    # `https://cdn.jsdelivr.net/npm/bootswatch@5.3.6/dist/flatly/bootstrap.min.css`
+    # (see app.py external_stylesheets above). Without it, the CSP
+    # blocks all Bootstrap styling and the entire UI reverts to
+    # unstyled HTML.
+    _CSP = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+        "img-src 'self' data: blob:; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    _SECURITY_HEADERS = {
+        "Strict-Transport-Security": "max-age=15768000; includeSubDomains",
+        "X-Frame-Options": "DENY",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": (
+            "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+        ),
+        "Content-Security-Policy": _CSP,
+    }
+    if os.getenv("SECURITY_HEADERS_ENABLED", "true").lower() != "false":
+        @app.server.after_request
+        def _apply_security_headers(response):
+            # setdefault preserves any header the upstream (Caddy / CF)
+            # already set; belt-and-braces with deploy/Caddyfile's
+            # header{} block.
+            for k, v in _SECURITY_HEADERS.items():
+                response.headers.setdefault(k, v)
+            return response
+    # ---------------------------------------------------------------------
+
     # Custom CSS overrides: Inter typography, purple accent, light surfaces,
     # generous padding, soft shadows. All hex codes pull from theme.py — keep
     # them in lockstep via the f-string substitution.

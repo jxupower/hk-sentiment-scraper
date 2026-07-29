@@ -28,6 +28,23 @@
         respond "ok" 200
     }
 
+    # Security response headers (compliance §5 P1.7). Duplicates the
+    # Flask middleware in dashboard/app.py — belt-and-braces for the
+    # blue/green deploy path. Flask uses `setdefault`, so whichever
+    # layer sets a header first wins; values are identical.
+    # See dashboard/app.py:_CSP for the CSP-tightening rationale.
+    header {
+        Strict-Transport-Security "max-age=15768000; includeSubDomains"
+        X-Frame-Options           "DENY"
+        X-Content-Type-Options    "nosniff"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+        Permissions-Policy        "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+        Content-Security-Policy   "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        # Strip Caddy version identification — defence-in-depth against
+        # server fingerprinting.
+        -Server
+    }
+
     # Everything else: proxy to the live upstream (defaults to blue).
     reverse_proxy {$UPSTREAM:app-blue:8050} {
         # Long timeouts for the Dash callback POSTs (some Portfolio /

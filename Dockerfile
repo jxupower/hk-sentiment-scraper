@@ -13,7 +13,13 @@
 # compiler — keeps the final image around 600 MB instead of 1.5 GB.
 
 # ----- Stage 1: build wheels with full toolchain -----
-FROM python:3.11-slim-bookworm AS builder
+# Base image digest-pinned (compliance §5 P1.4). Multi-arch manifest-list
+# digest — resolves to the correct per-arch layer on both linux/amd64
+# and linux/arm64 buildx targets. Dependabot's docker ecosystem bumps
+# this weekly (.github/dependabot.yml).
+# Captured 2026-07-16 from `docker buildx imagetools inspect
+# python:3.11-slim-bookworm` — python:3.11.15-slim-bookworm.
+FROM python:3.11-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba AS builder
 
 # build-essential + gcc cover almost every Python C-ext we touch; libpq-dev
 # is for psycopg2-binary's source fallback (the wheels usually win but the
@@ -32,7 +38,8 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
 
 # ----- Stage 2: lean runtime -----
-FROM python:3.11-slim-bookworm
+# Same digest-pinned base as the builder stage above (compliance §5 P1.4).
+FROM python:3.11-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba
 
 # curl for the HEALTHCHECK; tini as PID 1 so SIGTERM propagates cleanly to
 # the Python process (without tini, `docker compose down` waits the full

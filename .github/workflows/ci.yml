@@ -81,6 +81,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # pip-audit — compliance §5 P1.2. pip-audit has no built-in
+      # severity filter (v2.7.x), so we run it strict and start in
+      # `continue-on-error: true` mode: findings surface in the CI log
+      # + workflow summary without blocking merges during the initial
+      # triage window. After 30 days of clean or triaged runs, remove
+      # `continue-on-error` to make findings blocking; individual known
+      # unfixable advisories can be suppressed with
+      # `pip-audit --ignore-vuln GHSA-xxxx` in the meantime.
+      - name: pip-audit
+        continue-on-error: true
+        run: |
+          pip install pip-audit==2.7.3
+          pip-audit --strict
+
       # Import smoke — catches syntax errors, missing modules, and the
       # "I refactored the imports but forgot a file" class of bug. Cheap
       # and surfaces 80% of breakage in <5s.
@@ -153,6 +167,39 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # amd64-only load into the local daemon — Trivy can only scan
+      # images that exist locally, and Trivy scans a single arch per run.
+      # OS-layer CVEs (Trivy's main hit surface) are architecture-
+      # invariant, so amd64 is representative for arm64 too.
+      - name: Build amd64 (load for scan)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: hk-sentiment-scraper:ci-scan
+          cache-from: type=gha,scope=docker-${{ github.ref_name }}
+          cache-to: type=gha,scope=docker-${{ github.ref_name }},mode=max
+
+      # Trivy image scan — compliance §5 P1.3. Fails CI on HIGH/CRITICAL
+      # only (matches the pip-audit gate). `ignore-unfixed: true` silences
+      # findings with no upstream fix — no point failing on CVEs Debian
+      # hasn't shipped a patch for. Starts as continue-on-error so
+      # baseline findings don't block deploys during triage; tighten
+      # (remove continue-on-error) after 30 days.
+      - name: Trivy image scan (fail on HIGH/CRITICAL)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: hk-sentiment-scraper:ci-scan
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library
+
+      # Multi-arch build stays to catch arm64 build regressions early.
       - name: Build multi-arch image (no push)
         uses: docker/build-push-action@v5
         with:

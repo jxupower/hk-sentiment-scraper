@@ -1,0 +1,47 @@
+# Dependabot config (compliance §5 P1.1).
+#
+# Three ecosystems, staggered across the week so PR volume never lands
+# all in one Monday morning:
+#   - pip           (weekly Monday)    → requirements.txt / requirements.lock
+#   - docker        (weekly Tuesday)   → Dockerfile FROM digests
+#   - github-actions(weekly Wednesday) → workflow `uses:` versions
+#
+# Version + open-PR limits chosen for a single-operator project — enough
+# throughput to stay current, not enough to swamp review.
+
+version: 2
+
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["deps", "python"]
+    # Collapse non-breaking Python upgrades (minor + patch) into one PR
+    # per week so review load stays manageable. Majors always get their
+    # own PR — breaking changes deserve individual review.
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: 3
+    labels: ["deps", "docker"]
+    # Bumps the sha256 digest on `python:3.11-slim-bookworm@sha256:…`
+    # in the Dockerfile whenever Docker Hub publishes a new manifest.
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+    open-pull-requests-limit: 3
+    labels: ["deps", "ci"]
+    # Bumps `uses: actions/checkout@vX`, `uses: docker/build-push-action@vY`
+    # etc. across .github/workflows/*.yml
