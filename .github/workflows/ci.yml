@@ -172,7 +172,7 @@ jobs:
       # OS-layer CVEs (Trivy's main hit surface) are architecture-
       # invariant, so amd64 is representative for arm64 too.
       - name: Build amd64 (load for scan)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -201,7 +201,7 @@ jobs:
 
       # Multi-arch build stays to catch arm64 build regressions early.
       - name: Build multi-arch image (no push)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
