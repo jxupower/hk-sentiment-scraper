@@ -215,6 +215,26 @@ CREATE INDEX IF NOT EXISTS idx_securities_reference_parent
 CREATE INDEX IF NOT EXISTS idx_securities_reference_sub
     ON securities_reference (sub_sector);
 
+-- ============== TAXONOMY TABLES — STATUS NOTE (F4 drift, 2026-07-30) ==============
+--
+--   sector_taxonomy | taxonomy_meta | ticker_taxonomy_history
+--
+-- These three tables are DECLARED here but NOT MIRRORED to Supabase in
+-- practice. `analysis/taxonomy._persist_to_db` only writes to the local
+-- SQLite copy (see the "Local SQLite only" comment there), and the
+-- runtime `get_taxonomy()` loads from SQLite via `_load_from_db`. The
+-- reconciler's audit writes to SQLite `ticker_taxonomy_history` too.
+--
+-- SAFE TO SKIP creating these in Supabase today — the app has zero
+-- runtime dependency on the cloud copies. The DDL below is preserved so
+-- that if/when cloud mirroring is added (originally flagged as "Phase D
+-- ops convenience"), the schema is ready.
+--
+-- If you DO want to create them in Supabase (e.g. to prepare for the
+-- mirror), running this file as `postgres` in the SQL Editor is safe
+-- and idempotent — they'll just sit empty until a writer is wired up.
+-- =====================================================================
+
 -- ============== sector_taxonomy ==============
 -- Compiled taxonomy: one row per parent sector or sub-sector. Source of
 -- TRUTH stays in config/sub_sectors.yaml + config/us_size_splits.yaml +
