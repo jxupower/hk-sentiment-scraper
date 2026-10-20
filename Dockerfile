@@ -19,7 +19,7 @@
 # this weekly (.github/dependabot.yml).
 # Captured 2026-07-16 from `docker buildx imagetools inspect
 # python:3.11-slim-bookworm` — python:3.11.15-slim-bookworm.
-FROM python:3.11-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba AS builder
+FROM python:3.15-slim-bookworm@sha256:2a41267d9de9d358f77a1de356e0f16ecba8d39827855be0ce9ef4792edce402 AS builder
 
 # build-essential + gcc cover almost every Python C-ext we touch; libpq-dev
 # is for psycopg2-binary's source fallback (the wheels usually win but the
@@ -39,7 +39,7 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
 # ----- Stage 2: lean runtime -----
 # Same digest-pinned base as the builder stage above (compliance §5 P1.4).
-FROM python:3.11-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba
+FROM python:3.15-slim-bookworm@sha256:2a41267d9de9d358f77a1de356e0f16ecba8d39827855be0ce9ef4792edce402
 
 # curl for the HEALTHCHECK; tini as PID 1 so SIGTERM propagates cleanly to
 # the Python process (without tini, `docker compose down` waits the full
